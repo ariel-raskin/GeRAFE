@@ -58,15 +58,25 @@ On desktop, GeRAFE automatically looks beside a BAM for conventional `sample.bam
 
 ## Installation
 
-GeRAFE does not yet publish a signed installer or prebuilt GitHub release. Build it from source with the steps below.
+Invited beta testers can install the current Windows build from the
+[latest GeRAFE release](https://github.com/ariel-raskin/GeRAFE/releases/latest).
+Download `GeRAFE_*_x64-setup.exe` and run it. The installer is per-user and does
+not require administrator privileges.
+
+GeRAFE's update packages are cryptographically signed and verified by the app.
+The beta installer does not yet have a Windows Authenticode certificate, so
+Microsoft SmartScreen may show a warning after a browser download.
 
 ### Requirements
 
 - Windows 10 or 11.
+- Microsoft Edge WebView2 Runtime. It is normally already installed on current Windows systems.
+
+The following additional tools are needed only to build GeRAFE from source:
+
 - [Node.js](https://nodejs.org/) 22.12 or newer and npm.
 - Stable [Rust](https://www.rust-lang.org/tools/install) with the MSVC toolchain.
 - Microsoft C++ Build Tools with **Desktop development with C++** enabled.
-- Microsoft Edge WebView2 Runtime. It is normally already installed on current Windows systems.
 
 The native requirements are described in the official [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
@@ -81,7 +91,7 @@ npm run desktop:dev
 
 This compiles the Rust shell, starts the frontend development server, and opens the desktop application.
 
-### Install locally for everyday use
+### Install a development build locally
 
 ```powershell
 npm ci
@@ -90,7 +100,10 @@ npm run desktop:install-local
 
 This builds the release application in a machine-local cache outside the source checkout, installs it at `%LOCALAPPDATA%\Programs\GeRAFE\gerafe.exe`, and creates a **GeRAFE** Start Menu shortcut that launches the application directly without a terminal window. Open GeRAFE from Start, then right-click its taskbar icon and choose **Pin to taskbar**.
 
-After pulling future changes, close GeRAFE and run `npm run desktop:install-local` again. The command replaces the executable at the same location, so the Start Menu shortcut and taskbar pin continue to launch the updated application.
+After pulling future source changes, close GeRAFE and run
+`npm run desktop:install-local` again. This source-install command remains for
+development; invited testers should normally use the release installer and
+in-app updater.
 
 For a first installation or routine update from an existing Windows checkout, you
 can instead double-click **Install or Update GeRAFE.cmd**. See the
@@ -111,6 +124,14 @@ src-tauri/target/release/gerafe.exe
 ```
 
 From an existing checkout, `Launch GeRAFE.cmd` opens the locally installed application after `npm run desktop:install-local` has been run.
+
+### Updates
+
+The installed desktop app checks for signed beta updates shortly after launch.
+When one is available, review its notes and choose **Update and restart**. GeRAFE
+saves the current workspace before downloading and never installs an update
+silently. Use **Help → Check for updates** to check manually or **Help → About
+GeRAFE** to see the installed version.
 
 ## Using the browser
 
@@ -152,8 +173,8 @@ Use **File → Save workspace…** to export a `.gerafe.json` document and **Ope
 
 ## Current limitations
 
-- The desktop application is currently built and tested on Windows; packaged installers and signed releases are not provided yet.
-- There is not yet an in-app updater. Updating a source installation requires pulling the latest code and running the local installer again.
+- The desktop application and release installer are currently built and tested on Windows x64 only.
+- Release updates have a required Tauri updater signature but not yet a Windows Authenticode certificate, so SmartScreen may warn on the first installer download.
 - The supported track formats are limited to those listed above.
 - Custom references provide coordinate navigation but do not automatically include gene annotations or cytobands.
 - Individual BAM reads are drawn below a 250 kb visible span; BAM requests are limited to 2 Mb to avoid unbounded pileups.
@@ -178,8 +199,11 @@ Useful commands:
 | `npm run dev` | Run the frontend in a browser |
 | `npm run desktop:dev` | Run the Tauri desktop application in development mode |
 | `npm run desktop:build` | Build the production desktop executable |
+| `npm run desktop:bundle` | Build the signed-update-compatible Windows NSIS installer (requires the private signing environment) |
 | `npm run desktop:check-setup` | Check Windows desktop build prerequisites without installing |
 | `npm run desktop:install-local` | Build and install the Windows app at its stable local path and create its Start Menu shortcut |
+| `npm run version:check` | Verify package, Tauri, Cargo, and lockfile versions match |
+| `npm run version:set -- 0.1.2` | Set all application version fields together |
 | `npm test` | Run the Vitest unit suite |
 | `npm run build` | Type-check and build the production frontend |
 | `npm run smoke` | Run the general browser smoke test against a running development server |
@@ -217,6 +241,7 @@ software license may be selected later.
 - [Development history before Git](docs/DEVELOPMENT_HISTORY.md)
 - [Feasibility and performance notes](docs/FEASIBILITY.md)
 - [Multi-computer Windows setup](docs/MULTI_COMPUTER_SETUP.md)
+- [Release and in-app update workflow](docs/RELEASES.md)
 - [Related genome browsers and visualization tools](docs/RELATED_TOOLS.md)
 - [Semantic track system and browser/figure compatibility design](docs/TRACK_SYSTEM_DIRECTION.md)
 - [Bundled reference-data sources](docs/THIRD_PARTY_DATA.md)
