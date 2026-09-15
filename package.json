@@ -1,0 +1,33 @@
+{
+  "name": "locus-glide",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build --no-bundle",
+    "test": "vitest run",
+    "smoke": "node scripts/smoke-browser.mjs",
+    "benchmark:data": "node scripts/benchmark-bigwig.mjs",
+    "reference:cytobands": "node scripts/update-cytobands.mjs",
+    "reference:genes": "node scripts/build-refseq-transcripts.mjs"
+  },
+  "dependencies": {
+    "@gmod/bam": "^9.0.1",
+    "@gmod/bbi": "^11.2.3",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.3",
+    "generic-filehandle2": "^2.4.0",
+    "pako-esm2": "^2.0.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^24.3.0",
+    "playwright-core": "^1.63.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.0"
+  }
+}

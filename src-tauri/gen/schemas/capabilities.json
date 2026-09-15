@@ -1,0 +1,1 @@
+{"main-window":{"identifier":"main-window","description":"File selection for genomics tracks opened in the main Locus Glide window.","local":true,"windows":["main"],"permissions":["core:default","dialog:allow-open"]}}
