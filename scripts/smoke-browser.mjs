@@ -49,9 +49,15 @@ const searchSelectAll = await page.locator('#locus-input').evaluate((element) =>
 
 if (dataPaths.length > 0) {
   await page.locator('#file-input').setInputFiles(dataPaths)
-  const expectedTracks = dataPaths.filter((path) => !/\.(bai|csi)$/i.test(path)).length
-  await page.waitForFunction((count) => document.querySelector('#track-status')?.textContent?.includes(`${count} track${count === 1 ? '' : 's'} loaded`), expectedTracks, { timeout: 30_000 })
+  await page.waitForFunction(() => /^\d+ tracks? loaded$/.test(document.querySelector('#track-status')?.textContent ?? ''), undefined, { timeout: 30_000 })
+  const expectedSources = dataPaths.filter((path) => !/\.(bai|csi)$/i.test(path)).length
+  await page.waitForFunction((count) => {
+    try { return JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').sources?.length === count } catch { return false }
+  }, expectedSources, { timeout: 5_000 })
 }
+const trackDocument = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}'))
+const visualDataTrackCount = (trackDocument.tracks ?? []).filter((track) => track.kind !== 'genes').length
+const hasStrandedTrack = (trackDocument.tracks ?? []).some((track) => track.kind === 'stranded')
 
 const canvas = page.locator('#genome-canvas')
 const box = await canvas.boundingBox()
@@ -79,8 +85,20 @@ else {
   await page.mouse.click(bottomBox.x + 60, bottomBox.y + 55, { button: 'right' })
 }
 const trackContextVisible = await page.locator('#track-context-menu').isVisible()
+const initialTrackContextText = await page.locator('#track-context-menu').textContent()
 const trackContextFocusedAction = await page.evaluate(() => document.activeElement?.getAttribute('data-context-action'))
-await page.keyboard.press('Escape')
+let strandedRoundTrip = false
+if (hasStrandedTrack) {
+  await page.locator('[data-context-action="strand-unlink"]').click()
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').tracks?.filter((track) => track.kind === 'signal').length === 2)
+  await page.mouse.click(contextX, firstTrackY + 132, { button: 'right' })
+  const unlinkedMenuText = await page.locator('#track-context-menu').textContent()
+  if (unlinkedMenuText?.includes('Link as stranded track')) {
+    await page.locator('[data-context-action="strand-link"]').click()
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').tracks?.some((track) => track.kind === 'stranded'))
+    strandedRoundTrip = true
+  }
+} else await page.keyboard.press('Escape')
 const bottomGeneBox = await page.locator('#bottom-canvas').boundingBox()
 if (!bottomGeneBox) throw new Error('Bottom gene canvas was not visible.')
 const initialBottomPaneHeight = await page.locator('#bottom-pane').evaluate((element) => element.getBoundingClientRect().height)
@@ -114,7 +132,7 @@ let groupContextFocusedAction
 let groupClickSelectionText
 let groupHighlightChanged
 let clickAwaySelectionText
-if (dataPaths.filter((path) => !/\.(bai|csi)$/i.test(path)).length > 1) {
+if (visualDataTrackCount > 1) {
   await page.keyboard.press('Escape')
   await page.mouse.click(contextX, firstTrackY)
   await page.keyboard.down('Control')
@@ -227,7 +245,7 @@ await page.reload({ waitUntil: 'networkidle' })
 const customReferenceAfterReload = await page.locator('#reference-label').textContent()
 await browser.close()
 
-console.log(JSON.stringify({ ...result, geneDetailProbe, geneMenuText, geneInternalScrollChanged, initialBottomPaneHeight, initialBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, customReferenceBeforeReload, customReferenceAfterReload, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log(JSON.stringify({ ...result, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, geneDetailProbe, geneMenuText, geneInternalScrollChanged, initialBottomPaneHeight, initialBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, customReferenceBeforeReload, customReferenceAfterReload, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
 if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button') process.exitCode = 1
@@ -239,16 +257,18 @@ if (!settingsMenuText?.includes('Show TSS elbow arrows')) process.exitCode = 1
 if (tssBeforeToggle === tssAfterToggle || tssAfterToggle !== tssAfterReload) process.exitCode = 1
 if (Math.abs(initialBottomPaneHeight - initialBottomCanvasHeight - 8) > 2) process.exitCode = 1
 if (testGene === 'RUNX1' && testGeneMode === 'expanded' && !geneInternalScrollChanged) process.exitCode = 1
-if (dataPaths.length > 1 && (!dragGhostVisible || dragCursor !== 'grabbing')) process.exitCode = 1
-if (dataPaths.length > 1 && Number(fitScrollRange) > 2) process.exitCode = 1
+if (visualDataTrackCount > 1 && (!dragGhostVisible || dragCursor !== 'grabbing')) process.exitCode = 1
+if (visualDataTrackCount > 1 && Number(fitScrollRange) > 2) process.exitCode = 1
 if (Math.abs(headerTopBeforeScroll - headerTopAfterScroll) > 1) process.exitCode = 1
 if (Number(result.bottomPaneHeight) < initialBottomPaneHeight + 30) process.exitCode = 1
-if (dataPaths.filter((path) => !/\.(bai|csi)$/i.test(path)).length > 1 && !linkedScaleText?.includes('2 tracks selected')) process.exitCode = 1
-if (dataPaths.filter((path) => !/\.(bai|csi)$/i.test(path)).length > 1 && (!groupMenuText?.includes('Autoscale group together') || !groupMenuText?.includes('Remove all group tracks'))) process.exitCode = 1
-if (dataPaths.filter((path) => !/\.(bai|csi)$/i.test(path)).length > 1 && !groupMenuAfterPaneMove?.includes('Experiment A')) process.exitCode = 1
-if (dataPaths.filter((path) => !/\.(bai|csi)$/i.test(path)).length > 1 && !selectAllText?.includes('3 tracks selected')) process.exitCode = 1
-if (dataPaths.filter((path) => !/\.(bai|csi)$/i.test(path)).length > 1 && (!colorDialogVisible || !dragGhostVisible)) process.exitCode = 1
-if (dataPaths.filter((path) => !/\.(bai|csi)$/i.test(path)).length > 1 && (!groupHighlightChanged || !groupClickSelectionText?.includes('2 tracks selected') || clickAwaySelectionText?.includes('tracks selected'))) process.exitCode = 1
-if (dataPaths.length && (!offlineTrackStatus?.includes('need reopening') || offlineLeftPixel.slice(0, 3).join(',') === '150,144,135')) process.exitCode = 1
+if (visualDataTrackCount > 1 && !linkedScaleText?.includes('2 tracks selected')) process.exitCode = 1
+if (visualDataTrackCount > 1 && (!groupMenuText?.includes('Autoscale group together') || !groupMenuText?.includes('Remove all group tracks'))) process.exitCode = 1
+if (visualDataTrackCount > 1 && !groupMenuAfterPaneMove?.includes('Experiment A')) process.exitCode = 1
+if (visualDataTrackCount > 1 && !selectAllText?.includes(`${visualDataTrackCount + 1} tracks selected`)) process.exitCode = 1
+if (visualDataTrackCount > 1 && (!colorDialogVisible || !dragGhostVisible)) process.exitCode = 1
+if (visualDataTrackCount > 1 && (!groupHighlightChanged || !groupClickSelectionText?.includes('2 tracks selected') || clickAwaySelectionText?.includes('tracks selected'))) process.exitCode = 1
+if (hasStrandedTrack && (!initialTrackContextText?.includes('Linked stranded signal') || !initialTrackContextText.includes('Set positive-strand color') || !initialTrackContextText.includes('Set negative-strand color') || !initialTrackContextText.includes('Unlink stranded sources'))) process.exitCode = 1
+if (hasStrandedTrack && !strandedRoundTrip) process.exitCode = 1
+if (dataPaths.length && (!offlineTrackStatus?.includes('reopening or attention') || offlineLeftPixel.slice(0, 3).join(',') === '150,144,135')) process.exitCode = 1
 if (customReferenceBeforeReload !== customReferenceAfterReload) process.exitCode = 1
 if (consoleErrors.length > 0) process.exitCode = 1
