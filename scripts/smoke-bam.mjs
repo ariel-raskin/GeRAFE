@@ -38,7 +38,7 @@ const afterColor = await canvas.evaluate((element) => element.toDataURL())
 const result = await page.evaluate(() => ({
   status: document.querySelector('#track-status')?.textContent,
   features: document.querySelector('#feature-value')?.textContent,
-  workspace: JSON.parse(localStorage.getItem('locus-glide-track-document') ?? '{}'),
+  workspace: JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}'),
 }))
 await page.screenshot({ path: 'dist/smoke-bam.png', fullPage: true })
 await browser.close()

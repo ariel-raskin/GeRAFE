@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Locus Glide",
+  "productName": "GeRAFE",
   "version": "0.1.0",
-  "identifier": "org.stengelraskin.locusglide",
+  "identifier": "org.arielraskin.gerafe",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Locus Glide",
+        "title": "GeRAFE — Genomic Renderer and Figure Editor",
         "width": 1440,
         "height": 920,
         "minWidth": 900,

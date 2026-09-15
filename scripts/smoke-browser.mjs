@@ -2,8 +2,8 @@ import { chromium } from 'playwright-core'
 import { access } from 'node:fs/promises'
 
 const appUrl = process.argv[2] ?? 'http://127.0.0.1:5173'
-const testGene = process.env.LOCUS_GLIDE_SMOKE_GENE ?? 'RUNX1'
-const testGeneMode = process.env.LOCUS_GLIDE_SMOKE_GENE_MODE ?? 'expanded'
+const testGene = process.env.GERAFE_SMOKE_GENE ?? 'RUNX1'
+const testGeneMode = process.env.GERAFE_SMOKE_GENE_MODE ?? 'expanded'
 const dataPaths = process.argv.slice(3)
 const candidates = process.platform === 'win32'
   ? [
