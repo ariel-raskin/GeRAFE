@@ -164,4 +164,5 @@ Parser and renderer changes should also be checked with the relevant scripts und
 - [Contributing workflow](CONTRIBUTING.md)
 - [Development history before Git](docs/DEVELOPMENT_HISTORY.md)
 - [Feasibility and performance notes](docs/FEASIBILITY.md)
+- [Related genome browsers and visualization tools](docs/RELATED_TOOLS.md)
 - [Semantic track system and browser/figure compatibility design](docs/TRACK_SYSTEM_DIRECTION.md)
