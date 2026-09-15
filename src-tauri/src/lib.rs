@@ -5,6 +5,7 @@ use std::{
     path::Path,
     time::UNIX_EPOCH,
 };
+use tauri::Manager;
 
 const LEGACY_APP_IDENTIFIER: &str = "org.stengelraskin.locusglide";
 const APP_IDENTIFIER: &str = "org.arielraskin.gerafe";
@@ -92,9 +93,24 @@ fn migrate_legacy_app_data() -> std::io::Result<bool> {
 }
 
 #[cfg(windows)]
+fn set_windows_app_user_model_id() -> Result<(), Box<dyn std::error::Error>> {
+    use std::iter;
+    use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+
+    let app_id: Vec<u16> = APP_IDENTIFIER.encode_utf16().chain(iter::once(0)).collect();
+    let result = unsafe { SetCurrentProcessExplicitAppUserModelID(app_id.as_ptr()) };
+    if result < 0 {
+        return Err(std::io::Error::other(format!(
+            "could not set GeRAFE's Windows AppUserModelID (HRESULT {result:#010x})"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
 fn set_windows_taskbar_icon(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use std::{iter, os::windows::ffi::OsStrExt, ptr};
-    use tauri::Manager;
     use windows_sys::Win32::{
         Foundation::HWND,
         UI::{
@@ -136,6 +152,10 @@ fn set_windows_taskbar_icon(app: &tauri::App) -> Result<(), Box<dyn std::error::
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    set_windows_app_user_model_id()
+        .expect("could not establish GeRAFE's Windows application identity");
+
     if let Err(error) = migrate_legacy_app_data() {
         eprintln!("Could not migrate Locus Glide application data to GeRAFE: {error}");
     }
@@ -143,6 +163,14 @@ pub fn run() {
         .setup(|app| {
             #[cfg(windows)]
             set_windows_taskbar_icon(app)?;
+            app.get_webview_window("main")
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "main GeRAFE window not found",
+                    )
+                })?
+                .show()?;
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())

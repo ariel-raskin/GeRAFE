@@ -20,6 +20,7 @@
         "resizable": true,
         "maximized": true,
         "fullscreen": false,
+        "visible": false,
         "backgroundColor": "#111315",
         "dragDropEnabled": true
       }
