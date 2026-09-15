@@ -27,6 +27,10 @@ try {
   $env:CARGO_TARGET_DIR = $buildRoot
   Push-Location -LiteralPath $repositoryRoot
   try {
+    & cargo.exe clean --manifest-path 'src-tauri\Cargo.toml' --package gerafe --release
+    if ($LASTEXITCODE -ne 0) {
+      throw "Could not refresh GeRAFE's native release resources (cargo exit code $LASTEXITCODE)."
+    }
     & npm.cmd run desktop:build
     if ($LASTEXITCODE -ne 0) {
       throw "The GeRAFE desktop build failed with exit code $LASTEXITCODE."
