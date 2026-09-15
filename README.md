@@ -16,6 +16,8 @@ GeRAFE is currently developed and tested as a Windows desktop application.
 - Reorder tracks by dragging and organize related tracks into visual groups.
 - Select one or multiple tracks and edit their colors, heights, grouping, and type-specific display settings.
 - Automatic visible-window scaling, fixed scales, and linked scales for quantitative tracks.
+- Automatic positive/negative signal pairing from common filename markers such as `plus`/`minus` and `pos`/`neg`, with one shared zero axis and independently scaled strand magnitudes.
+- Stranded pairs remain compatible with visual groups; grouped autoscaling and color controls keep ordinary, positive, and negative channels separate.
 - Collapsed, expanded, and squished layouts for interval and gene tracks.
 - Persistent light and dark themes.
 - Automatic restoration of local desktop tracks between launches, with relinking when a source has moved or changed.
@@ -100,6 +102,7 @@ From an existing checkout, `Launch GeRAFE.cmd` opens the locally installed appli
 - Click a track label to select it.
 - Use `Ctrl`-click to toggle selection, `Shift`-click to select a range, or `Ctrl+A` outside a text field to select all visible tracks.
 - Right-click a track label for display, color, height, scale, grouping, duplication, relinking, and removal options.
+- Recognizable complementary BigWig, bedGraph, and TDF signal files link automatically. Right-click the combined track to set strand colors, relink either source, or separate the sources again. Automatic linking can be toggled under **Settings**.
 - Drag selected tracks to reorder them or move them between the upper and lower panes.
 - Click a group card to select the entire group; right-click it for group-wide options.
 - Use **Fit tracks** to fit the visible upper tracks into the available pane height.
@@ -128,6 +131,7 @@ Use **File → Save workspace…** to export a `.gerafe.json` document and **Ope
 - Individual BAM reads are drawn below a 250 kb visible span; BAM requests are limited to 2 Mb to avoid unbounded pileups.
 - Mismatches can be read from BAM MD tags. Reconstructing mismatches for BAMs without MD tags is unavailable because reference-sequence bases are not currently loaded.
 - Browser-only development sessions cannot retain JavaScript `File` objects across a page reload; native desktop sessions can retain file paths.
+- Stranded signals currently use the shared-baseline diverging presentation with independent positive and negative magnitude scales. Symmetric, stacked, and fully separate paired presentations are planned but not yet available.
 
 ## Development
 
