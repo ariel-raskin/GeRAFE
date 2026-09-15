@@ -1,7 +1,7 @@
 {
   "name": "gerafe",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A local-first genomic renderer and figure editor.",
   "repository": {
     "type": "git",
@@ -19,8 +19,12 @@
     "build": "tsc -b && vite build",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build --no-bundle",
+    "desktop:bundle": "tauri build --bundles nsis",
     "desktop:check-setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-windows.ps1 -CheckOnly",
     "desktop:install-local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-local.ps1",
+    "version:check": "node scripts/version.mjs --check",
+    "version:print": "node scripts/version.mjs --print",
+    "version:set": "node scripts/version.mjs",
     "test": "vitest run",
     "smoke": "node scripts/smoke-browser.mjs",
     "benchmark:data": "node scripts/benchmark-bigwig.mjs",
@@ -32,6 +36,8 @@
     "@gmod/bbi": "^11.2.3",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.3",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.11.0",
     "generic-filehandle2": "^2.4.0",
     "pako-esm2": "^2.0.2"
   },

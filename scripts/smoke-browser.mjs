@@ -83,6 +83,16 @@ const fileMenuVisible = await page.locator('#file-menu-popup').isVisible()
 const fileMenuText = await page.locator('#file-menu-popup').textContent()
 const fileMenuActiveElement = await page.locator(':focus').getAttribute('id')
 await page.keyboard.press('Escape')
+await page.locator('#help-menu-button').click()
+const helpMenuVisible = await page.locator('#help-menu-popup').isVisible()
+const helpMenuText = await page.locator('#help-menu-popup').textContent()
+const helpMenuActiveElement = await page.locator(':focus').getAttribute('id')
+await page.locator('#about-menu-item').click()
+const aboutDialogVisible = await page.locator('#update-dialog').isVisible()
+const aboutVersionText = await page.locator('#update-installed-version').textContent()
+const browserUpdateDisabled = await page.locator('#update-primary-action').isDisabled()
+await page.screenshot({ path: 'dist/smoke-about.png', fullPage: true })
+await page.locator('#update-dialog-close').click()
 if (hasStrandedTrack) await canvas.screenshot({ path: 'dist/smoke-stranded.png' })
 const contextX = box.x + 60
 const firstTrackY = box.y + 55
@@ -253,10 +263,11 @@ await page.reload({ waitUntil: 'networkidle' })
 const customReferenceAfterReload = await page.locator('#reference-label').textContent()
 await browser.close()
 
-console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, geneDetailProbe, geneMenuText, geneInternalScrollChanged, initialBottomPaneHeight, initialBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, customReferenceBeforeReload, customReferenceAfterReload, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, geneDetailProbe, geneMenuText, geneInternalScrollChanged, initialBottomPaneHeight, initialBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, customReferenceBeforeReload, customReferenceAfterReload, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
-if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button') process.exitCode = 1
+if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button' || helpMenuActiveElement !== 'help-menu-button') process.exitCode = 1
+if (!helpMenuVisible || !helpMenuText?.includes('Check for updates') || !aboutDialogVisible || !aboutVersionText?.startsWith('Version ') || !browserUpdateDisabled) process.exitCode = 1
 if (!trackContextVisible) process.exitCode = 1
 if (trackContextFocusedAction || groupContextFocusedAction) process.exitCode = 1
 if (searchSelectAll.start !== 0 || searchSelectAll.end !== searchSelectAll.length) process.exitCode = 1

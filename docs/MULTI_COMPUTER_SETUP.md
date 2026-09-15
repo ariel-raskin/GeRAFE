@@ -5,11 +5,21 @@ for source code and version history, while the installed application, Start Menu
 shortcut, taskbar pin, dependency folders, and automatic workspace state remain
 local to each Windows account.
 
-GeRAFE does not yet have an in-app updater or prebuilt release installer. Each
-computer therefore builds and installs the application from the checked-out
-source.
+Invited beta testers should normally install a published Windows release and use
+GeRAFE's in-app updater. A source checkout and development toolchain are needed
+only on computers used to change or test the source code.
 
-## One-time setup on an additional computer
+## Beta tester setup
+
+1. Open the [latest GeRAFE release](https://github.com/ariel-raskin/GeRAFE/releases/latest).
+2. Download and run `GeRAFE_*_x64-setup.exe`. Windows SmartScreen may request
+   confirmation because beta installers do not yet have an Authenticode
+   certificate.
+3. Open **GeRAFE** from Start and optionally pin the running app to the taskbar.
+4. GeRAFE checks for signed updates after launch. Use **Help → Check for
+   updates** at any time to check manually.
+
+## Development setup on an additional computer
 
 1. Install the development prerequisites:
 
@@ -44,7 +54,13 @@ installing or updating the local executable.
 
 ## Installing later updates
 
-Close GeRAFE, open PowerShell in the repository clone, and run:
+Release installations update from inside GeRAFE. Review the release notes in
+the update dialog, choose **Update and restart**, and allow the passive installer
+to finish. The application saves its current automatic workspace before it
+restarts.
+
+For a development installation built from a clone, close GeRAFE, open PowerShell
+in the repository, and run:
 
 ```powershell
 git switch main

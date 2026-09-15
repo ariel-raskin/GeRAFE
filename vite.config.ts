@@ -1,8 +1,12 @@
 import { defineConfig } from 'vite'
+import { readFileSync } from 'node:fs'
+
+const packageVersion = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version
 
 export default defineConfig({
   clearScreen: false,
   publicDir: 'static',
+  define: { __GERAFE_VERSION__: JSON.stringify(packageVersion) },
   server: {
     port: 5173,
     strictPort: true,
