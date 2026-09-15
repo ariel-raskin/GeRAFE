@@ -1,6 +1,6 @@
 # Shared track system direction
 
-This note records what GeRAFE should carry forward from the local `gene_tracks_organic` and `plotanical` projects. It is a design constraint for both major product goals:
+This note records what GeRAFE should carry forward from two predecessor figure-rendering prototypes. It is a design constraint for both major product goals:
 
 - **Goal A:** a fast, fully functional genome browser;
 - **Goal B:** publication-quality figure creation directly from the region and tracks being browsed.
@@ -9,7 +9,7 @@ The central rule is that browsing and figure creation must use one semantic trac
 
 ## What the existing projects teach us
 
-### `gene_tracks_organic`
+### Manifest-driven prototype
 
 - Its manifest is effective provenance: each source row records `group`, `label`, `path`, `color`, `kind`, `pair_id`, `strand`, and optional height/range overrides.
 - A stranded display is assembled from explicit plus/minus roles and a `pair_id`. Filename inference is useful for proposing a pair, but ambiguous or incomplete pairs are skipped.
@@ -18,7 +18,7 @@ The central rule is that browsing and figure creation must use one semantic trac
 - It has richer annotation and figure concepts than the current browser: representative transcript selection, exon/CDS/UTR geometry, strand-separated genes, collision-aware labels, guides/highlights, interaction outlines, BED/BEDPE, and multiple Hi-C presentation modes.
 - Its generated layout metadata is valuable: rendered groups and tracks retain physical bounds and source identity, enabling selection and editing after preview.
 
-### `plotanical`
+### Project-document prototype
 
 - Its versioned project object is a better foundation than loose renderer arguments. Tracks have stable IDs, kinds, labels, sources, colors, enabled state, scale mode, fixed limits, and height.
 - `signal`, `stranded`, and `genes` are distinct track kinds with type-aware editors and validation.
@@ -89,7 +89,7 @@ Every stranded track needs independent choices for:
 - **Cross-track linkage:** unlinked, linked to other tracks by a scale binding, or fixed.
 - **Appearance:** separate plus/minus colors, fill/line mode, baseline visibility, gap, and strand labels.
 
-This covers both patterns demonstrated by the existing projects: symmetric comparisons and asymmetric transcription displays. The default for recognizable PRO-seq/GRO-seq pairs should be diverging, plus above and minus below, with explicit minus-value normalization. The user must be able to switch symmetry and unlink either strand without reopening files.
+This covers both patterns demonstrated by the predecessor prototypes: symmetric comparisons and asymmetric transcription displays. The default for recognizable PRO-seq/GRO-seq pairs should be diverging, plus above and minus below, with explicit minus-value normalization. The user must be able to switch symmetry and unlink either strand without reopening files.
 
 ## Scaling
 
@@ -144,7 +144,7 @@ The interactive browser can continue using Canvas for speed. Publication export 
 
 - **Core implemented:** the compact RefSeq source now combines a whole-genome search index with chromosome-lazy transcript, exon, CDS/UTR, strand, and TSS geometry. Continue by adding transcript metadata beyond the current RefSeq identifiers.
 - **Initial policy implemented:** gene tracks offer collapsed representative-transcript, expanded all-isoform, and squished all-isoform modes. Add canonical/longest-CDS and user-selected transcript policies next.
-- Store source path, format, file size, modification time, and role. A saved session can then detect moved or changed inputs and a figure export can write a source manifest like Plotanical.
+- Store source path, format, file size, modification time, and role. A saved session can then detect moved or changed inputs and a figure export can write a reproducible source manifest.
 - Guides/highlights should be named model objects that may originate from a gene, promoter, or manual interval; interaction outlines should reference those objects rather than copy coordinates.
 
 ## Implementation sequence

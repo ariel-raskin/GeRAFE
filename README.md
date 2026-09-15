@@ -1,10 +1,26 @@
-# GeRAFE
+<h1 align="center">
+  <img src="static/gerafe-icon.png" alt="GeRAFE icon" width="170" align="middle">
+  &nbsp;GeRAFE
+</h1>
 
-[![CI](https://github.com/ariel-raskin/GeRAFE/actions/workflows/ci.yml/badge.svg)](https://github.com/ariel-raskin/GeRAFE/actions/workflows/ci.yml)
+<p align="center"><strong>Genomic Renderer and Figure Editor</strong></p>
 
-**GeRAFE — Genomic Renderer and Figure Editor** is a local-first desktop genome browser for exploring genomic signal, alignment, interval, and gene-annotation tracks. It reads files directly from your computer and provides responsive chromosome navigation, track organization, and persistent workspaces without uploading genomic data.
+<p align="center">
+  A fast, local-first desktop genome browser being built toward publication-quality genomic figure composition.
+</p>
+
+<p align="center">
+  <a href="https://github.com/ariel-raskin/GeRAFE/actions/workflows/ci.yml"><img src="https://github.com/ariel-raskin/GeRAFE/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+</p>
+
+GeRAFE explores genomic signal, alignment, interval, and gene-annotation tracks directly from files on your computer. It provides responsive chromosome navigation, flexible track organization, and persistent workspaces without uploading genomic data.
 
 GeRAFE is currently developed and tested as a Windows desktop application.
+
+![GeRAFE showing synthetic stranded PRO-seq, H3K27ac, BED intervals, and built-in RefSeq genes](screenshots/gerafe-browser.png)
+
+> [!IMPORTANT]
+> GeRAFE is early research software. Validate displays against established tools before relying on them for analysis, and do not use the application for clinical decisions.
 
 ## Features
 
@@ -67,14 +83,14 @@ npm ci
 npm run desktop:install-local
 ```
 
-This builds the release application outside the Dropbox checkout, installs it at `%LOCALAPPDATA%\Programs\GeRAFE\gerafe.exe`, and creates a **GeRAFE** Start Menu shortcut that launches the application directly without a terminal window. Open GeRAFE from Start, then right-click its taskbar icon and choose **Pin to taskbar**.
+This builds the release application in a machine-local cache outside the source checkout, installs it at `%LOCALAPPDATA%\Programs\GeRAFE\gerafe.exe`, and creates a **GeRAFE** Start Menu shortcut that launches the application directly without a terminal window. Open GeRAFE from Start, then right-click its taskbar icon and choose **Pin to taskbar**.
 
 After pulling future changes, close GeRAFE and run `npm run desktop:install-local` again. The command replaces the executable at the same location, so the Start Menu shortcut and taskbar pin continue to launch the updated application.
 
-For a first installation or routine update on a Dropbox-synced Windows computer,
-you can instead double-click **Install or Update GeRAFE.cmd**. See the
-[multi-computer setup guide](docs/MULTI_COMPUTER_SETUP.md) for prerequisites,
-syncing rules, and workspace/file behavior across computers.
+For a first installation or routine update from an existing Windows checkout, you
+can instead double-click **Install or Update GeRAFE.cmd**. See the
+[multi-computer setup guide](docs/MULTI_COMPUTER_SETUP.md) for a GitHub-based
+workflow and details about workspace and local-data behavior across computers.
 
 ### Build without installing
 
@@ -132,6 +148,7 @@ Use **File → Save workspace…** to export a `.gerafe.json` document and **Ope
 ## Current limitations
 
 - The desktop application is currently built and tested on Windows; packaged installers and signed releases are not provided yet.
+- There is not yet an in-app updater. Updating a source installation requires pulling the latest code and running the local installer again.
 - The supported track formats are limited to those listed above.
 - Custom references provide coordinate navigation but do not automatically include gene annotations or cytobands.
 - Individual BAM reads are drawn below a 250 kb visible span; BAM requests are limited to 2 Mb to avoid unbounded pileups.
@@ -165,6 +182,14 @@ Useful commands:
 
 Parser and renderer changes should also be checked with the relevant scripts under `scripts/` using real local files. Genomic test data and generated executables must not be committed.
 
+## Privacy
+
+GeRAFE reads genomic files locally. It does not upload tracks, workspaces, loci, or usage data, and it currently contains no telemetry. A saved workspace may contain absolute source paths, so inspect it before sharing it publicly.
+
+## Contributing and support
+
+Bug reports and focused feature requests are welcome through [GitHub Issues](https://github.com/ariel-raskin/GeRAFE/issues). Please do not attach private, controlled-access, or unpublished genomic data; describe the problem with synthetic or public data whenever possible. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [SECURITY.md](SECURITY.md) for security reports.
+
 ## Documentation
 
 - [Contributing workflow](CONTRIBUTING.md)
@@ -173,3 +198,4 @@ Parser and renderer changes should also be checked with the relevant scripts und
 - [Multi-computer Windows setup](docs/MULTI_COMPUTER_SETUP.md)
 - [Related genome browsers and visualization tools](docs/RELATED_TOOLS.md)
 - [Semantic track system and browser/figure compatibility design](docs/TRACK_SYSTEM_DIRECTION.md)
+- [Bundled reference-data sources](docs/THIRD_PARTY_DATA.md)
