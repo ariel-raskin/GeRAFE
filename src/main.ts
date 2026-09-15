@@ -14,6 +14,7 @@ import {
   addSignalTrack,
   addIntervalTrack,
   addAlignmentTrack,
+  applyAutomaticStrandedColors,
   autoPairStrandedTracks,
   assignDisplayGroup,
   createTrackDocument,
@@ -47,6 +48,8 @@ const {
   workspace: WORKSPACE_KEY,
   tssIndicators: TSS_INDICATORS_KEY,
   strandedAutoLink: STRANDED_AUTO_LINK_KEY,
+  groupAutoscale: GROUP_AUTOSCALE_KEY,
+  strandedAutoColors: STRANDED_AUTO_COLORS_KEY,
 } = STORAGE_KEYS
 migrateLegacyStorage(localStorage)
 applyTheme(savedTheme())
@@ -90,12 +93,7 @@ app.innerHTML = `
         <div class="app-menu" id="settings-menu-root">
           <button class="menu-trigger" id="settings-menu-button" type="button" aria-haspopup="menu" aria-expanded="false">Settings</button>
           <div class="menu-popover" id="settings-menu-popup" role="menu" hidden>
-            <button class="menu-item" id="tss-indicators-menu-item" type="button" role="menuitemcheckbox" aria-checked="true">
-              <span>Show TSS elbow arrows</span><small id="tss-indicators-state">On</small>
-            </button>
-            <button class="menu-item" id="stranded-auto-link-menu-item" type="button" role="menuitemcheckbox" aria-checked="true">
-              <span>Auto-link stranded signals</span><small id="stranded-auto-link-state">On</small>
-            </button>
+            <button class="menu-item" id="track-options-menu-item" type="button" role="menuitem"><span>Track options…</span></button>
           </div>
         </div>
         <div class="app-menu" id="help-menu-root">
@@ -132,6 +130,7 @@ app.innerHTML = `
         <span id="zoom-level" aria-live="polite">100%</span>
         <button id="zoom-in" type="button" aria-label="Zoom in">＋</button>
       </div>
+      <span class="app-version" title="Installed GeRAFE version">v${__GERAFE_VERSION__}</span>
       <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch color theme"></button>
     </header>
 
@@ -200,6 +199,17 @@ app.innerHTML = `
       </footer>
     </section>
   </div>
+  <div class="track-options-dialog" id="track-options-dialog" role="dialog" aria-modal="true" aria-labelledby="track-options-title" hidden>
+    <section class="track-options-card">
+      <header><strong id="track-options-title">Track options</strong><button class="update-dialog-close" id="track-options-close" type="button" aria-label="Close">×</button></header>
+      <div class="track-options-content">
+        <label><span><strong>Show TSS elbow arrows</strong><small>Draw transcription start site indicators in gene tracks.</small></span><input id="tss-indicators-toggle" type="checkbox" /></label>
+        <label><span><strong>Auto-link stranded signals</strong><small>Pair matching positive and negative signal files when opened.</small></span><input id="stranded-auto-link-toggle" type="checkbox" /></label>
+        <label><span><strong>Autoscale new visual groups</strong><small>Link compatible signal scales whenever tracks are added to a new group.</small></span><input id="group-autoscale-toggle" type="checkbox" /></label>
+        <label><span><strong>Color linked strands red and blue</strong><small>Use red for positive and blue for negative strands when pairs are linked.</small></span><input id="stranded-auto-colors-toggle" type="checkbox" /></label>
+      </div>
+    </section>
+  </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 `
 
@@ -240,6 +250,12 @@ const updateReleaseNotesText = document.querySelector<HTMLElement>('#update-rele
 const updateProgress = document.querySelector<HTMLElement>('#update-progress')!
 const updateProgressBar = document.querySelector<HTMLProgressElement>('#update-progress-bar')!
 const updateProgressLabel = document.querySelector<HTMLElement>('#update-progress-label')!
+const trackOptionsDialog = document.querySelector<HTMLElement>('#track-options-dialog')!
+const trackOptionsClose = document.querySelector<HTMLButtonElement>('#track-options-close')!
+const tssIndicatorsToggle = document.querySelector<HTMLInputElement>('#tss-indicators-toggle')!
+const strandedAutoLinkToggle = document.querySelector<HTMLInputElement>('#stranded-auto-link-toggle')!
+const groupAutoscaleToggle = document.querySelector<HTMLInputElement>('#group-autoscale-toggle')!
+const strandedAutoColorsToggle = document.querySelector<HTMLInputElement>('#stranded-auto-colors-toggle')!
 
 const runtimeSources = new Map<string, TrackSource>()
 const selectedTrackIds = new Set<string>()
@@ -311,8 +327,7 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
   },
 })
 browser.setShowTssIndicators(savedTssIndicators())
-updateTssIndicatorControl()
-updateStrandedAutoLinkControl()
+updateTrackOptionsControls()
 updateZoomLevel(initialRegion)
 
 let persistTimer: number | undefined
@@ -385,18 +400,21 @@ document.querySelector<HTMLButtonElement>('#save-workspace-menu-item')!.addEvent
 })
 document.querySelector<HTMLButtonElement>('#undo-menu-item')!.addEventListener('click', () => { closeMenus(); store.undo() })
 document.querySelector<HTMLButtonElement>('#redo-menu-item')!.addEventListener('click', () => { closeMenus(); store.redo() })
-document.querySelector<HTMLButtonElement>('#tss-indicators-menu-item')!.addEventListener('click', () => {
-  const show = !savedTssIndicators()
-  localStorage.setItem(TSS_INDICATORS_KEY, String(show))
-  browser.setShowTssIndicators(show)
-  updateTssIndicatorControl()
+document.querySelector<HTMLButtonElement>('#track-options-menu-item')!.addEventListener('click', () => { closeMenus(); openTrackOptionsDialog() })
+tssIndicatorsToggle.addEventListener('change', () => {
+  localStorage.setItem(TSS_INDICATORS_KEY, String(tssIndicatorsToggle.checked))
+  browser.setShowTssIndicators(tssIndicatorsToggle.checked)
 })
-document.querySelector<HTMLButtonElement>('#stranded-auto-link-menu-item')!.addEventListener('click', () => {
-  const enabled = !savedStrandedAutoLink()
-  localStorage.setItem(STRANDED_AUTO_LINK_KEY, String(enabled))
-  if (enabled) store.edit((draft) => { autoPairStrandedTracks(draft) })
-  updateStrandedAutoLinkControl()
+strandedAutoLinkToggle.addEventListener('change', () => {
+  localStorage.setItem(STRANDED_AUTO_LINK_KEY, String(strandedAutoLinkToggle.checked))
+  if (strandedAutoLinkToggle.checked) store.edit((draft) => { autoPairStrandedTracks(draft, { autoColors: savedStrandedAutoColors() }) })
 })
+groupAutoscaleToggle.addEventListener('change', () => localStorage.setItem(GROUP_AUTOSCALE_KEY, String(groupAutoscaleToggle.checked)))
+strandedAutoColorsToggle.addEventListener('change', () => {
+  localStorage.setItem(STRANDED_AUTO_COLORS_KEY, String(strandedAutoColorsToggle.checked))
+  if (strandedAutoColorsToggle.checked) store.edit(applyAutomaticStrandedColors)
+})
+trackOptionsClose.addEventListener('click', closeTrackOptionsDialog)
 document.querySelector<HTMLButtonElement>('#check-updates-menu-item')!.addEventListener('click', () => {
   closeMenus()
   openUpdateDialog()
@@ -414,10 +432,10 @@ document.addEventListener('pointerdown', (event) => {
   if (!(event.target as Element).closest?.('.app-menu')) closeMenus()
   if (!(event.target as Element).closest?.('.reference-picker')) setReferenceMenu(false)
   if (!(event.target as Element).closest?.('.track-context-menu')) closeTrackContextMenu()
-  if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog')) clearTrackSelection()
+  if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog, #track-options-dialog')) clearTrackSelection()
 })
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') { closeMenus(); setReferenceMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog() }
+  if (event.key === 'Escape') { closeMenus(); setReferenceMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog() }
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'o') {
     event.preventDefault()
     closeMenus()
@@ -568,7 +586,7 @@ async function loadFiles(files: FileList | null | undefined): Promise<void> {
       store.edit((draft) => {
         const added = kind === 'interval' ? addIntervalTrack(draft, sourceSpec, { id: trackId })
           : kind === 'alignment' ? addAlignmentTrack(draft, sourceSpec, { id: trackId })
-            : addSignalTrack(draft, sourceSpec, { id: trackId, displayGroupId: destinationGroupId, autoPair: savedStrandedAutoLink() })
+            : addSignalTrack(draft, sourceSpec, { id: trackId, displayGroupId: destinationGroupId, autoPair: savedStrandedAutoLink(), autoStrandColors: savedStrandedAutoColors() })
         if (destinationGroupId) addTracksToGroup(draft, destinationGroupId, [added.id])
       })
       await browser.attachSource(sourceSpec.id, source)
@@ -659,7 +677,7 @@ async function loadNativePaths(paths: readonly string[]): Promise<void> {
       store.edit((draft) => {
         const added = kind === 'interval' ? addIntervalTrack(draft, sourceSpec, { id: trackId })
           : kind === 'alignment' ? addAlignmentTrack(draft, sourceSpec, { id: trackId })
-            : addSignalTrack(draft, sourceSpec, { id: trackId, displayGroupId: destinationGroupId, autoPair: savedStrandedAutoLink() })
+            : addSignalTrack(draft, sourceSpec, { id: trackId, displayGroupId: destinationGroupId, autoPair: savedStrandedAutoLink(), autoStrandColors: savedStrandedAutoColors() })
         if (destinationGroupId) addTracksToGroup(draft, destinationGroupId, [added.id])
       })
       await browser.attachSource(sourceSpec.id, source)
@@ -1019,7 +1037,7 @@ function handleTrackContextAction(event: MouseEvent): void {
     const first = store.current.tracks.find((track) => ids.includes(track.id))
     const current = store.current.groups.find((group) => group.id === first?.displayGroupId)?.label ?? ''
     const label = window.prompt('Visual group name (leave blank to remove grouping):', current)
-    if (label !== null) store.edit((draft) => assignDisplayGroup(draft, ids, label))
+    if (label !== null) store.edit((draft) => assignDisplayGroup(draft, ids, label, { autoScale: savedGroupAutoscale() }))
   }
   if (command === 'scale-auto') store.edit((draft) => {
     const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
@@ -1041,7 +1059,7 @@ function handleTrackContextAction(event: MouseEvent): void {
   if (command === 'unlink-scales') store.edit((draft) => unlinkScales(draft, signalIds))
   if (command === 'strand-link') {
     let pairedId: string | undefined
-    store.edit((draft) => { pairedId = pairStrandedTracks(draft, ids[0], ids[1])?.id })
+    store.edit((draft) => { pairedId = pairStrandedTracks(draft, ids[0], ids[1], { autoColors: savedStrandedAutoColors() })?.id })
     if (pairedId) {
       selectedTrackIds.clear(); selectedTrackIds.add(pairedId); lastSelectedTrackId = pairedId
       browser.setSelectedTracks(selectedTrackIds)
@@ -1189,7 +1207,7 @@ function handleGroupContextAction(command: string | undefined, groupId: string):
 function addTracksToGroup(draft: TrackDocument, groupId: string, trackIds: readonly string[]): void {
   const group = draft.groups.find((item) => item.id === groupId)
   if (!group || !trackIds.length) return
-  assignDisplayGroup(draft, trackIds, group.label)
+  assignDisplayGroup(draft, trackIds, group.label, { autoScale: savedGroupAutoscale() })
 }
 
 function setTrackHeights(trackIds: readonly string[]): void {
@@ -1655,22 +1673,33 @@ function savedTssIndicators(): boolean {
   return localStorage.getItem(TSS_INDICATORS_KEY) !== 'false'
 }
 
-function updateTssIndicatorControl(): void {
-  const show = savedTssIndicators()
-  const button = document.querySelector<HTMLButtonElement>('#tss-indicators-menu-item')!
-  button.setAttribute('aria-checked', String(show))
-  document.querySelector<HTMLElement>('#tss-indicators-state')!.textContent = show ? 'On' : 'Off'
-}
-
 function savedStrandedAutoLink(): boolean {
   return localStorage.getItem(STRANDED_AUTO_LINK_KEY) !== 'false'
 }
 
-function updateStrandedAutoLinkControl(): void {
-  const enabled = savedStrandedAutoLink()
-  const button = document.querySelector<HTMLButtonElement>('#stranded-auto-link-menu-item')!
-  button.setAttribute('aria-checked', String(enabled))
-  document.querySelector<HTMLElement>('#stranded-auto-link-state')!.textContent = enabled ? 'On' : 'Off'
+function savedGroupAutoscale(): boolean {
+  return localStorage.getItem(GROUP_AUTOSCALE_KEY) !== 'false'
+}
+
+function savedStrandedAutoColors(): boolean {
+  return localStorage.getItem(STRANDED_AUTO_COLORS_KEY) !== 'false'
+}
+
+function updateTrackOptionsControls(): void {
+  tssIndicatorsToggle.checked = savedTssIndicators()
+  strandedAutoLinkToggle.checked = savedStrandedAutoLink()
+  groupAutoscaleToggle.checked = savedGroupAutoscale()
+  strandedAutoColorsToggle.checked = savedStrandedAutoColors()
+}
+
+function openTrackOptionsDialog(): void {
+  updateTrackOptionsControls()
+  trackOptionsDialog.hidden = false
+  window.setTimeout(() => tssIndicatorsToggle.focus(), 0)
+}
+
+function closeTrackOptionsDialog(): void {
+  trackOptionsDialog.hidden = true
 }
 
 function updateZoomLevel(region: { chr: string; start: number; end: number }): void {

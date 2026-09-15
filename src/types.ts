@@ -89,6 +89,8 @@ export interface TrackRuntime {
   source?: TrackSource
   features: TrackFeature[]
   loadedRegion?: Region
+  /** Bases represented by one requested data pixel; smaller means a finer source query. */
+  loadedBasesPerPixel?: number
   status: TrackStatus
   error?: string
   requestVersion: number

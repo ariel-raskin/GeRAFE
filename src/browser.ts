@@ -1366,13 +1366,29 @@ export class GenomeBrowser {
 
   private hasOverscanCoverage(): boolean {
     return this.visibleSourceSpecs().every((spec) => {
-      return this.runtimesForTrack(spec.id).every((track) => !track.source || Boolean(track.loadedRegion && contains(track.loadedRegion, this.region)))
+      return this.runtimesForTrack(spec.id).every((track) => !track.source || this.hasSuitableData(track))
     })
+  }
+
+  /**
+   * Overscan makes ordinary pans inexpensive, but it must not keep a coarse
+   * summary after zooming in. Sources choose their indexed summary level from
+   * the requested bases-per-pixel value, so refresh once the viewport asks for
+   * materially finer detail.
+   */
+  private hasSuitableData(track: TrackRuntime): boolean {
+    if (!track.loadedRegion || !contains(track.loadedRegion, this.region)) return false
+    if (!track.loadedBasesPerPixel) return false
+    const plotWidth = Math.max(1, this.cssWidth() - PLOT_LEFT)
+    // The query requests three times as many pixels for a three-times-wider
+    // overscan region, so its effective resolution is viewport span / width.
+    const requestedBasesPerPixel = (this.region.end - this.region.start) / plotWidth
+    return track.loadedBasesPerPixel <= requestedBasesPerPixel * 1.25
   }
 
   private async ensureData(): Promise<void> {
     await Promise.all(this.visibleSourceSpecs().flatMap((spec) => this.runtimesForTrack(spec.id)).map(async (track) => {
-      if (track?.source && (!track.loadedRegion || !contains(track.loadedRegion, this.region))) await this.loadTrack(track)
+      if (track?.source && !this.hasSuitableData(track)) await this.loadTrack(track)
     }))
   }
 
@@ -1416,6 +1432,7 @@ export class GenomeBrowser {
       if (version !== track.requestVersion) return
       track.features = features
       track.loadedRegion = queryRegion
+      track.loadedBasesPerPixel = (queryRegion.end - queryRegion.start) / Math.max(1, plotWidth * 3)
       track.status = 'ready'
     } catch (error) {
       if (version !== track.requestVersion || isAbortError(error)) return
@@ -1785,8 +1802,8 @@ export function formatCoordinate(value: number, step = 1, referenceValue = value
   return Math.round(value).toString()
 }
 
-function formatScore(value: number): string {
-  if (Math.abs(value) >= 1000) return value.toExponential(1)
+export function formatScore(value: number): string {
+  if (Math.abs(value) >= 1000) return Math.round(value).toString()
   return Number(value.toPrecision(3)).toString()
 }
 

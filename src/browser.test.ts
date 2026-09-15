@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatCoordinate, heightScoreForPixels, phasedArrowPositions, trackPixelHeight } from './browser.ts'
+import { formatCoordinate, formatScore, heightScoreForPixels, phasedArrowPositions, trackPixelHeight } from './browser.ts'
 
 describe('gene direction arrow geometry', () => {
   it('keeps arrow phase attached to the transcript while panning', () => {
@@ -20,5 +20,10 @@ describe('track layout and ruler formatting', () => {
     expect(formatCoordinate(109_800_000, 20_000, 109_950_000)).toBe('109.80m')
     expect(formatCoordinate(109_820_000, 20_000, 109_950_000)).toBe('109.82m')
     expect(formatCoordinate(820_000, 20_000, 900_000)).toBe('820k')
+  })
+
+  it('keeps large scale labels readable without exponential notation', () => {
+    expect(formatScore(1_600)).toBe('1600')
+    expect(formatScore(-12_345)).toBe('-12345')
   })
 })

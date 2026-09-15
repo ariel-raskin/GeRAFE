@@ -3,6 +3,7 @@ import {
   addSignalTrack,
   addAlignmentTrack,
   addIntervalTrack,
+  applyAutomaticStrandedColors,
   assignDisplayGroup,
   computeScaleDomains,
   createTrackDocument,
@@ -25,20 +26,22 @@ function documentWithTwoTracks() {
 }
 
 describe('track document', () => {
-  it('keeps visual grouping and scale linkage independent', () => {
+  it('links scales automatically for a new visual group and can opt out', () => {
     const document = documentWithTwoTracks()
     assignDisplayGroup(document, ['t1', 't2'], 'Condition A')
     expect(document.tracks.find((track) => track.id === 't1')?.displayGroupId)
       .toBe(document.tracks.find((track) => track.id === 't2')?.displayGroupId)
     expect(document.tracks.find((track) => track.id === 't1')?.scaleBindingId)
-      .not.toBe(document.tracks.find((track) => track.id === 't2')?.scaleBindingId)
-
-    linkScales(document, ['t1', 't2'])
-    expect(document.tracks.find((track) => track.id === 't1')?.scaleBindingId)
       .toBe(document.tracks.find((track) => track.id === 't2')?.scaleBindingId)
+
     unlinkScales(document, ['t1', 't2'])
     expect(document.tracks.find((track) => track.id === 't1')?.scaleBindingId)
       .not.toBe(document.tracks.find((track) => track.id === 't2')?.scaleBindingId)
+
+    const independent = documentWithTwoTracks()
+    assignDisplayGroup(independent, ['t1', 't2'], 'Independent', { autoScale: false })
+    expect(independent.tracks.find((track) => track.id === 't1')?.scaleBindingId)
+      .not.toBe(independent.tracks.find((track) => track.id === 't2')?.scaleBindingId)
   })
 
   it('uses one scale domain for linked tracks', () => {
@@ -199,6 +202,16 @@ describe('track document', () => {
     expect(unlinked.map((track) => track.signalStrand)).toEqual(['plus', 'minus'])
     expect(unlinked.every((track) => track.strandAutoLinkDisabled)).toBe(true)
     expect(document.sources.map((source) => source.id)).toEqual(['plus-source', 'minus-source'])
+  })
+
+  it('uses red and blue for automatically colored stranded pairs without changing manual colors otherwise', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
+    addSignalTrack(document, { id: 'plus-source', name: 'PRO.plus.tdf', format: 'tdf', files: [] }, { id: 'plus-track', color: '#112233' })
+    const paired = addSignalTrack(document, { id: 'minus-source', name: 'PRO.minus.tdf', format: 'tdf', files: [] }, { id: 'minus-track', color: '#445566', autoStrandColors: true })
+    expect(paired).toMatchObject({ color: '#d95d74', negativeColor: '#3478c9' })
+    paired.color = '#ffffff'
+    applyAutomaticStrandedColors(document)
+    expect(paired).toMatchObject({ color: '#d95d74', negativeColor: '#3478c9' })
   })
 
   it('links positive and negative group scales independently and normalizes magnitudes', () => {
