@@ -257,7 +257,8 @@ button, label { -webkit-tap-highlight-color: transparent; }
 .locus-form:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(104,78,224,.1); }
 .locus-form button { border: 0; padding: 0 14px; color: white; background: var(--accent); font-size: 11px; font-weight: 700; cursor: pointer; }
 
-.zoom-controls { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.zoom-controls { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; letter-spacing: .04em; }
+.zoom-controls span { min-width: 42px; text-align: center; font-variant-numeric: tabular-nums; }
 .zoom-controls button { width: 30px; height: 30px; border: 0; border-radius: 5px; color: var(--button-ink); background: var(--button-muted); font-size: 16px; cursor: pointer; }
 .zoom-controls button:hover { color: white; background: var(--accent); }
 
@@ -579,7 +580,7 @@ html[data-theme='dark'] .toast.is-error { color: white; }
 .toast.is-error { background: #9d3d4d; }
 
 @media (max-width: 900px) {
-  .app-title strong, .zoom-controls span { display: none; }
+  .app-title strong { display: none; }
   .toolbar { gap: 8px; }
   .toolbar-divider:first-of-type { display: none; }
   .locus-form input { width: 220px; }

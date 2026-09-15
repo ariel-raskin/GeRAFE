@@ -6,7 +6,7 @@ import { BedSource } from './data/bed.ts'
 import { BigWigSource } from './data/bigwig.ts'
 import { TdfSource } from './data/tdf.ts'
 import { BamAlignmentSource, findBamIndex } from './data/bam.ts'
-import { formatLocus, hg38, parseLocus, resolveChromosome } from './genome.ts'
+import { formatBases, formatLocus, formatZoomPercentage, hg38, parseLocus, resolveChromosome } from './genome.ts'
 import { parseCytobands } from './cytoband.ts'
 import { GeneSource, parseChromosomeIndex, restoreReference, serializeReference } from './reference.ts'
 import type { ReferenceGenome, StoredReferenceGenome } from './reference.ts'
@@ -119,7 +119,7 @@ app.innerHTML = `
       <button class="fit-tracks-button" id="fit-tracks" type="button" title="Fit all upper tracks into the visible upper pane">Fit tracks</button>
       <div class="zoom-controls" aria-label="Zoom controls">
         <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
-        <span>Zoom</span>
+        <span id="zoom-level" aria-live="polite">100%</span>
         <button id="zoom-in" type="button" aria-label="Zoom in">＋</button>
       </div>
       <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch color theme"></button>
@@ -223,6 +223,7 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
   onRegionChange(region) {
     locusInput.value = formatLocus(region)
     chromosomeSelect.value = region.chr
+    updateZoomLevel(region)
     store.setViewport(activeReference.id, region)
     void ensureGeneDetails(region.chr)
   },
@@ -264,6 +265,7 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
 browser.setShowTssIndicators(savedTssIndicators())
 updateTssIndicatorControl()
 updateStrandedAutoLinkControl()
+updateZoomLevel(initialRegion)
 
 let persistTimer: number | undefined
 store.subscribe((document, reason) => {
@@ -1144,9 +1146,13 @@ function fitUpperTracks(): void {
   if (!upperTracks.length) return showToast('There are no upper tracks to fit.')
   const bodyHeight = document.querySelector<HTMLElement>('.browser-body')?.clientHeight ?? window.innerHeight
   const visibleHeight = Math.max(40, bodyHeight - bottomPane.getBoundingClientRect().height - headerCanvas.getBoundingClientRect().height)
-  const pixelsPerTrack = visibleHeight / upperTracks.length
+  const totalHeightUnits = upperTracks.reduce((sum, track) => sum + (track.kind === 'stranded' ? 2 : 1), 0)
+  const pixelsPerUnit = visibleHeight / totalHeightUnits
   store.edit((draft) => {
-    for (const track of draft.tracks) if (track.enabled && track.pane === 'main') track.height = heightScoreForPixels(track.kind, pixelsPerTrack)
+    for (const track of draft.tracks) if (track.enabled && track.pane === 'main') {
+      const units = track.kind === 'stranded' ? 2 : 1
+      track.height = heightScoreForPixels(track.kind, pixelsPerUnit * units)
+    }
   })
   mainTrackScroll.scrollTop = 0
   showToast(`Fit ${upperTracks.length} upper track${upperTracks.length === 1 ? '' : 's'} to the visible pane.`)
@@ -1474,6 +1480,16 @@ function updateStrandedAutoLinkControl(): void {
   const button = document.querySelector<HTMLButtonElement>('#stranded-auto-link-menu-item')!
   button.setAttribute('aria-checked', String(enabled))
   document.querySelector<HTMLElement>('#stranded-auto-link-state')!.textContent = enabled ? 'On' : 'Off'
+}
+
+function updateZoomLevel(region: { chr: string; start: number; end: number }): void {
+  const chromosomeLength = activeChromosomes.get(region.chr)
+  if (!chromosomeLength) return
+  const span = Math.max(1, region.end - region.start)
+  const percentage = chromosomeLength / span * 100
+  const label = document.querySelector<HTMLElement>('#zoom-level')!
+  label.textContent = formatZoomPercentage(percentage)
+  label.title = `${percentage.toLocaleString(undefined, { maximumFractionDigits: 1 })}% zoom · ${formatBases(span)} visible · 100% shows the full chromosome`
 }
 
 function fitBottomPaneToContent(): void {

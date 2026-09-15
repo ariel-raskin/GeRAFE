@@ -12,6 +12,8 @@ const GROUP_RAIL_WIDTH = 24
 const LABEL_WIDTH = 176
 const PLOT_LEFT = LABEL_WIDTH
 const SCALE_LANE_MIN_WIDTH = 34
+const LABEL_CONTENT_LEFT = GROUP_RAIL_WIDTH + 8
+const LABEL_CONTENT_RIGHT = LABEL_WIDTH - 8
 const OVERSCAN_FACTOR = 1
 const GENE_CONTENT_PADDING = 6
 
@@ -586,7 +588,7 @@ export class GenomeBrowser {
       ctx.lineTo(Math.round(x) + 0.5, RULER_HEIGHT)
       ctx.stroke()
       ctx.fillStyle = palette.label
-      ctx.fillText(formatCoordinate(coordinate), x, 79)
+      ctx.fillText(formatCoordinate(coordinate, step, Math.max(Math.abs(this.region.start), Math.abs(this.region.end))), x, 79)
     }
     ctx.textAlign = 'start'
   }
@@ -712,10 +714,10 @@ export class GenomeBrowser {
     ctx.fillStyle = palette.ink
     ctx.font = '600 12px Inter, system-ui, sans-serif'
     const maxLabelLines = track.status === 'error' || track.status === 'offline' ? 2 : Math.max(1, Math.floor((height - 20) / 15))
-    const labelWidth = scaleLaneWidth ? Math.max(48, LABEL_WIDTH - 24 - scaleLaneWidth - 8) : 136
-    const labelLayout = wrappedLines(ctx, spec.label, labelWidth, maxLabelLines)
+    const labelBounds = trackLabelBounds(scaleLaneWidth)
+    const labelLayout = wrappedLines(ctx, spec.label, labelBounds.width, maxLabelLines)
     const labelTop = top + Math.max(15, (height - labelLayout.length * 15) / 2 + 4)
-    drawTextLines(ctx, labelLayout, 24, labelTop, 15)
+    drawCenteredTextLines(ctx, labelLayout, labelBounds.center, labelTop, 15)
     if (track.status === 'error' || track.status === 'offline') {
       ctx.fillStyle = palette.error
       ctx.font = '11px Inter, system-ui, sans-serif'
@@ -829,9 +831,9 @@ export class GenomeBrowser {
     const scaleLaneWidth = labels.length ? Math.max(SCALE_LANE_MIN_WIDTH, ...labels.map((label) => Math.ceil(ctx.measureText(label).width) + 12)) : 0
     ctx.fillStyle = palette.ink
     ctx.font = '600 12px Inter, system-ui, sans-serif'
-    const labelWidth = scaleLaneWidth ? Math.max(48, LABEL_WIDTH - 24 - scaleLaneWidth - 8) : 136
-    const labelLayout = wrappedLines(ctx, spec.label, labelWidth, Math.max(1, Math.floor((height - 20) / 15)))
-    drawTextLines(ctx, labelLayout, 24, top + Math.max(15, (height - labelLayout.length * 15) / 2 + 4), 15)
+    const labelBounds = trackLabelBounds(scaleLaneWidth)
+    const labelLayout = wrappedLines(ctx, spec.label, labelBounds.width, Math.max(1, Math.floor((height - 20) / 15)))
+    drawCenteredTextLines(ctx, labelLayout, labelBounds.center, top + Math.max(15, (height - labelLayout.length * 15) / 2 + 4), 15)
 
     const chartTop = top + 12
     const chartBottom = bottom - 10
@@ -848,6 +850,10 @@ export class GenomeBrowser {
       if (plusMax > 0) ctx.fillText(formatScore(plusMax), LABEL_WIDTH - 8, chartTop + 3)
       if (minusMax > 0) ctx.fillText(formatScore(minusMax), LABEL_WIDTH - 8, chartBottom)
       ctx.textAlign = 'start'
+      ctx.beginPath()
+      if (plusMax > 0) { ctx.moveTo(LABEL_WIDTH - 7, chartTop + 0.5); ctx.lineTo(LABEL_WIDTH + 7, chartTop + 0.5) }
+      if (minusMax > 0) { ctx.moveTo(LABEL_WIDTH - 7, chartBottom - 0.5); ctx.lineTo(LABEL_WIDTH + 7, chartBottom - 0.5) }
+      ctx.stroke()
     }
     drawMagnitudeBins(ctx, binFeatures(plusVisible, this.region, Math.floor(plotWidth)), PLOT_LEFT, chartTop, zeroY, Math.max(1e-9, plusMax), spec.color, false)
     drawMagnitudeBins(ctx, binFeatures(minusVisible, this.region, Math.floor(plotWidth)), PLOT_LEFT, zeroY, chartBottom, Math.max(1e-9, minusMax), spec.negativeColor ?? spec.color, true)
@@ -892,8 +898,9 @@ export class GenomeBrowser {
     ctx.stroke()
     ctx.fillStyle = palette.ink
     ctx.font = '600 12px Inter, system-ui, sans-serif'
-    const labelLines = wrappedLines(ctx, spec.label, 136, Math.max(1, Math.floor((height - 16) / 15)))
-    drawTextLines(ctx, labelLines, 24, top + Math.max(15, (height - labelLines.length * 15) / 2 + 4), 15)
+    const labelBounds = trackLabelBounds()
+    const labelLines = wrappedLines(ctx, spec.label, labelBounds.width, Math.max(1, Math.floor((height - 16) / 15)))
+    drawCenteredTextLines(ctx, labelLines, labelBounds.center, top + Math.max(15, (height - labelLines.length * 15) / 2 + 4), 15)
     if (track.status === 'error' || track.status === 'offline') {
       ctx.fillStyle = palette.error
       ctx.font = '11px Inter, system-ui, sans-serif'
@@ -991,11 +998,14 @@ export class GenomeBrowser {
     ctx.beginPath(); ctx.moveTo(0, bottom - 0.5); ctx.lineTo(width, bottom - 0.5); ctx.stroke()
     ctx.fillStyle = palette.ink
     ctx.font = '600 12px Inter, system-ui, sans-serif'
-    const labelLines = wrappedLines(ctx, spec.label, 136, Math.max(1, Math.floor((height - 30) / 15)))
-    drawTextLines(ctx, labelLines, 24, top + Math.max(15, (height - labelLines.length * 15) / 2), 15)
+    const labelBounds = trackLabelBounds()
+    const labelLines = wrappedLines(ctx, spec.label, labelBounds.width, Math.max(1, Math.floor((height - 30) / 15)))
+    drawCenteredTextLines(ctx, labelLines, labelBounds.center, top + Math.max(15, (height - labelLines.length * 15) / 2), 15)
     ctx.fillStyle = palette.muted
     ctx.font = '10px Inter, system-ui, sans-serif'
-    ctx.fillText(`BAM · MAPQ ≥ ${spec.bamMinMapq ?? 0}`, 24, bottom - 10)
+    ctx.textAlign = 'center'
+    ctx.fillText(`BAM · MAPQ ≥ ${spec.bamMinMapq ?? 0}`, labelBounds.center, bottom - 10)
+    ctx.textAlign = 'start'
     if (track.status === 'error' || track.status === 'offline') {
       ctx.fillStyle = palette.error
       ctx.font = '11px Inter, system-ui, sans-serif'
@@ -1188,13 +1198,14 @@ export class GenomeBrowser {
 
     ctx.fillStyle = palette.ink
     ctx.font = '600 12px Inter, system-ui, sans-serif'
-    const labelLines = wrappedLines(ctx, spec.label || source?.name || 'Genes', 136, Math.max(1, Math.floor((height - 34) / 15)))
+    const labelBounds = trackLabelBounds()
+    const labelLines = wrappedLines(ctx, spec.label || source?.name || 'Genes', labelBounds.width, Math.max(1, Math.floor((height - 34) / 15)))
     const labelTop = top + Math.max(15, (height - 14 - labelLines.length * 15) / 2 + 4)
-    drawTextLines(ctx, labelLines, 24, labelTop, 15)
+    drawCenteredTextLines(ctx, labelLines, labelBounds.center, labelTop, 15)
     ctx.fillStyle = palette.muted
     ctx.font = '11px Inter, system-ui, sans-serif'
     ctx.textAlign = 'center'
-    ctx.fillText(source ? this.geneAssembly : 'No annotation source for this reference', LABEL_WIDTH / 2 + 7, bottom - 9)
+    ctx.fillText(source ? this.geneAssembly : 'No annotation source for this reference', labelBounds.center, bottom - 9)
     ctx.textAlign = 'start'
     if (!source) return 0
 
@@ -1764,9 +1775,13 @@ function niceStep(roughStep: number): number {
   return niceFraction * power
 }
 
-function formatCoordinate(value: number): string {
-  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 1 : 2)}m`
-  if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(value >= 100_000 ? 0 : 1)}k`
+export function formatCoordinate(value: number, step = 1, referenceValue = value): string {
+  const referenceMagnitude = Math.abs(referenceValue)
+  const factor = referenceMagnitude >= 1_000_000 ? 1_000_000 : referenceMagnitude >= 1_000 ? 1_000 : 1
+  const suffix = factor === 1_000_000 ? 'm' : factor === 1_000 ? 'k' : ''
+  const scaledStep = Math.abs(step) / factor
+  const decimals = factor === 1 ? 0 : Math.max(0, Math.min(4, Math.ceil(-Math.log10(Math.max(Number.EPSILON, scaledStep)))))
+  if (factor > 1) return `${(value / factor).toFixed(decimals)}${suffix}`
   return Math.round(value).toString()
 }
 
@@ -1802,11 +1817,13 @@ function trackSpecHeight(track: TrackSpec): number {
 
 export function trackPixelHeight(kind: TrackSpec['kind'], score: number): number {
   const safeScore = Math.max(1, Math.min(100, score))
-  return Math.round(16 + safeScore * (kind === 'genes' ? 3.2 : 3.6))
+  const regularHeight = 16 + safeScore * (kind === 'genes' ? 3.2 : 3.6)
+  return Math.round(kind === 'stranded' ? regularHeight * 2 : regularHeight)
 }
 
 export function heightScoreForPixels(kind: TrackSpec['kind'], pixels: number): number {
-  return Math.max(1, Math.min(100, Math.round((pixels - 16) / (kind === 'genes' ? 3.2 : 3.6))))
+  const channelPixels = kind === 'stranded' ? pixels / 2 : pixels
+  return Math.max(1, Math.min(100, Math.round((channelPixels - 16) / (kind === 'genes' ? 3.2 : 3.6))))
 }
 
 function trackBlocks(tracks: readonly TrackSpec[]): TrackSpec[][] {
@@ -1861,6 +1878,18 @@ function wrappedLines(
 
 function drawTextLines(ctx: CanvasRenderingContext2D, lines: readonly string[], x: number, y: number, lineHeight: number): void {
   lines.forEach((value, index) => ctx.fillText(value, x, y + index * lineHeight))
+}
+
+function drawCenteredTextLines(ctx: CanvasRenderingContext2D, lines: readonly string[], centerX: number, y: number, lineHeight: number): void {
+  ctx.textAlign = 'center'
+  drawTextLines(ctx, lines, centerX, y, lineHeight)
+  ctx.textAlign = 'start'
+}
+
+function trackLabelBounds(scaleLaneWidth = 0): { width: number; center: number } {
+  const right = scaleLaneWidth ? LABEL_WIDTH - scaleLaneWidth - 8 : LABEL_CONTENT_RIGHT
+  const width = Math.max(48, right - LABEL_CONTENT_LEFT)
+  return { width, center: LABEL_CONTENT_LEFT + width / 2 }
 }
 
 function preferredTranscript(gene: GeneFeature): TranscriptFeature | undefined {
