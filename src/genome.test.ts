@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clampRegion, formatBases, formatLocus, hg38, parseLocus, resolveChromosome } from './genome.ts'
+import { clampRegion, formatBases, formatLocus, formatZoomPercentage, hg38, parseLocus, resolveChromosome } from './genome.ts'
 
 describe('genomic coordinates', () => {
   it('parses display coordinates into zero-based half-open coordinates', () => {
@@ -26,5 +26,13 @@ describe('genomic coordinates', () => {
   it('formats loci and spans for the interface', () => {
     expect(formatLocus({ chr: 'chr2', start: 999, end: 2000 })).toBe('chr2:1,000-2,000')
     expect(formatBases(1_250_000)).toBe('1.25 Mb')
+  })
+})
+
+describe('zoom labels', () => {
+  it('formats chromosome-relative zoom compactly', () => {
+    expect(formatZoomPercentage(100)).toBe('100%')
+    expect(formatZoomPercentage(170_000)).toBe('170k%')
+    expect(formatZoomPercentage(1_250_000)).toBe('1.25m%')
   })
 })
