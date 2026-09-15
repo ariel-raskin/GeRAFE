@@ -119,7 +119,13 @@ app.innerHTML = `
 
     <div class="browser-body">
       <div class="canvas-wrap track-scroll" id="main-track-scroll">
-        <canvas id="genome-header" aria-label="Chromosome ideogram and genomic coordinate ruler"></canvas>
+        <div class="genome-header-wrap">
+          <canvas id="genome-header" aria-label="Chromosome ideogram and genomic coordinate ruler"></canvas>
+          <div class="corner-brand" aria-label="GeRAFE">
+            <img src="/gerafe-icon.png" alt="" />
+            <strong>GeRAFE</strong>
+          </div>
+        </div>
         <canvas id="genome-canvas" aria-label="Interactive genome tracks"></canvas>
         <div class="drop-overlay"><strong>Drop genomics files to open</strong><span>${SUPPORTED_TRACK_EXTENSION_LABEL}</span></div>
       </div>
