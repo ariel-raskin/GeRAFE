@@ -6,5 +6,16 @@ public/
 src-tauri/target/
 *.log
 *.tsbuildinfo
+
+# Local configuration and signing material. Public verification keys such as
+# *.key.pub remain trackable.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+
 Data/*
 !Data/.gitkeep
