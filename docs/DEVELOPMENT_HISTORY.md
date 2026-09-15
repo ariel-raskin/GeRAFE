@@ -1,6 +1,6 @@
 # Development history before Git
 
-GeRAF began under the working name **Locus Glide** in a local folder that was not a Git repository. This document preserves the most reliable development history available before the project moved to GitHub on September 14, 2026.
+GeRAFE began under the working name **Locus Glide** in a local folder that was not a Git repository. This document preserves the most reliable development history available before the project moved to GitHub on September 14, 2026.
 
 ## How this history was reconstructed
 

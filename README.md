@@ -1,10 +1,10 @@
-# GeRAF
+# GeRAFE
 
-[![CI](https://github.com/ariel-raskin/GeRAF/actions/workflows/ci.yml/badge.svg)](https://github.com/ariel-raskin/GeRAF/actions/workflows/ci.yml)
+[![CI](https://github.com/ariel-raskin/GeRAFE/actions/workflows/ci.yml/badge.svg)](https://github.com/ariel-raskin/GeRAFE/actions/workflows/ci.yml)
 
-**GeRAF — Genomic Renderer and Figures** is a local-first desktop genome browser for exploring genomic signal, alignment, interval, and gene-annotation tracks. It reads files directly from your computer and provides responsive chromosome navigation, track organization, and persistent workspaces without uploading genomic data.
+**GeRAFE — Genomic Renderer and Figure Editor** is a local-first desktop genome browser for exploring genomic signal, alignment, interval, and gene-annotation tracks. It reads files directly from your computer and provides responsive chromosome navigation, track organization, and persistent workspaces without uploading genomic data.
 
-GeRAF is currently developed and tested as a Windows desktop application.
+GeRAFE is currently developed and tested as a Windows desktop application.
 
 ## Features
 
@@ -19,7 +19,7 @@ GeRAF is currently developed and tested as a Windows desktop application.
 - Collapsed, expanded, and squished layouts for interval and gene tracks.
 - Persistent light and dark themes.
 - Automatic restoration of local desktop tracks between launches, with relinking when a source has moved or changed.
-- Versioned `.locus.json` workspace files with track layout, source provenance, and display settings, plus 100-step undo/redo while editing.
+- Versioned `.gerafe.json` workspace files with track layout, source provenance, and display settings, plus 100-step undo/redo while editing. Legacy `.locus.json` workspaces remain supported.
 
 ## Supported files
 
@@ -31,11 +31,11 @@ GeRAF is currently developed and tested as a Windows desktop application.
 | BAM | `.bam` with `.bai` or `.csi` | Coverage and packed read alignments with CIGAR geometry, pairing, mismatches, indels, and splice gaps |
 | BED | `.bed` | BED3–BED12 intervals, blocks, thick regions, strand, labels, scores, and item colors |
 
-On desktop, GeRAF automatically looks beside a BAM for conventional `sample.bam.bai`, `sample.bai`, `sample.bam.csi`, and `sample.csi` index names. When using the browser development build, select the BAM and its index together.
+On desktop, GeRAFE automatically looks beside a BAM for conventional `sample.bam.bai`, `sample.bai`, `sample.bam.csi`, and `sample.csi` index names. When using the browser development build, select the BAM and its index together.
 
 ## Installation
 
-GeRAF does not yet publish a signed installer or prebuilt GitHub release. Build it from source with the steps below.
+GeRAFE does not yet publish a signed installer or prebuilt GitHub release. Build it from source with the steps below.
 
 ### Requirements
 
@@ -50,8 +50,8 @@ The native requirements are described in the official [Tauri prerequisites](http
 ### Clone and run for development
 
 ```powershell
-git clone https://github.com/ariel-raskin/GeRAF.git
-cd GeRAF
+git clone https://github.com/ariel-raskin/GeRAFE.git
+cd GeRAFE
 npm ci
 npm run desktop:dev
 ```
@@ -68,12 +68,10 @@ npm run desktop:build
 The executable is written to:
 
 ```text
-src-tauri/target/release/locus-glide.exe
+src-tauri/target/release/gerafe.exe
 ```
 
-From an existing checkout, `Launch Locus Glide.cmd` opens that executable after it has been built.
-
-> The repository is named GeRAF, but the current package, executable, application identifier, and icons still use the earlier Locus Glide working name. This does not affect functionality.
+From an existing checkout, `Launch GeRAFE.cmd` opens that executable after it has been built.
 
 ## Using the browser
 
@@ -107,9 +105,9 @@ BAM track menus provide:
 
 ### Workspaces and persistence
 
-Desktop-opened source paths are retained locally and reopened on the same computer when GeRAF starts again. If a file is missing or has changed, its track remains in the workspace and can be relinked.
+Desktop-opened source paths are retained locally and reopened on the same computer when GeRAFE starts again. If a file is missing or has changed, its track remains in the workspace and can be relinked.
 
-Use **File → Save workspace…** to export a `.locus.json` document and **Open workspace…** to restore it. Workspace files contain layout, settings, paths, and provenance—not copies of genomic data. A workspace moved to another computer therefore requires access to, or relinking of, its source files.
+Use **File → Save workspace…** to export a `.gerafe.json` document and **Open workspace…** to restore it. GeRAFE also opens legacy `.locus.json` workspaces. Workspace files contain layout, settings, paths, and provenance—not copies of genomic data. A workspace moved to another computer therefore requires access to, or relinking of, its source files.
 
 ## Current limitations
 

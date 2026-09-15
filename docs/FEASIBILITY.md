@@ -25,7 +25,7 @@ These are development-machine measurements, not a general performance guarantee.
 
 The corrected `Stengel_Raskin/Data` tree was then inventoried and an indexed 489 MB BAM (`External Data/sarah_CR/bams/0hr_A.hg38-only.sorted.bam` plus BAI) was tested through the alignment reader. A 10 kb RUNX1-region smoke test rendered 1,355 coverage/read features, changed correctly when pair and strand-color modes were toggled, and reported no browser errors. A 155 MB PRO-seq TDF was also read directly and returned 19,824 visible signal features without errors.
 
-Finally, the application was compiled as `locus-glide.exe`, launched as a standalone Windows process, and remained running normally. The production executable embeds its interface and does not start a local web server.
+Finally, the application—then using its Locus Glide working name—was compiled as a standalone Windows process and remained running normally. The production executable embeds its interface and does not start a local web server.
 
 ## Scope boundary
 

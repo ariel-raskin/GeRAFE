@@ -1,6 +1,6 @@
 # Shared track system direction
 
-This note records what Locus Glide should carry forward from the local `gene_tracks_organic` and `plotanical` projects. It is a design constraint for both major product goals:
+This note records what GeRAFE should carry forward from the local `gene_tracks_organic` and `plotanical` projects. It is a design constraint for both major product goals:
 
 - **Goal A:** a fast, fully functional genome browser;
 - **Goal B:** publication-quality figure creation directly from the region and tracks being browsed.
@@ -34,7 +34,7 @@ Both projects use the same `group` field for two separate questions:
 1. Which tracks belong together visually?
 2. Which tracks share a numeric scale?
 
-Those relationships often coincide, but not always. Locus Glide must represent them independently. A user may want four PRO-seq conditions inside one labeled visual group while linking scales only within two experimental comparisons, or may want visually separate tracks to retain a shared scale.
+Those relationships often coincide, but not always. GeRAFE must represent them independently. A user may want four PRO-seq conditions inside one labeled visual group while linking scales only within two experimental comparisons, or may want visually separate tracks to retain a shared scale.
 
 ## Proposed semantic model
 
