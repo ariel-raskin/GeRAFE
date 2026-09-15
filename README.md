@@ -42,7 +42,7 @@ GeRAFE does not yet publish a signed installer or prebuilt GitHub release. Build
 ### Requirements
 
 - Windows 10 or 11.
-- [Node.js](https://nodejs.org/) 24 and npm.
+- [Node.js](https://nodejs.org/) 22.12 or newer and npm.
 - Stable [Rust](https://www.rust-lang.org/tools/install) with the MSVC toolchain.
 - Microsoft C++ Build Tools with **Desktop development with C++** enabled.
 - Microsoft Edge WebView2 Runtime. It is normally already installed on current Windows systems.
@@ -70,6 +70,11 @@ npm run desktop:install-local
 This builds the release application outside the Dropbox checkout, installs it at `%LOCALAPPDATA%\Programs\GeRAFE\gerafe.exe`, and creates a **GeRAFE** Start Menu shortcut that launches the application directly without a terminal window. Open GeRAFE from Start, then right-click its taskbar icon and choose **Pin to taskbar**.
 
 After pulling future changes, close GeRAFE and run `npm run desktop:install-local` again. The command replaces the executable at the same location, so the Start Menu shortcut and taskbar pin continue to launch the updated application.
+
+For a first installation or routine update on a Dropbox-synced Windows computer,
+you can instead double-click **Install or Update GeRAFE.cmd**. See the
+[multi-computer setup guide](docs/MULTI_COMPUTER_SETUP.md) for prerequisites,
+syncing rules, and workspace/file behavior across computers.
 
 ### Build without installing
 
@@ -151,6 +156,7 @@ Useful commands:
 | `npm run dev` | Run the frontend in a browser |
 | `npm run desktop:dev` | Run the Tauri desktop application in development mode |
 | `npm run desktop:build` | Build the production desktop executable |
+| `npm run desktop:check-setup` | Check Windows desktop build prerequisites without installing |
 | `npm run desktop:install-local` | Build and install the Windows app at its stable local path and create its Start Menu shortcut |
 | `npm test` | Run the Vitest unit suite |
 | `npm run build` | Type-check and build the production frontend |
@@ -164,5 +170,6 @@ Parser and renderer changes should also be checked with the relevant scripts und
 - [Contributing workflow](CONTRIBUTING.md)
 - [Development history before Git](docs/DEVELOPMENT_HISTORY.md)
 - [Feasibility and performance notes](docs/FEASIBILITY.md)
+- [Multi-computer Windows setup](docs/MULTI_COMPUTER_SETUP.md)
 - [Related genome browsers and visualization tools](docs/RELATED_TOOLS.md)
 - [Semantic track system and browser/figure compatibility design](docs/TRACK_SYSTEM_DIRECTION.md)
