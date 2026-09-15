@@ -91,12 +91,60 @@ fn migrate_legacy_app_data() -> std::io::Result<bool> {
     migrate_legacy_app_data_at(&local_data)
 }
 
+#[cfg(windows)]
+fn set_windows_taskbar_icon(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    use std::{iter, os::windows::ffi::OsStrExt, ptr};
+    use tauri::Manager;
+    use windows_sys::Win32::{
+        Foundation::HWND,
+        UI::{
+            Shell::ExtractIconExW,
+            WindowsAndMessaging::{SendMessageW, ICON_BIG, WM_SETICON},
+        },
+    };
+
+    let window = app.get_webview_window("main").ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "main GeRAFE window not found")
+    })?;
+    let executable = std::env::current_exe()?;
+    let executable_wide: Vec<u16> = executable
+        .as_os_str()
+        .encode_wide()
+        .chain(iter::once(0))
+        .collect();
+    let mut large_icon = ptr::null_mut();
+    let extracted = unsafe {
+        ExtractIconExW(
+            executable_wide.as_ptr(),
+            0,
+            &mut large_icon,
+            ptr::null_mut(),
+            1,
+        )
+    };
+    if extracted == 0 || large_icon.is_null() {
+        return Err(std::io::Error::other("could not extract GeRAFE's embedded icon").into());
+    }
+
+    let hwnd = window.hwnd()?.0 as HWND;
+    unsafe {
+        SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, large_icon as isize);
+    }
+    // The window uses this handle for its lifetime; Windows reclaims it when the process exits.
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if let Err(error) = migrate_legacy_app_data() {
         eprintln!("Could not migrate Locus Glide application data to GeRAFE: {error}");
     }
     tauri::Builder::default()
+        .setup(|app| {
+            #[cfg(windows)]
+            set_windows_taskbar_icon(app)?;
+            Ok(())
+        })
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![stat_file, read_file_range])
         .run(tauri::generate_context!())
