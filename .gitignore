@@ -1,0 +1,10 @@
+node_modules/
+dist/
+app-dist/
+public/
+.vite/
+src-tauri/target/
+*.log
+*.tsbuildinfo
+Data/*
+!Data/.gitkeep
