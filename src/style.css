@@ -305,16 +305,60 @@ button, label { -webkit-tap-highlight-color: transparent; }
   background: var(--canvas-bg);
 }
 
-#genome-header {
+.genome-header-wrap {
   position: sticky;
   z-index: 7;
   top: 0;
+  height: 108px;
+  min-width: 100%;
+  overflow: hidden;
+  box-shadow: 0 1px 0 var(--line);
+}
+
+#genome-header {
   display: block;
   min-width: 100%;
   cursor: grab;
   touch-action: none;
   user-select: none;
-  box-shadow: 0 1px 0 var(--line);
+}
+
+.corner-brand {
+  position: absolute;
+  inset: 3px auto 2px 0;
+  width: 176px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: var(--ink);
+  pointer-events: none;
+  user-select: none;
+}
+
+.corner-brand img {
+  width: auto;
+  height: 80px;
+  min-height: 0;
+  max-width: 150px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 3px rgba(39, 31, 12, .16));
+}
+
+.corner-brand strong {
+  margin-top: -1px;
+  padding-left: .14em;
+  font-family: Bahnschrift, 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+  font-size: 17px;
+  font-stretch: condensed;
+  font-weight: 650;
+  line-height: 20px;
+  letter-spacing: .14em;
+}
+
+html[data-theme='dark'] .corner-brand img {
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, .42));
 }
 #genome-canvas, #bottom-canvas { display: block; min-width: 100%; cursor: grab; touch-action: none; user-select: none; }
 #genome-header.is-dragging,
