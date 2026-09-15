@@ -58,7 +58,18 @@ npm run desktop:dev
 
 This compiles the Rust shell, starts the frontend development server, and opens the desktop application.
 
-### Build the desktop executable
+### Install locally for everyday use
+
+```powershell
+npm ci
+npm run desktop:install-local
+```
+
+This builds the release application outside the Dropbox checkout, installs it at `%LOCALAPPDATA%\Programs\GeRAFE\gerafe.exe`, and creates a **GeRAFE** Start Menu shortcut that launches the application directly without a terminal window. Open GeRAFE from Start, then right-click its taskbar icon and choose **Pin to taskbar**.
+
+After pulling future changes, close GeRAFE and run `npm run desktop:install-local` again. The command replaces the executable at the same location, so the Start Menu shortcut and taskbar pin continue to launch the updated application.
+
+### Build without installing
 
 ```powershell
 npm ci
@@ -71,7 +82,7 @@ The executable is written to:
 src-tauri/target/release/gerafe.exe
 ```
 
-From an existing checkout, `Launch GeRAFE.cmd` opens that executable after it has been built.
+From an existing checkout, `Launch GeRAFE.cmd` opens the locally installed application after `npm run desktop:install-local` has been run.
 
 ## Using the browser
 
@@ -135,6 +146,7 @@ Useful commands:
 | `npm run dev` | Run the frontend in a browser |
 | `npm run desktop:dev` | Run the Tauri desktop application in development mode |
 | `npm run desktop:build` | Build the production desktop executable |
+| `npm run desktop:install-local` | Build and install the Windows app at its stable local path and create its Start Menu shortcut |
 | `npm test` | Run the Vitest unit suite |
 | `npm run build` | Type-check and build the production frontend |
 | `npm run smoke` | Run the general browser smoke test against a running development server |
