@@ -19,6 +19,7 @@ GeRAFE uses GitHub as the source of truth for code, decisions, and version histo
 - Keep source-format support and empty-state extension lists synchronized through `src/supported-formats.ts`.
 - Update `README.md`, relevant documents, and tests when behavior or supported formats change.
 - Treat the semantic track document as the contract between the genome browser and future figure builder. Record intentional schema changes and provide migrations for saved workspaces.
+- Treat `static/gerafe-icon.png` as the master application icon. After replacing it, regenerate the platform assets with `npx tauri icon static/gerafe-icon.png --output src-tauri/icons`.
 
 ## Product identity
 
