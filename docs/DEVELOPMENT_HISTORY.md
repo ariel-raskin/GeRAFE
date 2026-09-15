@@ -1,0 +1,53 @@
+# Development history before Git
+
+GeRAF began under the working name **Locus Glide** in a local folder that was not a Git repository. This document preserves the most reliable development history available before the project moved to GitHub on September 14, 2026.
+
+## How this history was reconstructed
+
+The chronology below was reconstructed from the local Codex session transcripts, user requests, project documentation, generated-file timestamps, and the final verified source tree. Raw session logs are deliberately not committed: they contain machine-specific paths, tool internals, large embedded data, and unrelated context. Because no source snapshots or Git objects existed, the entries below are milestones rather than fabricated commits or exact line-level diffs.
+
+The Git history beginning with the import pull request is authoritative and reproducible. This document is the provenance record for everything earlier.
+
+## September 13, 2026 — feasibility and first browser
+
+- Established the core goal: remake the useful genome-navigation parts of IGV with immediate-feeling pan and zoom, then connect browsing to a future figure-building workflow.
+- Audited the local sequencing-data collection and researched indexed browser-side genomics readers and rendering architectures.
+- Built the TypeScript/Vite canvas viewer and a Tauri Windows desktop shell.
+- Implemented direct local BigWig and bedGraph loading, indexed reads with viewport overscan, pan/zoom navigation, and performance instrumentation.
+- Added initial BAM/BAI coverage support to validate indexed alignment-file access.
+- Fixed desktop-local compressed-data decoding and packaged a standalone executable with no production web server.
+- Added persistent light/dark themes and began replacing the prototype landing page with a compact desktop genome-browser interface.
+
+## September 13–14, 2026 — reference and semantic track system
+
+- Added the built-in hg38 reference, chromosome navigation, gene-symbol search, RefSeq gene spans, detailed transcript structures, and the cytoband ideogram.
+- Added custom reference import from chromosome-size/FAI-style files and persistent reference selection.
+- Studied the local `gene_tracks_organic` and `plotanical` projects to define a shared semantic track model for both browser and future figure renderer.
+- Introduced a versioned workspace document with stable source, track, visual-group, scale-binding, pane, and provenance records plus undo/redo and workspace save/load.
+- Added independent and linked scales, fixed/visible autoscaling, track groups, multiselection, type-aware context menus, track heights, and drag reordering.
+- Split the viewer into independently scrollable upper and lower track panes while keeping genome navigation synchronized.
+- Made gene annotations ordinary movable tracks and added collapsed, expanded, and squished transcript views.
+
+The long-term browser/figure agreement and phased direction from this work are recorded in [`TRACK_SYSTEM_DIRECTION.md`](TRACK_SYSTEM_DIRECTION.md).
+
+## September 14, 2026 — interaction and rendering refinement
+
+- Refined group labels into spanning cards with whole-group selection, inherited group styling/scaling, add/open/remove actions, and group-aware dragging.
+- Added selection clearing, input-aware keyboard shortcuts, stable drag previews, placement indicators, track fitting, and intuitive `1–100` height controls.
+- Refined signal axes and label-card layout, including responsive maximum-value lanes.
+- Reworked gene rendering with stable phased direction arrows, coding/UTR exon heights, overlap-aware contrast, TSS elbows, internal transcript scrolling, and theme-aware colors.
+- Added a top-level launcher and persistent native source paths so desktop tracks reopen after application restart.
+- Added BED3–BED12 interval parsing and collapsed/expanded/squished interval rendering.
+
+## September 14, 2026 — BAM and TDF compatibility milestone
+
+- Added a direct indexed TDF reader supporting compressed and uncompressed fixed-step, variable-step, BED, and BED-with-name tiles with zoom summaries and chromosome aliases.
+- Replaced BAM coverage-only tracks with compound coverage and read-alignment tracks.
+- Added CIGAR-aware blocks, splice/deletion/insertion/mismatch marks, deterministic pileup packing/downsampling, paired-read connectors, MAPQ and flag filters, packing modes, and multiple color modes.
+- Added BAI and CSI support plus automatic adjacent-index discovery in the desktop app.
+- Migrated the workspace format to schema version 4 so BAM display/filter settings persist and older BAM coverage tracks upgrade automatically.
+- Verified the implementation with 30 unit tests, a 489 MB BAM/BAI, a 155 MB TDF, browser smoke tests, a production build, and a standalone Windows launch test.
+
+## GitHub migration baseline
+
+The repository import intentionally preserves GitHub's original `Initial commit`, adds this provenance document, and imports the complete verified source tree as the first code snapshot. From this point forward, issues describe meaningful work, branches isolate changes, pull requests preserve reviewable diffs and verification, and releases/tags will identify distributable milestones.
