@@ -190,6 +190,14 @@ GeRAFE reads genomic files locally. It does not upload tracks, workspaces, loci,
 
 Bug reports and focused feature requests are welcome through [GitHub Issues](https://github.com/ariel-raskin/GeRAFE/issues). Please do not attach private, controlled-access, or unpublished genomic data; describe the problem with synthetic or public data whenever possible. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [SECURITY.md](SECURITY.md) for security reports.
 
+## License status
+
+GeRAFE does not currently have an open-source license. Default copyright rules
+therefore apply: the public repository may be viewed and forked under GitHub's
+terms, but no broader permission to reproduce, redistribute, or publish modified
+versions has been granted. Contact the repository owner for permission to use or
+redistribute the software. A formal license may be selected later.
+
 ## Documentation
 
 - [Contributing workflow](CONTRIBUTING.md)
