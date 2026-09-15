@@ -1,91 +1,152 @@
 # GeRAF
 
-**GeRAF — Genomic Renderer and Figures** is a local desktop application for fast genome browsing and, in later phases, publication-quality genomic figure building from the same semantic track document. The current prototype is still packaged internally as **Locus Glide**; executable names, application identifiers, and icons will be migrated separately.
+[![CI](https://github.com/ariel-raskin/GeRAF/actions/workflows/ci.yml/badge.svg)](https://github.com/ariel-raskin/GeRAF/actions/workflows/ci.yml)
 
-It currently renders **BigWig**, **TDF**, smaller **bedGraph**, indexed **BAM alignments and coverage**, and **BED intervals** directly from disk.
+**GeRAF — Genomic Renderer and Figures** is a local-first desktop genome browser for exploring genomic signal, alignment, interval, and gene-annotation tracks. It reads files directly from your computer and provides responsive chromosome navigation, track organization, and persistent workspaces without uploading genomic data.
 
-Development before the GitHub migration is summarized in [`docs/DEVELOPMENT_HISTORY.md`](docs/DEVELOPMENT_HISTORY.md). New work follows the issue/branch/pull-request process in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+GeRAF is currently developed and tested as a Windows desktop application.
 
-## Run it
+## Features
+
+- Smooth drag-to-pan and cursor-centered zooming across genomic coordinates.
+- Search by hg38 gene symbol or enter chromosome coordinates directly.
+- Built-in hg38 chromosome sizes, cytobands, and RefSeq gene/transcript annotations.
+- Import custom reference assemblies from `.fai`, `.genome`, `.chrom.sizes`, and other two-column chromosome-size files.
+- Two independently scrollable and resizable track panes with a fixed coordinate header.
+- Reorder tracks by dragging and organize related tracks into visual groups.
+- Select one or multiple tracks and edit their colors, heights, grouping, and type-specific display settings.
+- Automatic visible-window scaling, fixed scales, and linked scales for quantitative tracks.
+- Collapsed, expanded, and squished layouts for interval and gene tracks.
+- Persistent light and dark themes.
+- Automatic restoration of local desktop tracks between launches, with relinking when a source has moved or changed.
+- Versioned `.locus.json` workspace files with track layout, source provenance, and display settings, plus 100-step undo/redo while editing.
+
+## Supported files
+
+| Format | Extensions | Current display |
+| --- | --- | --- |
+| BigWig | `.bw`, `.bigWig` | Indexed quantitative signal with zoom summaries |
+| bedGraph | `.bedGraph` | Quantitative signal for smaller text-based datasets |
+| TDF | `.tdf` | Indexed IGV signal tiles, including compressed and uncompressed fixed-step, variable-step, BED, and BED-with-name tiles |
+| BAM | `.bam` with `.bai` or `.csi` | Coverage and packed read alignments with CIGAR geometry, pairing, mismatches, indels, and splice gaps |
+| BED | `.bed` | BED3–BED12 intervals, blocks, thick regions, strand, labels, scores, and item colors |
+
+On desktop, GeRAF automatically looks beside a BAM for conventional `sample.bam.bai`, `sample.bai`, `sample.bam.csi`, and `sample.csi` index names. When using the browser development build, select the BAM and its index together.
+
+## Installation
+
+GeRAF does not yet publish a signed installer or prebuilt GitHub release. Build it from source with the steps below.
+
+### Requirements
+
+- Windows 10 or 11.
+- [Node.js](https://nodejs.org/) 24 and npm.
+- Stable [Rust](https://www.rust-lang.org/tools/install) with the MSVC toolchain.
+- Microsoft C++ Build Tools with **Desktop development with C++** enabled.
+- Microsoft Edge WebView2 Runtime. It is normally already installed on current Windows systems.
+
+The native requirements are described in the official [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+
+### Clone and run for development
 
 ```powershell
-npm install
+git clone https://github.com/ariel-raskin/GeRAF.git
+cd GeRAF
+npm ci
 npm run desktop:dev
 ```
 
-This opens a normal desktop window. The production executable is built with:
+This compiles the Rust shell, starts the frontend development server, and opens the desktop application.
+
+### Build the desktop executable
 
 ```powershell
+npm ci
 npm run desktop:build
 ```
 
-After building, double-click **Launch Locus Glide.cmd** in this top-level folder. The executable itself is written to `src-tauri/target/release/locus-glide.exe`. Production embeds the interface and starts no web server. Use **File → Open tracks…**, press `Ctrl+O`, or drop files onto the viewer. Supported extensions are `.bw`, `.bigWig`, `.bedGraph`, `.tdf`, `.bam` plus `.bai`/`.csi`, and `.bed`. The desktop app automatically finds a conventionally named BAM index beside the BAM; in a web browser, select the data file and index together. Files can live anywhere and are never uploaded.
+The executable is written to:
 
-Controls:
+```text
+src-tauri/target/release/locus-glide.exe
+```
 
-- drag horizontally to pan;
-- use the mouse wheel to move vertically through a long track stack or through an overflowing gene track under the pointer; hold `Ctrl` while scrolling, double-click, or use `+`/`−` to zoom;
-- enter a gene symbol such as `RUNX1`, or conventional 1-based coordinates such as `chr8:127,700,001-127,900,000`;
-- use the moon/sun toolbar button to switch theme; the desktop app remembers the selection.
+From an existing checkout, `Launch Locus Glide.cmd` opens that executable after it has been built.
 
-Track management is incorporated into the left label gutter: right-click a track label for its type-specific options. Click selects one track, `Ctrl`-click toggles tracks, `Shift`-click selects a range, and `Ctrl+A` selects every visible track before applying shared color, visual-group, scale-linking, height, or removal actions. Clicking elsewhere clears track selection; `Ctrl+A` retains its normal text-selection behavior while typing in an input. Dragging shows a floating preview and insertion target. Ungrouped selections and complete groups move together; an individual grouped track can be reordered among its group members but cannot be dragged out of the group. A group is marked by a colored card-like label spanning its tracks. Click that card to select all group members; its selection ring and dot indicate that the complete group is selected. Right-click it to select its members, add selected or newly opened tracks, set group height or color, choose shared or independent autoscaling, fix a shared range, rename it, ungroup it, or remove all of its tracks. New members inherit explicit group color and scale behavior. Visual grouping and scale linkage remain independent unless the user deliberately chooses a group-scale action.
+> The repository is named GeRAF, but the current package, executable, application identifier, and icons still use the earlier Locus Glide working name. This does not affect functionality.
 
-Track height is presented as a simple `1–100` value. Track names remain vertically centered and wrap to however many lines the chosen height permits. **Fit tracks** in the top toolbar assigns all visible upper-pane tracks a height that fits the currently available space.
+## Using the browser
 
-The viewer has two independently scrollable track panes. RefSeq genes begin in the resizable lower pane, initially fitted exactly to the gene-track height, but they are an ordinary track: drag any track or complete group between the upper and lower panes. Drag the divider to resize the lower overlay; it expands over the upper pane rather than compressing upper tracks. The ideogram, span ruler, and coordinate ticks remain fixed above the scrolling upper tracks. Genomic panning and `Ctrl`+wheel zoom remain synchronized between both panes.
+### Open and navigate
 
-The browser and future figure maker use a versioned semantic track document. Layout state is saved automatically with 100-step undo/redo, and **File** can save or reopen a `.locus.json` workspace. In the desktop app, sources opened through the native picker retain their local paths and reopen automatically on the same computer; missing, moved, or changed files remain as relinkable offline tracks. Browser-development sessions cannot retain browser `File` objects and therefore still require relinking after reload. Workspace files store paths and provenance, not genomic bytes, so moving a workspace to another computer requires relinking its local sources.
+- Open files with **File → Open tracks…**, `Ctrl+O`, or drag and drop.
+- Search for a gene such as `RUNX1`, or enter a locus such as `chr8:127,700,001-127,900,000`.
+- Drag horizontally over the track data to pan.
+- Hold `Ctrl` while using the mouse wheel to zoom around the pointer.
+- Double-click the data area or use the toolbar `+` and `−` buttons to zoom.
+- Use the normal mouse wheel to scroll through tracks or an overflowing gene track.
 
-**Edit → Undo track change / Redo track change** reverses document operations such as adding, removing, renaming, recoloring, reordering, grouping, or changing scale policy. It intentionally does not walk backward through every pan or zoom gesture; genome navigation updates the current workspace location without flooding the edit history.
+### Manage tracks
 
-Human hg38 is included as the initial reference, with indexes generated from the real local `hg38.ncbiRefSeq.gtf`. Its 58,523 gene spans power case-insensitive gene-symbol search, while chromosome-specific detail indexes provide 191,564 RefSeq transcript models without delaying startup. Gene tracks render each transcript structure in one solid track color, with thin UTR portions, taller CDS portions, regularly spaced strand arrows, and a compact elbow-style TSS indicator in collapsed view when the TSS is visible. Direction arrows switch to the theme background color where they cross an exon, keeping the otherwise single-color structure legible. The TSS indicators can be disabled under **Settings**. Their right-click menu switches among collapsed representative-transcript, expanded multi-transcript, and squished multi-transcript views; every mode retains a gene-symbol label above its transcript stack, and overflowing transcript stacks scroll within the track. The RefSeq track initially opens in the lower pane but can then be reordered or moved like any other track. The **Reference** selector remembers the default choice. Its `+` button imports another assembly from a `.fai`, `.genome`, `.chrom.sizes`, or other two-column chromosome-size file; only chromosome names and lengths are retained, so the source file does not need to remain connected. Custom assemblies currently have coordinate navigation but no bundled gene annotation.
+- Click a track label to select it.
+- Use `Ctrl`-click to toggle selection, `Shift`-click to select a range, or `Ctrl+A` outside a text field to select all visible tracks.
+- Right-click a track label for display, color, height, scale, grouping, duplication, relinking, and removal options.
+- Drag selected tracks to reorder them or move them between the upper and lower panes.
+- Click a group card to select the entire group; right-click it for group-wide options.
+- Use **Fit tracks** to fit the visible upper tracks into the available pane height.
 
-The hg38 coordinate header also includes the real UCSC cytoband ideogram, a pinched centromere, a red marker for the current viewport, and a dimension line showing the visible genomic span. Custom references use a neutral whole-chromosome bar until a cytoband file is associated with them.
+### BAM display controls
 
-The desktop security policy explicitly permits the parser's inlined `data:application/wasm` decompressor while continuing to block remote connections. This is required for compressed BigWig and BAM blocks to decode without producing `Failed to fetch`.
+BAM track menus provide:
 
-## What this milestone proves
+- coverage plus alignments, coverage-only, or alignments-only views;
+- expanded, collapsed, and squished read packing;
+- paired-read display and mismatch visibility;
+- coloring by track, strand, pair orientation, or mapping quality;
+- minimum MAPQ and duplicate, secondary, or supplementary-alignment filters.
 
-The high-frequency path—pointer input, coordinate transformation, and drawing—is synchronous and does no network or disk work. Each data request covers three viewport widths. While the current viewport remains inside that padded region, panning only redraws already-decoded values. BigWig resolution selection is driven by bases per pixel, so the parser reads summaries rather than base-resolution signal when zoomed out.
+### Workspaces and persistence
 
-This is intentionally narrower than IGV. It proves the interaction and shared-document architecture before adding variants, general annotation import, reference sequence bases, or multi-locus views. BAM tracks now combine zoom-aware coverage with packed read alignments. Their context menu controls coverage/read visibility, expanded/collapsed/squished packing, pairing, mismatch display, coloring, MAPQ, and duplicate/secondary/supplementary filters. Mismatch recovery for BAMs without MD tags will arrive with reference FASTA/2bit support.
+Desktop-opened source paths are retained locally and reopened on the same computer when GeRAF starts again. If a file is missing or has changed, its track remains in the workspace and can be relinked.
 
-## Verification
+Use **File → Save workspace…** to export a `.locus.json` document and **Open workspace…** to restore it. Workspace files contain layout, settings, paths, and provenance—not copies of genomic data. A workspace moved to another computer therefore requires access to, or relinking of, its source files.
+
+## Current limitations
+
+- The desktop application is currently built and tested on Windows; packaged installers and signed releases are not provided yet.
+- The supported track formats are limited to those listed above.
+- Custom references provide coordinate navigation but do not automatically include gene annotations or cytobands.
+- Individual BAM reads are drawn below a 250 kb visible span; BAM requests are limited to 2 Mb to avoid unbounded pileups.
+- Mismatches can be read from BAM MD tags. Reconstructing mismatches for BAMs without MD tags is unavailable because reference-sequence bases are not currently loaded.
+- Browser-only development sessions cannot retain JavaScript `File` objects across a page reload; native desktop sessions can retain file paths.
+
+## Development
+
+Install dependencies and run the automated checks:
 
 ```powershell
+npm ci
 npm test
 npm run build
-npm run desktop:build
-npm run benchmark:data -- "C:\path\to\signal.bw"
 ```
 
-The viewer reports canvas draw time, approximate interactive FPS, and visible feature count in its footer. The Node benchmark measures indexed BigWig reads independently of rendering.
+Useful commands:
 
-## Format strategy
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Run the frontend in a browser |
+| `npm run desktop:dev` | Run the Tauri desktop application in development mode |
+| `npm run desktop:build` | Build the production desktop executable |
+| `npm test` | Run the Vitest unit suite |
+| `npm run build` | Type-check and build the production frontend |
+| `npm run smoke` | Run the general browser smoke test against a running development server |
+| `npm run benchmark:data -- "C:\path\to\signal.bw"` | Benchmark indexed BigWig reads |
 
-| Data | First implementation | Reason |
-| --- | --- | --- |
-| BigWig | direct indexed reads | built-in zoom summaries and random access |
-| TDF | direct indexed tile reads | compressed/uncompressed fixed-step, variable-step, BED, and BED-with-name tiles with zoom summaries |
-| BAM | indexed coverage and read pileups | BAI/CSI, CIGAR geometry, pairing, mismatch/indel/splice marks, packing, color modes, and filters |
-| BED | BED3–BED12 interval drawing | collapsed, expanded, and squished views; BED12 blocks/thick regions and item RGB |
-| CRAM | indexed range reads in workers | reference-aware decoding and row packing are CPU-heavy |
-| VCF | bgzip + Tabix/CSI | bounded reads per locus |
-| GTF / GFF / BED | Tabix or convert to BigBed | raw genome-scale text cannot pan predictably |
-| `.cool` / `.mcool` | multiresolution tiles | 2D matrices need a separate GPU track renderer |
+Parser and renderer changes should also be checked with the relevant scripts under `scripts/` using real local files. Genomic test data and generated executables must not be committed.
 
-The correct data root is `Stengel_Raskin/Data`. Its sequencing-relevant inventory includes about 1,232 BigWig files, 70 BAMs, 56 bedGraphs, 430 TDFs, thousands of BED/peak files, VCF/Tabix data, 48 `.cool/.mcool` files, and seven `.hic` files. Large `.fastq.gz` inputs are raw reads and are deliberately not browser tracks. Nothing from `Data` is copied or modified.
+## Documentation
 
-## Why this architecture
-
-- [IGV.js](https://github.com/igvteam/igv.js) validates browser-side indexed genomics access and provides the compatibility baseline.
-- [GMOD bbi-js](https://github.com/GMOD/bbi-js) supplies BigWig/BigBed index traversal and WebAssembly decompression; we use it as a parser, not as the viewer.
-- [GMOD bam-js](https://github.com/GMOD/bam-js) supplies BAM/BAI/CSI range reads and WebAssembly BGZF decompression.
-- [HiGlass](https://docs.higlass.io/) demonstrates that map-like multiresolution tiles are the right abstraction for large 1D and 2D genomics data.
-- [Tauri](https://v2.tauri.app/) packages the static renderer as a native desktop executable using the operating system WebView. There is no production HTTP server.
-
-The browser and future publication-figure workflow will share one semantic track document. The findings and proposed model derived from the local `gene_tracks_organic` and `plotanical` projects are recorded in [`docs/TRACK_SYSTEM_DIRECTION.md`](docs/TRACK_SYSTEM_DIRECTION.md).
-
-## Next gate
-
-Next, add indexed VCF/GTF plus indexed large-annotation support, then reference FASTA/2bit bases and `.cool/.mcool` in a separate matrix renderer. TDF remains a compatibility format; where the source BigWig exists, the open indexed standard is preferable. If rendering—not parsing—exceeds the frame budget with many simultaneous tracks, replace only the track renderer with WebGPU/WebGL while keeping the same source and viewport interfaces.
+- [Contributing workflow](CONTRIBUTING.md)
+- [Development history before Git](docs/DEVELOPMENT_HISTORY.md)
+- [Feasibility and performance notes](docs/FEASIBILITY.md)
+- [Semantic track system and browser/figure compatibility design](docs/TRACK_SYSTEM_DIRECTION.md)
