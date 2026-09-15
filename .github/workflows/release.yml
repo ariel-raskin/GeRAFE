@@ -1,0 +1,72 @@
+name: Release Windows beta
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: 0
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install Rust toolchain
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --no-self-update
+      - name: Cache Cargo dependencies and build output
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-${{ runner.arch }}-release-cargo-${{ hashFiles('rust-toolchain.toml', 'src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-release-cargo-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Verify release version
+        shell: pwsh
+        run: |
+          npm run version:check
+          $version = npm run --silent version:print
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match application version v$version."
+          }
+      - name: Test web application
+        run: npm test
+      - name: Check Rust formatting
+        run: cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Test Rust application
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build signed Windows installer and draft release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: GeRAFE v__VERSION__ beta
+          releaseBody: |
+            GeRAFE prerelease beta for specifically invited testers.
+
+            Use is governed by [BETA_TESTING.md](https://github.com/ariel-raskin/GeRAFE/blob/main/BETA_TESTING.md). This installer is cryptographically signed for GeRAFE's updater but does not yet have a Windows Authenticode certificate, so Windows SmartScreen may show a warning on first installation.
+          releaseDraft: true
+          # GitHub's /releases/latest endpoint excludes releases flagged as
+          # prereleases. GeRAFE uses 0.x versions and release text to mark betas.
+          prerelease: false
+          generateReleaseNotes: true
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: --bundles nsis

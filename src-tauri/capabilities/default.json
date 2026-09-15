@@ -3,5 +3,10 @@
   "identifier": "main-window",
   "description": "File selection for genomics tracks opened in the main GeRAFE window.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "process:allow-restart",
+    "updater:default"
+  ]
 }

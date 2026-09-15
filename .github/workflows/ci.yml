@@ -38,6 +38,8 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-cargo-
       - name: Install JavaScript dependencies
         run: npm ci
+      - name: Verify synchronized application version
+        run: npm run version:check
       - name: Test web application
         run: npm test
       - name: Build web application
