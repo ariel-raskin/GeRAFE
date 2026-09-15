@@ -1,6 +1,6 @@
-# Contributing to GeRAF
+# Contributing to GeRAFE
 
-GeRAF uses GitHub as the source of truth for code, decisions, and version history.
+GeRAFE uses GitHub as the source of truth for code, decisions, and version history.
 
 ## Development workflow
 
@@ -20,6 +20,6 @@ GeRAF uses GitHub as the source of truth for code, decisions, and version histor
 - Update `README.md`, relevant documents, and tests when behavior or supported formats change.
 - Treat the semantic track document as the contract between the genome browser and future figure builder. Record intentional schema changes and provide migrations for saved workspaces.
 
-## Naming transition
+## Product identity
 
-The repository and product direction are named **GeRAF (Genomic Renderer and Figures)**. The current desktop package, executable, storage keys, and icons still use the earlier **Locus Glide** identity. That rename is intentionally deferred to a dedicated pull request so persistence and upgrade behavior can be handled safely.
+The repository and application are named **GeRAFE — Genomic Renderer and Figure Editor**. Use `GeRAFE` for user-facing text and `gerafe` for package, executable, and storage identifiers. Compatibility code may retain earlier identifiers only when it is needed to migrate existing user data or workspaces.

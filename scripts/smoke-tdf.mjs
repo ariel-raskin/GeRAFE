@@ -18,7 +18,7 @@ await page.waitForTimeout(2000)
 const result = await page.evaluate(() => ({
   status: document.querySelector('#track-status')?.textContent,
   toast: document.querySelector('#toast')?.textContent,
-  workspace: JSON.parse(localStorage.getItem('locus-glide-track-document') ?? '{}'),
+  workspace: JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}'),
   features: document.querySelector('#feature-value')?.textContent,
 }))
 console.log(JSON.stringify({ ...result, errors }, null, 2))

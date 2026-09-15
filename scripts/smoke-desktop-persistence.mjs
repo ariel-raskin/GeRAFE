@@ -5,7 +5,7 @@ import { basename } from 'node:path'
 const bedPath = process.argv[2]
 if (!bedPath) throw new Error('Usage: node scripts/smoke-desktop-persistence.mjs <bed-path>')
 const file = await stat(bedPath)
-const browser = await chromium.connectOverCDP(process.env.LOCUS_GLIDE_CDP_URL ?? 'http://127.0.0.1:9333')
+const browser = await chromium.connectOverCDP(process.env.GERAFE_CDP_URL ?? 'http://127.0.0.1:9333')
 const context = browser.contexts()[0]
 const page = context.pages()[0]
 const errors = []
@@ -34,14 +34,15 @@ await page.evaluate(({ path, name, size, lastModified }) => {
 await page.reload({ waitUntil: 'domcontentloaded' })
 await page.waitForFunction(() => document.querySelector('#track-status')?.textContent?.includes('1 track loaded'), undefined, { timeout: 30_000 })
 const result = await page.evaluate(() => {
-  const saved = JSON.parse(localStorage.getItem('locus-glide-track-document') ?? '{}')
+  const saved = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
   return {
     status: document.querySelector('#track-status')?.textContent,
     path: saved.sources?.[0]?.files?.[0]?.path,
     kind: saved.tracks?.[0]?.kind,
     mode: saved.tracks?.[0]?.intervalDisplayMode,
+    migrated: localStorage.getItem('gerafe-track-document') !== null,
   }
 })
 console.log(JSON.stringify({ ...result, errors }, null, 2))
 await browser.close()
-if (result.status !== '1 track loaded' || result.path !== bedPath || result.kind !== 'interval' || result.mode !== 'expanded' || errors.length) process.exitCode = 1
+if (result.status !== '1 track loaded' || result.path !== bedPath || result.kind !== 'interval' || result.mode !== 'expanded' || !result.migrated || errors.length) process.exitCode = 1

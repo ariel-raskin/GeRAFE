@@ -3,7 +3,7 @@ import { chromium } from 'playwright-core'
 const dataPath = process.argv[2]
 if (!dataPath) throw new Error('Usage: node scripts/smoke-desktop.mjs "C:\\path\\track.bw"')
 
-const browser = await chromium.connectOverCDP(process.env.LOCUS_GLIDE_CDP_URL ?? 'http://127.0.0.1:9222')
+const browser = await chromium.connectOverCDP(process.env.GERAFE_CDP_URL ?? 'http://127.0.0.1:9222')
 const context = browser.contexts()[0]
 const page = context.pages()[0]
 const errors = []

@@ -24,7 +24,7 @@ const emptyCanvas = await page.locator('#genome-canvas').evaluate((canvas) => ca
 await page.locator('#file-input').setInputFiles(bedPath)
 await page.waitForTimeout(1500)
 const status = await page.locator('#track-status').textContent()
-const track = JSON.parse(await page.evaluate(() => localStorage.getItem('locus-glide-track-document') ?? '{}')).tracks?.find((item) => item.kind === 'interval')
+const track = JSON.parse(await page.evaluate(() => localStorage.getItem('gerafe-track-document') ?? '{}')).tracks?.find((item) => item.kind === 'interval')
 const box = await page.locator('#genome-canvas').boundingBox()
 if (!box) throw new Error('Canvas unavailable')
 await page.mouse.click(box.x + 60, box.y + 55, { button: 'right' })

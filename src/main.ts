@@ -31,13 +31,17 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { describeNativeFile, isDesktopApp, NativeFileHandle } from './native-file.ts'
 import type { LocalFileDescriptor } from './native-file.ts'
 import { SUPPORTED_TRACK_DIALOG_EXTENSIONS, SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
+import { migrateLegacyStorage, STORAGE_KEYS } from './storage.ts'
 
 type Theme = 'light' | 'dark'
-const THEME_KEY = 'locus-glide-theme'
-const REFERENCE_KEY = 'locus-glide-default-reference'
-const CUSTOM_REFERENCES_KEY = 'locus-glide-custom-references'
-const WORKSPACE_KEY = 'locus-glide-track-document'
-const TSS_INDICATORS_KEY = 'locus-glide-show-tss-indicators'
+const {
+  theme: THEME_KEY,
+  reference: REFERENCE_KEY,
+  customReferences: CUSTOM_REFERENCES_KEY,
+  workspace: WORKSPACE_KEY,
+  tssIndicators: TSS_INDICATORS_KEY,
+} = STORAGE_KEYS
+migrateLegacyStorage(localStorage)
 applyTheme(savedTheme())
 
 const hg38Reference: ReferenceGenome = { id: 'hg38', name: 'Human (hg38)', chromosomes: hg38, builtIn: true }
@@ -96,7 +100,7 @@ app.innerHTML = `
       </div>
       <span class="toolbar-divider"></span>
       <input id="file-input" type="file" multiple />
-      <input id="workspace-file-input" type="file" accept=".json,.locus.json" />
+      <input id="workspace-file-input" type="file" accept=".json,.gerafe.json,.locus.json" />
       <input id="relink-file-input" type="file" multiple />
       <form class="locus-form" id="locus-form">
         <select id="chromosome-select" aria-label="Chromosome"></select>
@@ -1175,7 +1179,7 @@ function saveWorkspace(): void {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
-  anchor.download = `locus-glide-${store.current.referenceId}.locus.json`
+  anchor.download = `gerafe-${store.current.referenceId}.gerafe.json`
   anchor.click()
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
   showToast('Saved workspace layout')
