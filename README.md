@@ -22,6 +22,11 @@ GeRAFE is currently developed and tested as a Windows desktop application.
 > [!IMPORTANT]
 > GeRAFE is early research software. Validate displays against established tools before relying on them for analysis, and do not use the application for clinical decisions.
 
+> [!NOTE]
+> GeRAFE is not currently open-source software. Installation and use are limited
+> to specifically invited beta testers under the
+> [prerelease evaluation terms](BETA_TESTING.md).
+
 ## Features
 
 - Smooth drag-to-pan and cursor-centered zooming across genomic coordinates.
@@ -186,21 +191,29 @@ Parser and renderer changes should also be checked with the relevant scripts und
 
 GeRAFE reads genomic files locally. It does not upload tracks, workspaces, loci, or usage data, and it currently contains no telemetry. A saved workspace may contain absolute source paths, so inspect it before sharing it publicly.
 
-## Contributing and support
+## Beta testing and feedback
 
-Bug reports and focused feature requests are welcome through [GitHub Issues](https://github.com/ariel-raskin/GeRAFE/issues). Please do not attach private, controlled-access, or unpublished genomic data; describe the problem with synthetic or public data whenever possible. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [SECURITY.md](SECURITY.md) for security reports.
+GeRAFE is currently being tested by specifically invited beta testers. Testers
+may send feedback directly to the maintainer through the communication channel
+arranged with them; a GitHub account is not required. External code
+contributions are not currently being accepted. Please do not send private,
+controlled-access, or unpublished genomic data with feedback. See
+[BETA_TESTING.md](BETA_TESTING.md) for the limited evaluation permission and
+[SECURITY.md](SECURITY.md) for security reports.
 
 ## License status
 
 GeRAFE does not currently have an open-source license. Default copyright rules
 therefore apply: the public repository may be viewed and forked under GitHub's
-terms, but no broader permission to reproduce, redistribute, or publish modified
-versions has been granted. Contact the repository owner for permission to use or
-redistribute the software. A formal license may be selected later.
+terms, but no general permission to modify, redistribute, or commercially use
+GeRAFE has been granted. Specifically invited beta testers have only the limited
+evaluation permission described in [BETA_TESTING.md](BETA_TESTING.md). A formal
+software license may be selected later.
 
 ## Documentation
 
 - [Contributing workflow](CONTRIBUTING.md)
+- [Prerelease beta-testing terms](BETA_TESTING.md)
 - [Development history before Git](docs/DEVELOPMENT_HISTORY.md)
 - [Feasibility and performance notes](docs/FEASIBILITY.md)
 - [Multi-computer Windows setup](docs/MULTI_COMPUTER_SETUP.md)

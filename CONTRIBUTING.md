@@ -2,6 +2,17 @@
 
 GeRAFE uses GitHub as the source of truth for code, decisions, and version history.
 
+## Current participation policy
+
+Development is currently managed by the repository owner, and external code
+contributions and pull requests are not being accepted during prerelease beta
+testing. Specifically invited testers should provide observations, bug reports,
+and feature suggestions through the direct communication channel arranged with
+the maintainer. Testers do not need to use GitHub or modify the source code.
+
+The workflow below documents how the maintainer and any explicitly authorized
+collaborators manage repository changes.
+
 ## Development workflow
 
 1. Start from an up-to-date `main` branch.
