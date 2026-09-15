@@ -14,17 +14,21 @@ import {
   addSignalTrack,
   addIntervalTrack,
   addAlignmentTrack,
+  autoPairStrandedTracks,
   assignDisplayGroup,
   createTrackDocument,
   duplicateTrack,
+  inferSignalStrand,
   linkScales,
   normalizeTrackDocument,
   removeTrack,
   reorderTracks,
+  pairStrandedTracks,
   TrackDocumentStore,
   unlinkScales,
+  unlinkStrandedTrack,
 } from './track-document.ts'
-import type { SourceFormat, TrackDocument, TrackSourceSpec } from './track-document.ts'
+import type { SignalScaleChannel, SourceFormat, TrackDocument, TrackSourceSpec, TrackSpec } from './track-document.ts'
 import type { TrackSource, TrackRuntime } from './types.ts'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -40,6 +44,7 @@ const {
   customReferences: CUSTOM_REFERENCES_KEY,
   workspace: WORKSPACE_KEY,
   tssIndicators: TSS_INDICATORS_KEY,
+  strandedAutoLink: STRANDED_AUTO_LINK_KEY,
 } = STORAGE_KEYS
 migrateLegacyStorage(localStorage)
 applyTheme(savedTheme())
@@ -85,6 +90,9 @@ app.innerHTML = `
           <div class="menu-popover" id="settings-menu-popup" role="menu" hidden>
             <button class="menu-item" id="tss-indicators-menu-item" type="button" role="menuitemcheckbox" aria-checked="true">
               <span>Show TSS elbow arrows</span><small id="tss-indicators-state">On</small>
+            </button>
+            <button class="menu-item" id="stranded-auto-link-menu-item" type="button" role="menuitemcheckbox" aria-checked="true">
+              <span>Auto-link stranded signals</span><small id="stranded-auto-link-state">On</small>
             </button>
           </div>
         </div>
@@ -187,13 +195,14 @@ const trackColorPreview = document.querySelector<HTMLElement>('#track-color-prev
 const colorDialog = document.querySelector<HTMLElement>('#color-dialog')!
 const colorDialogForm = document.querySelector<HTMLFormElement>('#color-dialog-form')!
 
-let tracks: readonly TrackRuntime[] = []
 const runtimeSources = new Map<string, TrackSource>()
 const selectedTrackIds = new Set<string>()
 let lastSelectedTrackId: string | undefined
 let pendingRelinkTrackId: string | undefined
+let pendingRelinkChannel: 'plus' | 'minus' | undefined
 let pendingOpenGroupId: string | undefined
 let pendingColorGroupId: string | undefined
+let pendingColorChannel: SignalScaleChannel | undefined
 let bottomPaneAutoFit = true
 let colorHsv = { h: 250, s: 62, v: 88 }
 
@@ -223,11 +232,13 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
     document.querySelector('#feature-value')!.textContent = sample.visibleFeatures.toLocaleString()
   },
   onTracksChange(nextTracks) {
-    tracks = nextTracks
-    const loading = tracks.filter((track) => track.status === 'loading').length
-    const attention = tracks.filter((track) => track.status === 'error' || track.status === 'offline').length
-    const ready = tracks.filter((track) => track.status === 'ready').length
-    trackStatus.textContent = attention ? `${attention} track${attention === 1 ? '' : 's'} need reopening or attention` : loading ? `Reading ${loading} track${loading === 1 ? '' : 's'}…` : `${ready} track${ready === 1 ? '' : 's'} loaded`
+    const runtimeByTrack = new Map<string, TrackRuntime[]>()
+    for (const runtime of nextTracks) runtimeByTrack.set(runtime.trackId, [...runtimeByTrack.get(runtime.trackId) ?? [], runtime])
+    const visualTracks = store.current.tracks.filter((track) => track.kind !== 'genes')
+    const loading = visualTracks.filter((track) => runtimeByTrack.get(track.id)?.some((runtime) => runtime.status === 'loading')).length
+    const attention = visualTracks.filter((track) => runtimeByTrack.get(track.id)?.some((runtime) => runtime.status === 'error' || runtime.status === 'offline')).length
+    const ready = visualTracks.filter((track) => runtimeByTrack.get(track.id)?.length && runtimeByTrack.get(track.id)!.every((runtime) => runtime.status === 'ready')).length
+    trackStatus.textContent = attention ? `${attention} track${attention === 1 ? ' needs' : 's need'} reopening or attention` : loading ? `Reading ${loading} track${loading === 1 ? '' : 's'}…` : `${ready} track${ready === 1 ? '' : 's'} loaded`
   },
   onTrackSelection(trackId, additive, extend) {
     selectTrack(trackId, additive, extend)
@@ -252,6 +263,7 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
 })
 browser.setShowTssIndicators(savedTssIndicators())
 updateTssIndicatorControl()
+updateStrandedAutoLinkControl()
 
 let persistTimer: number | undefined
 store.subscribe((document, reason) => {
@@ -329,6 +341,12 @@ document.querySelector<HTMLButtonElement>('#tss-indicators-menu-item')!.addEvent
   browser.setShowTssIndicators(show)
   updateTssIndicatorControl()
 })
+document.querySelector<HTMLButtonElement>('#stranded-auto-link-menu-item')!.addEventListener('click', () => {
+  const enabled = !savedStrandedAutoLink()
+  localStorage.setItem(STRANDED_AUTO_LINK_KEY, String(enabled))
+  if (enabled) store.edit((draft) => { autoPairStrandedTracks(draft) })
+  updateStrandedAutoLinkControl()
+})
 for (const menu of document.querySelectorAll<HTMLElement>('.app-menu')) {
   const trigger = menu.querySelector<HTMLButtonElement>('.menu-trigger')!
   trigger.addEventListener('click', () => toggleMenu(menu))
@@ -403,14 +421,20 @@ colorDialogForm.addEventListener('submit', (event) => {
   const color = normalizedHexColor(trackColorInput.value)
   if (!color) return trackColorInput.focus()
   const groupId = pendingColorGroupId
+  const channel = pendingColorChannel
   pendingColorGroupId = undefined
+  pendingColorChannel = undefined
   const ids = groupId
     ? store.current.tracks.filter((track) => track.displayGroupId === groupId).map((track) => track.id)
     : [...selectedTrackIds]
   store.edit((draft) => {
-    for (const track of draft.tracks) if (ids.includes(track.id)) track.color = color
+    for (const track of draft.tracks) if (ids.includes(track.id)) setTrackChannelColor(track, channel, color)
     const group = draft.groups.find((item) => item.id === groupId)
-    if (group) group.color = color
+    if (group) {
+      if (channel === 'plus') group.positiveColor = color
+      else if (channel === 'minus') group.negativeColor = color
+      else group.color = color
+    }
   })
   closeColorDialog()
 })
@@ -476,14 +500,14 @@ async function loadFiles(files: FileList | null | undefined): Promise<void> {
     try {
       const { source, sourceSpec, kind } = await sourceFromFile(file, selected)
       const trackId = crypto.randomUUID()
-      runtimeSources.set(trackId, source)
+      runtimeSources.set(sourceSpec.id, source)
       store.edit((draft) => {
-        if (kind === 'interval') addIntervalTrack(draft, sourceSpec, { id: trackId })
-        else if (kind === 'alignment') addAlignmentTrack(draft, sourceSpec, { id: trackId })
-        else addSignalTrack(draft, sourceSpec, { id: trackId })
-        if (destinationGroupId) addTracksToGroup(draft, destinationGroupId, [trackId])
+        const added = kind === 'interval' ? addIntervalTrack(draft, sourceSpec, { id: trackId })
+          : kind === 'alignment' ? addAlignmentTrack(draft, sourceSpec, { id: trackId })
+            : addSignalTrack(draft, sourceSpec, { id: trackId, displayGroupId: destinationGroupId, autoPair: savedStrandedAutoLink() })
+        if (destinationGroupId) addTracksToGroup(draft, destinationGroupId, [added.id])
       })
-      await browser.attachSource(trackId, source)
+      await browser.attachSource(sourceSpec.id, source)
       showToast(`Opened ${file.name}`)
     } catch (error) {
       showToast(error instanceof Error ? error.message : String(error), true)
@@ -567,14 +591,14 @@ async function loadNativePaths(paths: readonly string[]): Promise<void> {
     try {
       const { source, sourceSpec, kind } = await sourceFromNativeFile(file, selected)
       const trackId = crypto.randomUUID()
-      runtimeSources.set(trackId, source)
+      runtimeSources.set(sourceSpec.id, source)
       store.edit((draft) => {
-        if (kind === 'interval') addIntervalTrack(draft, sourceSpec, { id: trackId })
-        else if (kind === 'alignment') addAlignmentTrack(draft, sourceSpec, { id: trackId })
-        else addSignalTrack(draft, sourceSpec, { id: trackId })
-        if (destinationGroupId) addTracksToGroup(draft, destinationGroupId, [trackId])
+        const added = kind === 'interval' ? addIntervalTrack(draft, sourceSpec, { id: trackId })
+          : kind === 'alignment' ? addAlignmentTrack(draft, sourceSpec, { id: trackId })
+            : addSignalTrack(draft, sourceSpec, { id: trackId, displayGroupId: destinationGroupId, autoPair: savedStrandedAutoLink() })
+        if (destinationGroupId) addTracksToGroup(draft, destinationGroupId, [added.id])
       })
-      await browser.attachSource(trackId, source)
+      await browser.attachSource(sourceSpec.id, source)
       showToast(`Opened ${file.name}`)
     } catch (error) {
       showToast(error instanceof Error ? error.message : String(error), true)
@@ -642,25 +666,20 @@ async function findAdjacentNativeBamIndex(bam: LocalFileDescriptor): Promise<Loc
 }
 
 async function restorePersistedSources(): Promise<void> {
-  const sourcesById = new Map<string, TrackSource>()
   let restored = 0
-  for (const track of store.current.tracks) {
-    if (track.kind === 'genes') continue
-    const sourceSpec = store.current.sources.find((source) => source.id === track.sourceIds[0])
+  const usedSourceIds = new Set(store.current.tracks.flatMap((track) => track.sourceIds))
+  for (const sourceSpec of store.current.sources) {
+    if (!usedSourceIds.has(sourceSpec.id)) continue
     if (!sourceSpec?.files.length || sourceSpec.files.some((file) => !file.path)) continue
     try {
-      let source = sourcesById.get(sourceSpec.id)
-      if (!source) {
-        const descriptors = await Promise.all(sourceSpec.files.map(async (saved) => {
-          const current = await describeNativeFile(saved.path!)
-          if (current.size !== saved.size) throw new Error(`${saved.name} has changed size since it was opened.`)
-          return current
-        }))
-        const primary = descriptors.find((_, index) => sourceSpec.files[index].role === 'signal')!
-        source = (await sourceFromNativeFile(primary, descriptors)).source
-        sourcesById.set(sourceSpec.id, source)
-      }
-      runtimeSources.set(track.id, source)
+      const descriptors = await Promise.all(sourceSpec.files.map(async (saved) => {
+        const current = await describeNativeFile(saved.path!)
+        if (current.size !== saved.size) throw new Error(`${saved.name} has changed size since it was opened.`)
+        return current
+      }))
+      const primary = descriptors.find((_, index) => sourceSpec.files[index].role === 'signal')!
+      const source = (await sourceFromNativeFile(primary, descriptors)).source
+      runtimeSources.set(sourceSpec.id, source)
       restored += 1
     } catch (error) {
       console.warn(`Could not restore ${sourceSpec.name}`, error)
@@ -668,7 +687,7 @@ async function restorePersistedSources(): Promise<void> {
   }
   if (!restored) return
   browser.syncDocument(store.current, runtimeSources)
-  await Promise.all([...runtimeSources].map(([trackId, source]) => browser.attachSource(trackId, source)))
+  await Promise.all([...runtimeSources].map(([sourceId, source]) => browser.attachSource(sourceId, source)))
   showToast(`Reopened ${restored} saved track${restored === 1 ? '' : 's'}`)
 }
 
@@ -786,15 +805,16 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const selected = store.current.tracks.filter((track) => selectedTrackIds.has(track.id))
   const target = store.current.tracks.find((track) => track.id === trackId)
   if (!target || !selected.length) return
-  const signals = selected.filter((track) => track.kind === 'signal')
+  const signals = selected.filter((track) => track.kind === 'signal' || track.kind === 'stranded')
   const dataTracks = selected.filter((track) => track.kind !== 'genes')
   const one = selected.length === 1
+  const pairable = selected.length === 2 && selected.every((track) => track.kind === 'signal') && canPairSelectedStrands(selected as TrackSpec[])
   const action = (id: string, label: string, detail = '', disabled = false, danger = false) =>
     `<button class="context-item${danger ? ' danger' : ''}" data-context-action="${id}" type="button" role="menuitem" ${disabled ? 'disabled' : ''}><span>${label}</span>${detail ? `<small>${detail}</small>` : ''}</button>`
   trackContextMenu.innerHTML = `
-    <div class="context-heading"><strong>${one ? escapeHtml(target.label) : `${selected.length} tracks selected`}</strong><span>${one ? (target.kind === 'genes' ? 'Gene annotation' : target.kind === 'interval' ? 'Interval track' : target.kind === 'alignment' ? 'BAM alignments' : 'Signal track') : 'Shared actions'}</span></div>
+    <div class="context-heading"><strong>${one ? escapeHtml(target.label) : `${selected.length} tracks selected`}</strong><span>${one ? (target.kind === 'genes' ? 'Gene annotation' : target.kind === 'interval' ? 'Interval track' : target.kind === 'alignment' ? 'BAM alignments' : target.kind === 'stranded' ? 'Linked stranded signal' : target.signalStrand ? `${target.signalStrand === 'plus' ? 'Positive' : 'Negative'}-strand signal` : 'Signal track') : 'Shared actions'}</span></div>
     ${one ? action('rename', 'Rename…') : ''}
-    ${action('color', one ? 'Set color…' : 'Set selected colors…')}
+    ${one && target.kind === 'stranded' ? action('color-plus', 'Set positive-strand color…') + action('color-minus', 'Set negative-strand color…') : action('color', one ? 'Set color…' : 'Set selected colors…')}
     ${action('height', one ? 'Set track height…' : 'Set selected heights…')}
     ${action('group', selected.length > 1 ? 'Group selected…' : 'Set visual group…')}
     <span class="context-separator"></span>
@@ -802,15 +822,19 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     ${signals.length ? action('scale-fixed', 'Set fixed scale…') : ''}
     ${signals.length >= 2 ? action('link-scales', 'Link selected scales') : ''}
     ${signals.length ? action('unlink-scales', 'Unlink selected scales') : ''}
-    ${one && target.kind === 'signal' ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'signal' ? action('duplicate', 'Duplicate track') : ''}
-    ${one && target.kind === 'signal' ? action('relink', runtimeSources.has(trackId) ? 'Replace source file…' : 'Relink source file…') : ''}
+    ${pairable ? '<span class="context-separator"></span>' + action('strand-link', 'Link as stranded track') : ''}
+    ${one && target.kind === 'stranded' ? '<span class="context-separator"></span>' + action('strand-unlink', 'Unlink stranded sources') : ''}
+    ${one && (target.kind === 'signal' || target.kind === 'stranded') ? '<span class="context-separator"></span>' : ''}
+    ${one && (target.kind === 'signal' || target.kind === 'stranded') ? action('duplicate', 'Duplicate track') : ''}
+    ${one && target.kind === 'signal' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
+    ${one && target.kind === 'stranded' ? action('relink-plus', runtimeSources.has(target.sourceIds[0]) ? 'Replace positive source…' : 'Relink positive source…') : ''}
+    ${one && target.kind === 'stranded' ? action('relink-minus', runtimeSources.has(target.sourceIds[1]) ? 'Replace negative source…' : 'Relink negative source…') : ''}
     ${one && target.kind === 'interval' ? '<span class="context-separator"></span>' : ''}
     ${one && target.kind === 'interval' ? action('interval-collapsed', 'Collapsed interval view', target.intervalDisplayMode === 'collapsed' || !target.intervalDisplayMode ? 'current' : '') : ''}
     ${one && target.kind === 'interval' ? action('interval-expanded', 'Expanded interval view', target.intervalDisplayMode === 'expanded' ? 'current' : '') : ''}
     ${one && target.kind === 'interval' ? action('interval-squished', 'Squished interval view', target.intervalDisplayMode === 'squished' ? 'current' : '') : ''}
     ${one && target.kind === 'interval' ? action('duplicate', 'Duplicate track') : ''}
-    ${one && target.kind === 'interval' ? action('relink', runtimeSources.has(trackId) ? 'Replace source file…' : 'Relink source file…') : ''}
+    ${one && target.kind === 'interval' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
     ${one && target.kind === 'alignment' ? '<span class="context-separator"></span>' : ''}
     ${one && target.kind === 'alignment' ? action('bam-view-both', 'Coverage and alignments', target.bamViewMode === 'both' || !target.bamViewMode ? 'current' : '') : ''}
     ${one && target.kind === 'alignment' ? action('bam-view-coverage', 'Coverage only', target.bamViewMode === 'coverage' ? 'current' : '') : ''}
@@ -832,7 +856,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     ${one && target.kind === 'alignment' ? action('bam-secondary', 'Include secondary alignments', target.bamIncludeSecondary ? 'on' : 'off') : ''}
     ${one && target.kind === 'alignment' ? action('bam-supplementary', 'Include supplementary alignments', target.bamIncludeSupplementary ? 'on' : 'off') : ''}
     ${one && target.kind === 'alignment' ? action('duplicate', 'Duplicate track') : ''}
-    ${one && target.kind === 'alignment' ? action('relink', runtimeSources.has(trackId) ? 'Replace BAM and index…' : 'Relink BAM and index…') : ''}
+    ${one && target.kind === 'alignment' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace BAM and index…' : 'Relink BAM and index…') : ''}
     ${one && target.kind === 'genes' ? '<span class="context-separator"></span>' : ''}
     ${one && target.kind === 'genes' ? action('genes-collapsed', 'Collapsed gene view', target.geneDisplayMode === 'collapsed' || !target.geneDisplayMode ? 'current' : '') : ''}
     ${one && target.kind === 'genes' ? action('genes-expanded', 'Expanded transcript view', target.geneDisplayMode === 'expanded' ? 'current' : '') : ''}
@@ -844,11 +868,21 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   positionContextMenu(x, y)
 }
 
+function canPairSelectedStrands(tracks: readonly TrackSpec[]): boolean {
+  if (tracks.length !== 2 || tracks.some((track) => track.kind !== 'signal')) return false
+  const roles = tracks.map((track) => track.signalStrand ?? inferSignalStrand(track.label)?.strand)
+  const bases = tracks.map((track) => (track.strandBaseLabel ?? inferSignalStrand(track.label)?.baseLabel ?? '').toLocaleLowerCase().replace(/[^a-z0-9]+/g, ''))
+  return Boolean(roles[0] && roles[1] && roles[0] !== roles[1] && bases[0] && bases[0] === bases[1])
+}
+
 function openGroupContextMenu(groupId: string, x: number, y: number): void {
   const group = store.current.groups.find((item) => item.id === groupId)
   if (!group) return
   const members = store.current.tracks.filter((track) => track.displayGroupId === groupId)
-  const signalIds = members.filter((track) => track.kind === 'signal').map((track) => track.id)
+  const signalIds = members.filter((track) => track.kind === 'signal' || track.kind === 'stranded').map((track) => track.id)
+  const hasOrdinaryColor = members.some((track) => track.kind !== 'stranded' && !(track.kind === 'signal' && track.signalStrand))
+  const hasPlusColor = members.some((track) => track.kind === 'stranded' || (track.kind === 'signal' && track.signalStrand === 'plus'))
+  const hasMinusColor = members.some((track) => track.kind === 'stranded' || (track.kind === 'signal' && track.signalStrand === 'minus'))
   const memberIds = new Set(members.map((track) => track.id))
   const selectedOutside = store.current.tracks.filter((track) => track.kind !== 'genes' && selectedTrackIds.has(track.id) && !memberIds.has(track.id))
   const action = (id: string, label: string, detail = '', disabled = false, danger = false) =>
@@ -859,7 +893,9 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
     ${action('group-open', 'Open tracks into group…')}
     ${action('group-add-selected', 'Add selected tracks', selectedOutside.length ? `${selectedOutside.length} selected` : '', selectedOutside.length === 0)}
     <span class="context-separator"></span>
-    ${action('group-color', 'Set group color…')}
+    ${hasOrdinaryColor ? action('group-color-ordinary', 'Set ordinary track color…') : ''}
+    ${hasPlusColor ? action('group-color-plus', 'Set positive-strand color…') : ''}
+    ${hasMinusColor ? action('group-color-minus', 'Set negative-strand color…') : ''}
     ${action('group-height', 'Set group track height…')}
     ${signalIds.length ? action('group-auto-linked', 'Autoscale group together', group.scaleBehavior === 'linked' ? 'current' : '') : ''}
     ${signalIds.length ? action('group-auto-independent', 'Use independent autoscaling', group.scaleBehavior === 'independent' ? 'current' : '') : ''}
@@ -899,7 +935,7 @@ function handleTrackContextAction(event: MouseEvent): void {
   }
   if (!targetId) return
   const ids = [...selectedTrackIds]
-  const signalIds = store.current.tracks.filter((track) => track.kind === 'signal' && ids.includes(track.id)).map((track) => track.id)
+  const signalIds = store.current.tracks.filter((track) => (track.kind === 'signal' || track.kind === 'stranded') && ids.includes(track.id)).map((track) => track.id)
   const dataIds = store.current.tracks.filter((track) => track.kind !== 'genes' && ids.includes(track.id)).map((track) => track.id)
   closeTrackContextMenu()
   if (command === 'rename') {
@@ -907,9 +943,12 @@ function handleTrackContextAction(event: MouseEvent): void {
     const label = window.prompt('Track name:', track?.label ?? '')?.trim()
     if (label) store.edit((draft) => { const item = draft.tracks.find((track) => track.id === targetId); if (item) item.label = label })
   }
-  if (command === 'color') {
+  if (command === 'color' || command === 'color-plus' || command === 'color-minus') {
     pendingColorGroupId = undefined
-    openColorDialog('Set track color', store.current.tracks.find((track) => track.id === targetId)?.color ?? '#6d55e0')
+    pendingColorChannel = command === 'color-plus' ? 'plus' : command === 'color-minus' ? 'minus' : undefined
+    const colorTrack = store.current.tracks.find((track) => track.id === targetId)
+    const initial = command === 'color-minus' ? colorTrack?.negativeColor : colorTrack?.color
+    openColorDialog(command === 'color-plus' ? 'Set positive-strand color' : command === 'color-minus' ? 'Set negative-strand color' : 'Set track color', initial ?? '#6d55e0')
   }
   if (command === 'height') setTrackHeights(ids)
   if (command === 'group') {
@@ -919,14 +958,16 @@ function handleTrackContextAction(event: MouseEvent): void {
     if (label !== null) store.edit((draft) => assignDisplayGroup(draft, ids, label))
   }
   if (command === 'scale-auto') store.edit((draft) => {
-    for (const scale of draft.scales) if (draft.tracks.some((track) => signalIds.includes(track.id) && track.scaleBindingId === scale.id)) scale.mode = 'auto-visible'
+    const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
+    for (const scale of draft.scales) if (scaleIds.has(scale.id)) scale.mode = 'auto-visible'
   })
   if (command === 'scale-fixed') {
     const suggested = visibleLimits(targetId)
     const entered = window.prompt('Fixed y-axis range as min,max:', `${suggested.min},${suggested.max}`)
     const [min, max] = entered?.split(',').map((value) => Number(value.trim())) ?? []
     if (Number.isFinite(min) && Number.isFinite(max) && min !== max) store.edit((draft) => {
-      for (const scale of draft.scales) if (draft.tracks.some((track) => signalIds.includes(track.id) && track.scaleBindingId === scale.id)) {
+      const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
+      for (const scale of draft.scales) if (scaleIds.has(scale.id)) {
         scale.mode = 'fixed'
         scale.limits = { min: Math.min(min, max), max: Math.max(min, max) }
       }
@@ -934,6 +975,21 @@ function handleTrackContextAction(event: MouseEvent): void {
   }
   if (command === 'link-scales') store.edit((draft) => linkScales(draft, signalIds))
   if (command === 'unlink-scales') store.edit((draft) => unlinkScales(draft, signalIds))
+  if (command === 'strand-link') {
+    let pairedId: string | undefined
+    store.edit((draft) => { pairedId = pairStrandedTracks(draft, ids[0], ids[1])?.id })
+    if (pairedId) {
+      selectedTrackIds.clear(); selectedTrackIds.add(pairedId); lastSelectedTrackId = pairedId
+      browser.setSelectedTracks(selectedTrackIds)
+    }
+  }
+  if (command === 'strand-unlink') {
+    let unlinkedIds: string[] = []
+    store.edit((draft) => { unlinkedIds = unlinkStrandedTrack(draft, targetId).map((track) => track.id) })
+    selectedTrackIds.clear(); for (const id of unlinkedIds) selectedTrackIds.add(id)
+    lastSelectedTrackId = unlinkedIds.at(-1)
+    browser.setSelectedTracks(selectedTrackIds)
+  }
   if (command?.startsWith('genes-')) {
     const mode = command.slice(6) as 'collapsed' | 'expanded' | 'squished'
     store.edit((draft) => { const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'genes'); if (track) track.geneDisplayMode = mode })
@@ -981,15 +1037,18 @@ function handleTrackContextAction(event: MouseEvent): void {
   if (command === 'duplicate') {
     let copyId: string | undefined
     store.edit((draft) => { copyId = duplicateTrack(draft, targetId)?.id })
-    const source = runtimeSources.get(targetId)
-    if (copyId && source) {
-      runtimeSources.set(copyId, source)
+    if (copyId) {
       browser.syncDocument(store.current, runtimeSources)
-      void browser.attachSource(copyId, source)
+      const copy = store.current.tracks.find((track) => track.id === copyId)
+      for (const sourceId of copy?.sourceIds ?? []) {
+        const source = runtimeSources.get(sourceId)
+        if (source) void browser.attachSource(sourceId, source)
+      }
     }
   }
-  if (command === 'relink') {
+  if (command === 'relink' || command === 'relink-plus' || command === 'relink-minus') {
     pendingRelinkTrackId = targetId
+    pendingRelinkChannel = command === 'relink-plus' ? 'plus' : command === 'relink-minus' ? 'minus' : undefined
     if (isDesktopApp()) void relinkTrackNative(targetId)
     else relinkFileInput.click()
   }
@@ -1003,7 +1062,7 @@ function handleGroupContextAction(command: string | undefined, groupId: string):
   const group = store.current.groups.find((item) => item.id === groupId)
   if (!group) return
   const memberIds = store.current.tracks.filter((track) => track.displayGroupId === groupId).map((track) => track.id)
-  const signalIds = store.current.tracks.filter((track) => track.kind === 'signal' && track.displayGroupId === groupId).map((track) => track.id)
+  const signalIds = store.current.tracks.filter((track) => (track.kind === 'signal' || track.kind === 'stranded') && track.displayGroupId === groupId).map((track) => track.id)
   if (command === 'group-select') {
     selectedTrackIds.clear()
     for (const id of memberIds) selectedTrackIds.add(id)
@@ -1018,24 +1077,27 @@ function handleGroupContextAction(command: string | undefined, groupId: string):
     const addIds = store.current.tracks.filter((track) => track.kind !== 'genes' && selectedTrackIds.has(track.id) && track.displayGroupId !== groupId).map((track) => track.id)
     store.edit((draft) => addTracksToGroup(draft, groupId, addIds))
   }
-  if (command === 'group-color') {
+  if (command?.startsWith('group-color-')) {
+    const channel = command.slice('group-color-'.length) as SignalScaleChannel
     pendingColorGroupId = groupId
-    openColorDialog('Set group color', group.color ?? store.current.tracks.find((track) => track.displayGroupId === groupId)?.color ?? '#6d55e0')
+    pendingColorChannel = channel
+    const initial = channel === 'plus' ? group.positiveColor : channel === 'minus' ? group.negativeColor : group.color
+    openColorDialog(`Set ${channel === 'ordinary' ? 'ordinary track' : `${channel}-strand`} group color`, initial ?? '#6d55e0')
   }
   if (command === 'group-height') setTrackHeights(memberIds)
   if (command === 'group-auto-linked') store.edit((draft) => {
     const draftGroup = draft.groups.find((item) => item.id === groupId)
     if (draftGroup) draftGroup.scaleBehavior = 'linked'
     linkScales(draft, signalIds)
-    const scaleId = draft.tracks.find((track) => signalIds.includes(track.id))?.scaleBindingId
-    const scale = draft.scales.find((item) => item.id === scaleId)
-    if (scale) scale.mode = 'auto-visible'
+    const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
+    for (const scale of draft.scales) if (scaleIds.has(scale.id)) scale.mode = 'auto-visible'
   })
   if (command === 'group-auto-independent') store.edit((draft) => {
     const draftGroup = draft.groups.find((item) => item.id === groupId)
     if (draftGroup) draftGroup.scaleBehavior = 'independent'
     unlinkScales(draft, signalIds)
-    for (const scale of draft.scales) if (draft.tracks.some((track) => signalIds.includes(track.id) && track.scaleBindingId === scale.id)) scale.mode = 'auto-visible'
+    const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
+    for (const scale of draft.scales) if (scaleIds.has(scale.id)) scale.mode = 'auto-visible'
   })
   if (command === 'group-fixed') {
     const suggested = groupVisibleLimits(signalIds)
@@ -1045,9 +1107,8 @@ function handleGroupContextAction(command: string | undefined, groupId: string):
       const draftGroup = draft.groups.find((item) => item.id === groupId)
       if (draftGroup) draftGroup.scaleBehavior = 'linked'
       linkScales(draft, signalIds)
-      const scaleId = draft.tracks.find((track) => signalIds.includes(track.id))?.scaleBindingId
-      const scale = draft.scales.find((item) => item.id === scaleId)
-      if (scale) { scale.mode = 'fixed'; scale.limits = { min: Math.min(min, max), max: Math.max(min, max) } }
+      const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
+      for (const scale of draft.scales) if (scaleIds.has(scale.id)) { scale.mode = 'fixed'; scale.limits = { min: Math.min(min, max), max: Math.max(min, max) } }
     })
   }
   if (command === 'group-rename') {
@@ -1098,9 +1159,27 @@ function openColorDialog(title: string, initialColor: string): void {
   window.setTimeout(() => trackColorInput.focus(), 0)
 }
 
+function setTrackChannelColor(track: TrackSpec, channel: SignalScaleChannel | undefined, color: string): void {
+  if (channel === 'plus') {
+    if (track.kind === 'stranded' || (track.kind === 'signal' && track.signalStrand === 'plus')) track.color = color
+    return
+  }
+  if (channel === 'minus') {
+    if (track.kind === 'stranded') track.negativeColor = color
+    else if (track.kind === 'signal' && track.signalStrand === 'minus') track.color = color
+    return
+  }
+  if (channel === 'ordinary') {
+    if (track.kind !== 'stranded' && !(track.kind === 'signal' && track.signalStrand)) track.color = color
+    return
+  }
+  track.color = color
+}
+
 function closeColorDialog(): void {
   colorDialog.hidden = true
   pendingColorGroupId = undefined
+  pendingColorChannel = undefined
 }
 
 function visibleLimits(trackId: string): { min: number; max: number } {
@@ -1127,14 +1206,16 @@ function groupVisibleLimits(trackIds: readonly string[]): { min: number; max: nu
 
 async function relinkTrack(files: FileList | null): Promise<void> {
   const id = pendingRelinkTrackId
+  const channel = pendingRelinkChannel
   pendingRelinkTrackId = undefined
+  pendingRelinkChannel = undefined
   if (!id || !files?.length) return
   try {
     const selected = [...files]
     const primary = selected.find((file) => !/\.(bai|csi)$/i.test(file.name))
     if (!primary) throw new Error('Select the data file, and its index too if it is a BAM.')
     const opened = await sourceFromFile(primary, selected)
-    await applyRelink(id, opened)
+    await applyRelink(id, opened, channel)
     showToast(`Relinked ${primary.name}`)
   } catch (error) {
     showToast(error instanceof Error ? error.message : String(error), true)
@@ -1144,7 +1225,9 @@ async function relinkTrack(files: FileList | null): Promise<void> {
 }
 
 async function relinkTrackNative(id: string): Promise<void> {
+  const channel = pendingRelinkChannel
   pendingRelinkTrackId = undefined
+  pendingRelinkChannel = undefined
   try {
     const picked = await openDialog({
       title: 'Relink track source',
@@ -1157,27 +1240,34 @@ async function relinkTrackNative(id: string): Promise<void> {
     const primary = selected.find((file) => !/\.(bai|csi)$/i.test(file.name))
     if (!primary) throw new Error('Select the data file, and its index too if it is a BAM.')
     const opened = await sourceFromNativeFile(primary, selected)
-    await applyRelink(id, opened)
+    await applyRelink(id, opened, channel)
     showToast(`Relinked ${primary.name}`)
   } catch (error) {
     showToast(error instanceof Error ? error.message : String(error), true)
   }
 }
 
-async function applyRelink(id: string, opened: OpenedSource): Promise<void> {
+async function applyRelink(id: string, opened: OpenedSource, channel?: 'plus' | 'minus'): Promise<void> {
     const track = store.current.tracks.find((item) => item.id === id)
     if (!track || track.kind === 'genes') throw new Error('This track cannot be relinked.')
-    if (track.kind !== opened.kind) throw new Error(`Choose another ${track.kind === 'interval' ? 'BED interval' : track.kind === 'alignment' ? 'BAM and matching index' : 'signal'} file for this track.`)
+    const expectedKind = track.kind === 'stranded' ? 'signal' : track.kind
+    if (expectedKind !== opened.kind) throw new Error(`Choose another ${track.kind === 'interval' ? 'BED interval' : track.kind === 'alignment' ? 'BAM and matching index' : 'signal'} file for this track.`)
     const { source, sourceSpec } = opened
-    const expectedSourceId = store.current.tracks.find((track) => track.id === id)?.sourceIds[0]
+    const sourceIndex = track.kind === 'stranded' && channel === 'minus' ? 1 : 0
+    const expectedSourceId = track.sourceIds[sourceIndex]
     if (!expectedSourceId) throw new Error('This track has no source to relink.')
     store.edit((draft) => {
       const index = draft.sources.findIndex((item) => item.id === expectedSourceId)
-      if (index >= 0) draft.sources[index] = { ...sourceSpec, id: expectedSourceId }
+      if (index >= 0) draft.sources[index] = {
+        ...sourceSpec,
+        id: expectedSourceId,
+        strand: track.kind === 'stranded' ? (channel ?? 'plus') : sourceSpec.strand,
+        strandBaseLabel: track.kind === 'stranded' ? track.label : sourceSpec.strandBaseLabel,
+      }
     })
-    runtimeSources.set(id, source)
+    runtimeSources.set(expectedSourceId, source)
     browser.syncDocument(store.current, runtimeSources)
-    await browser.attachSource(id, source)
+    await browser.attachSource(expectedSourceId, source)
 }
 
 function saveWorkspace(): void {
@@ -1373,6 +1463,17 @@ function updateTssIndicatorControl(): void {
   const button = document.querySelector<HTMLButtonElement>('#tss-indicators-menu-item')!
   button.setAttribute('aria-checked', String(show))
   document.querySelector<HTMLElement>('#tss-indicators-state')!.textContent = show ? 'On' : 'Off'
+}
+
+function savedStrandedAutoLink(): boolean {
+  return localStorage.getItem(STRANDED_AUTO_LINK_KEY) !== 'false'
+}
+
+function updateStrandedAutoLinkControl(): void {
+  const enabled = savedStrandedAutoLink()
+  const button = document.querySelector<HTMLButtonElement>('#stranded-auto-link-menu-item')!
+  button.setAttribute('aria-checked', String(enabled))
+  document.querySelector<HTMLElement>('#stranded-auto-link-state')!.textContent = enabled ? 'On' : 'Off'
 }
 
 function fitBottomPaneToContent(): void {

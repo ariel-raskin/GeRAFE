@@ -4,6 +4,7 @@ export const STORAGE_KEYS = {
   customReferences: 'gerafe-custom-references',
   workspace: 'gerafe-track-document',
   tssIndicators: 'gerafe-show-tss-indicators',
+  strandedAutoLink: 'gerafe-auto-link-stranded-signals',
 } as const
 
 export const LEGACY_STORAGE_KEYS = {
@@ -12,6 +13,7 @@ export const LEGACY_STORAGE_KEYS = {
   customReferences: 'locus-glide-custom-references',
   workspace: 'locus-glide-track-document',
   tssIndicators: 'locus-glide-show-tss-indicators',
+  strandedAutoLink: 'locus-glide-auto-link-stranded-signals',
 } as const
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>

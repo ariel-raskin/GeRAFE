@@ -1,7 +1,7 @@
 import { clampRegion, formatBases, formatLocus } from './genome.ts'
 import type { Cytoband } from './cytoband.ts'
 import type { GeneFeature, GeneSource, TranscriptFeature } from './reference.ts'
-import { computeScaleDomains, createTrackDocument } from './track-document.ts'
+import { computeScaleDomains, createTrackDocument, signalFeatureKey } from './track-document.ts'
 import type { TrackDocument, TrackSpec } from './track-document.ts'
 import type { AlignmentCoverageFeature, AlignmentFeature, IntervalFeature, Region, SignalFeature, TrackSource, TrackRuntime } from './types.ts'
 import { SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
@@ -166,28 +166,27 @@ export class GenomeBrowser {
       const previous = this.document.tracks.find((track) => track.id === spec.id)
       if (spec.kind === 'genes' && previous?.geneDisplayMode !== spec.geneDisplayMode) this.geneScrollOffsets.delete(spec.id)
       if (spec.kind === 'alignment' && previous?.kind === 'alignment' && alignmentQueryChanged(previous, spec)) {
-        const runtime = this.runtimes.get(spec.id)
-        if (runtime) {
-          this.abortControllers.get(spec.id)?.abort()
+        for (const runtime of this.runtimesForTrack(spec.id)) {
+          this.abortControllers.get(runtime.id)?.abort()
           Object.assign(runtime, { features: [], loadedRegion: undefined, status: runtime.source ? 'idle' : 'offline' })
         }
       }
     }
     this.document = document
-    const validIds = new Set(document.tracks.filter((track) => track.kind !== 'genes').map((track) => track.id))
+    const descriptors = document.tracks.flatMap(runtimeDescriptors)
+    const validIds = new Set(descriptors.map((descriptor) => descriptor.id))
     for (const [id] of this.runtimes) {
       if (validIds.has(id)) continue
       this.abortControllers.get(id)?.abort()
       this.abortControllers.delete(id)
       this.runtimes.delete(id)
     }
-    for (const spec of document.tracks) {
-      if (spec.kind === 'genes') continue
-      const source = sources.get(spec.id)
-      const runtime = this.runtimes.get(spec.id)
+    for (const descriptor of descriptors) {
+      const source = sources.get(descriptor.sourceId)
+      const runtime = this.runtimes.get(descriptor.id)
       if (!runtime) {
-        this.runtimes.set(spec.id, {
-          id: spec.id,
+        this.runtimes.set(descriptor.id, {
+          ...descriptor,
           source,
           features: [],
           status: source ? 'idle' : 'offline',
@@ -195,7 +194,7 @@ export class GenomeBrowser {
           requestVersion: 0,
         })
       } else if (source && runtime.source !== source) {
-        this.abortControllers.get(spec.id)?.abort()
+        this.abortControllers.get(descriptor.id)?.abort()
         Object.assign(runtime, { source, features: [], loadedRegion: undefined, status: 'idle', error: undefined })
       } else if (!source && runtime.source) {
         Object.assign(runtime, { source: undefined, features: [], loadedRegion: undefined, status: 'offline', error: 'Source needs reopening' })
@@ -205,18 +204,23 @@ export class GenomeBrowser {
     this.emitTracks()
   }
 
-  async attachSource(trackId: string, source: TrackSource): Promise<void> {
-    const runtime = this.runtimes.get(trackId)
-    if (!runtime) return
-    runtime.source = source
-    runtime.status = 'idle'
-    runtime.error = undefined
-    runtime.loadedRegion = undefined
-    await this.loadTrack(runtime)
+  async attachSource(sourceId: string, source: TrackSource): Promise<void> {
+    const runtimes = [...this.runtimes.values()].filter((runtime) => runtime.sourceId === sourceId)
+    await Promise.all(runtimes.map(async (runtime) => {
+      runtime.source = source
+      runtime.status = 'idle'
+      runtime.error = undefined
+      runtime.loadedRegion = undefined
+      await this.loadTrack(runtime)
+    }))
   }
 
-  getRuntime(trackId: string): TrackRuntime | undefined {
-    return this.runtimes.get(trackId)
+  getRuntime(trackId: string, channel?: 'plus' | 'minus'): TrackRuntime | undefined {
+    return this.runtimes.get(signalFeatureKey(trackId, channel)) ?? this.runtimesForTrack(trackId)[0]
+  }
+
+  private runtimesForTrack(trackId: string): TrackRuntime[] {
+    return [...this.runtimes.values()].filter((runtime) => runtime.trackId === trackId)
   }
 
   setSelectedTracks(trackIds: ReadonlySet<string>): void {
@@ -446,8 +450,9 @@ export class GenomeBrowser {
     this.drawRuler(this.cssWidth(this.headerCanvas), palette)
     const visibleByTrack = new Map<string, readonly SignalFeature[]>()
     for (const spec of this.visibleSignalSpecs()) {
-      const runtime = this.runtimes.get(spec.id)
-      visibleByTrack.set(spec.id, (runtime?.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) ?? []) as SignalFeature[])
+      for (const runtime of this.runtimesForTrack(spec.id)) {
+        visibleByTrack.set(signalFeatureKey(spec.id, runtime.channel), (runtime.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) ?? []) as SignalFeature[])
+      }
     }
     const domains = computeScaleDomains(this.document, visibleByTrack)
     return this.renderPane('main', palette, domains) + this.renderPane('bottom', palette, domains)
@@ -477,9 +482,15 @@ export class GenomeBrowser {
       }
       const rowHeight = trackSpecHeight(spec)
       if (spec.kind === 'signal') {
-        const runtime = this.runtimes.get(spec.id)!
+        const runtime = this.runtimes.get(signalFeatureKey(spec.id, spec.signalStrand))!
         const domain = spec.scaleBindingId ? domains.get(spec.scaleBindingId) : undefined
         visibleFeatures += this.drawTrack(spec, runtime, index, top, rowHeight, width, palette, domain)
+      } else if (spec.kind === 'stranded') {
+        const plus = this.runtimes.get(signalFeatureKey(spec.id, 'plus'))!
+        const minus = this.runtimes.get(signalFeatureKey(spec.id, 'minus'))!
+        const plusDomain = spec.scaleBindingId ? domains.get(spec.scaleBindingId) : undefined
+        const minusDomain = spec.negativeScaleBindingId ? domains.get(spec.negativeScaleBindingId) : undefined
+        visibleFeatures += this.drawStrandedTrack(spec, plus, minus, index, top, rowHeight, width, palette, plusDomain, minusDomain)
       } else if (spec.kind === 'interval') {
         visibleFeatures += this.drawIntervalTrack(spec, this.runtimes.get(spec.id)!, index, top, rowHeight, width, palette)
       } else if (spec.kind === 'alignment') {
@@ -688,10 +699,13 @@ export class GenomeBrowser {
     ctx.lineTo(width, bottom - 0.5)
     ctx.stroke()
 
-    const visible = track.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) as SignalFeature[]
+    const rawVisible = track.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) as SignalFeature[]
+    const visible = spec.signalStrand ? rawVisible.map((feature) => ({ ...feature, score: Math.abs(feature.score) })) : rawVisible
+    let previewMin = domain?.min ?? 0
     let previewMax = domain?.max ?? 0
-    if (!domain) for (const feature of visible) previewMax = Math.max(previewMax, feature.score)
-    const previewMaxLabel = visible.length && previewMax !== 0 ? formatScore(previewMax) : undefined
+    if (!domain) for (const feature of visible) { previewMin = Math.min(previewMin, feature.score); previewMax = Math.max(previewMax, feature.score) }
+    const previewScaleValue = previewMax !== 0 ? previewMax : previewMin !== 0 ? Math.abs(previewMin) : 0
+    const previewMaxLabel = visible.length && previewScaleValue !== 0 ? formatScore(previewScaleValue) : undefined
     ctx.font = '10px ui-monospace, SFMono-Regular, Consolas, monospace'
     const scaleLaneWidth = previewMaxLabel ? Math.max(SCALE_LANE_MIN_WIDTH, Math.ceil(ctx.measureText(previewMaxLabel).width) + 12) : 0
 
@@ -729,7 +743,7 @@ export class GenomeBrowser {
     const chartBottom = bottom - 0.5
     const chartHeight = chartBottom - chartTop
     const rawZeroY = chartBottom - ((0 - min) / amplitude) * chartHeight
-    const zeroY = Math.max(chartTop, Math.min(chartBottom, rawZeroY))
+    const zeroY = spec.signalStrand === 'minus' ? chartTop : Math.max(chartTop, Math.min(chartBottom, rawZeroY))
 
     if (min <= 0 && max >= 0) {
       ctx.strokeStyle = palette.zero
@@ -747,16 +761,17 @@ export class GenomeBrowser {
     for (let x = 0; x < bins.length; x += 1) {
       const bin = bins[x]
       if (!bin) continue
-      const yMax = chartBottom - ((bin.max - min) / amplitude) * chartHeight
-      const yMin = chartBottom - ((bin.min - min) / amplitude) * chartHeight
+      const yMax = spec.signalStrand === 'minus' ? chartTop + (bin.max / Math.max(1e-9, max)) * chartHeight : chartBottom - ((bin.max - min) / amplitude) * chartHeight
+      const yMin = spec.signalStrand === 'minus' ? chartTop + (bin.min / Math.max(1e-9, max)) * chartHeight : chartBottom - ((bin.min - min) / amplitude) * chartHeight
       const barTop = Math.min(yMax, zeroY)
       const barBottom = Math.max(yMin, zeroY)
       ctx.fillRect(PLOT_LEFT + x, barTop, 1.25, Math.max(1, barBottom - barTop))
     }
     ctx.restore()
     ctx.globalAlpha = 1
-    if (max !== 0) {
-      const maxLabel = formatScore(max)
+    const scaleValue = max !== 0 ? max : min !== 0 ? Math.abs(min) : 0
+    if (scaleValue !== 0) {
+      const maxLabel = formatScore(scaleValue)
       ctx.font = '10px ui-monospace, SFMono-Regular, Consolas, monospace'
       const laneWidth = Math.max(SCALE_LANE_MIN_WIDTH, Math.ceil(ctx.measureText(maxLabel).width) + 12)
       const dividerX = LABEL_WIDTH - laneWidth
@@ -768,14 +783,86 @@ export class GenomeBrowser {
       ctx.stroke()
       ctx.fillStyle = palette.axisInk
       ctx.textAlign = 'right'
-      ctx.fillText(maxLabel, LABEL_WIDTH - 8, chartTop + 3)
+      const scaleAtBottom = spec.signalStrand === 'minus' || (max === 0 && min < 0)
+      ctx.fillText(maxLabel, LABEL_WIDTH - 8, scaleAtBottom ? chartBottom - 3 : chartTop + 3)
       ctx.textAlign = 'start'
       ctx.beginPath()
-      ctx.moveTo(LABEL_WIDTH - 7, chartTop + 0.5)
-      ctx.lineTo(LABEL_WIDTH + 7, chartTop + 0.5)
+      const tickY = scaleAtBottom ? chartBottom - 0.5 : chartTop + 0.5
+      ctx.moveTo(LABEL_WIDTH - 7, tickY)
+      ctx.lineTo(LABEL_WIDTH + 7, tickY)
       ctx.stroke()
     }
     return visible.length
+  }
+
+  private drawStrandedTrack(
+    spec: TrackSpec,
+    plus: TrackRuntime,
+    minus: TrackRuntime,
+    index: number,
+    top: number,
+    height: number,
+    width: number,
+    palette: CanvasPalette,
+    plusDomain?: { min: number; max: number },
+    minusDomain?: { min: number; max: number },
+  ): number {
+    const ctx = this.context
+    const bottom = top + height
+    const plotWidth = width - PLOT_LEFT
+    ctx.fillStyle = index % 2 === 0 ? palette.track : palette.trackAlternate
+    ctx.fillRect(LABEL_WIDTH, top, width - LABEL_WIDTH, height)
+    ctx.fillStyle = palette.gutter
+    ctx.fillRect(0, top, LABEL_WIDTH, height)
+    if (this.selectedTrackIds.has(spec.id)) { ctx.fillStyle = palette.selectionFill; ctx.fillRect(0, top, LABEL_WIDTH, height) }
+    ctx.strokeStyle = palette.line
+    ctx.beginPath(); ctx.moveTo(0, bottom - 0.5); ctx.lineTo(width, bottom - 0.5); ctx.stroke()
+
+    const plusVisible = (plus.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) as SignalFeature[])
+      .map((feature) => ({ ...feature, score: Math.abs(feature.score) }))
+    const minusVisible = (minus.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) as SignalFeature[])
+      .map((feature) => ({ ...feature, score: Math.abs(feature.score) }))
+    const plusMax = plusDomain?.max ?? maximumMagnitude(plusVisible)
+    const minusMax = minusDomain?.max ?? maximumMagnitude(minusVisible)
+    const labels = [plusMax, minusMax].filter((value) => value > 0).map(formatScore)
+    ctx.font = '10px ui-monospace, SFMono-Regular, Consolas, monospace'
+    const scaleLaneWidth = labels.length ? Math.max(SCALE_LANE_MIN_WIDTH, ...labels.map((label) => Math.ceil(ctx.measureText(label).width) + 12)) : 0
+    ctx.fillStyle = palette.ink
+    ctx.font = '600 12px Inter, system-ui, sans-serif'
+    const labelWidth = scaleLaneWidth ? Math.max(48, LABEL_WIDTH - 24 - scaleLaneWidth - 8) : 136
+    const labelLayout = wrappedLines(ctx, spec.label, labelWidth, Math.max(1, Math.floor((height - 20) / 15)))
+    drawTextLines(ctx, labelLayout, 24, top + Math.max(15, (height - labelLayout.length * 15) / 2 + 4), 15)
+
+    const chartTop = top + 12
+    const chartBottom = bottom - 10
+    const zeroY = chartTop + (chartBottom - chartTop) / 2
+    ctx.strokeStyle = palette.zero
+    ctx.beginPath(); ctx.moveTo(PLOT_LEFT, zeroY + 0.5); ctx.lineTo(width, zeroY + 0.5); ctx.stroke()
+    if (scaleLaneWidth) {
+      const dividerX = LABEL_WIDTH - scaleLaneWidth
+      ctx.strokeStyle = palette.axisLine
+      ctx.beginPath(); ctx.moveTo(dividerX + 0.5, top + 7); ctx.lineTo(dividerX + 0.5, bottom - 7); ctx.stroke()
+      ctx.font = '10px ui-monospace, SFMono-Regular, Consolas, monospace'
+      ctx.fillStyle = palette.axisInk
+      ctx.textAlign = 'right'
+      if (plusMax > 0) ctx.fillText(formatScore(plusMax), LABEL_WIDTH - 8, chartTop + 3)
+      if (minusMax > 0) ctx.fillText(formatScore(minusMax), LABEL_WIDTH - 8, chartBottom)
+      ctx.textAlign = 'start'
+    }
+    drawMagnitudeBins(ctx, binFeatures(plusVisible, this.region, Math.floor(plotWidth)), PLOT_LEFT, chartTop, zeroY, Math.max(1e-9, plusMax), spec.color, false)
+    drawMagnitudeBins(ctx, binFeatures(minusVisible, this.region, Math.floor(plotWidth)), PLOT_LEFT, zeroY, chartBottom, Math.max(1e-9, minusMax), spec.negativeColor ?? spec.color, true)
+
+    const problems = [plus, minus].filter((runtime) => runtime.status === 'offline' || runtime.status === 'error')
+    if (problems.length) {
+      ctx.fillStyle = palette.error
+      ctx.font = '10px Inter, system-ui, sans-serif'
+      ctx.fillText(problems.map((runtime) => `${runtime.channel === 'plus' ? '+' : '−'} ${runtime.error ?? 'source unavailable'}`).join(' · '), PLOT_LEFT + 12, bottom - 4)
+    } else if (!plusVisible.length && !minusVisible.length) {
+      ctx.fillStyle = palette.muted
+      ctx.font = '12px Inter, system-ui, sans-serif'
+      ctx.fillText(plus.status === 'loading' || minus.status === 'loading' ? 'Loading stranded signal…' : 'No signal in this window', PLOT_LEFT + 22, zeroY - 8)
+    }
+    return plusVisible.length + minusVisible.length
   }
 
   private drawIntervalTrack(
@@ -1268,14 +1355,12 @@ export class GenomeBrowser {
 
   private hasOverscanCoverage(): boolean {
     return this.visibleSourceSpecs().every((spec) => {
-      const track = this.runtimes.get(spec.id)
-      return !track?.source || Boolean(track.loadedRegion && contains(track.loadedRegion, this.region))
+      return this.runtimesForTrack(spec.id).every((track) => !track.source || Boolean(track.loadedRegion && contains(track.loadedRegion, this.region)))
     })
   }
 
   private async ensureData(): Promise<void> {
-    await Promise.all(this.visibleSourceSpecs().map(async (spec) => {
-      const track = this.runtimes.get(spec.id)
+    await Promise.all(this.visibleSourceSpecs().flatMap((spec) => this.runtimesForTrack(spec.id)).map(async (track) => {
       if (track?.source && (!track.loadedRegion || !contains(track.loadedRegion, this.region))) await this.loadTrack(track)
     }))
   }
@@ -1307,7 +1392,7 @@ export class GenomeBrowser {
     this.scheduleRender()
     try {
       const plotWidth = Math.max(1, this.cssWidth() - PLOT_LEFT)
-      const spec = this.document.tracks.find((item) => item.id === track.id)
+      const spec = this.document.tracks.find((item) => item.id === track.trackId)
       const options = spec?.kind === 'alignment' ? {
         bamViewMode: spec.bamViewMode,
         bamViewAsPairs: spec.bamViewAsPairs,
@@ -1331,7 +1416,7 @@ export class GenomeBrowser {
   }
 
   private visibleSignalSpecs(): TrackSpec[] {
-    return this.document.tracks.filter((track) => track.kind === 'signal' && track.enabled)
+    return this.document.tracks.filter((track) => (track.kind === 'signal' || track.kind === 'stranded') && track.enabled)
   }
 
   private visibleSourceSpecs(): TrackSpec[] {
@@ -1435,7 +1520,7 @@ export class GenomeBrowser {
   private emitTracks(): void {
     const ordered = this.document.tracks
       .filter((track) => track.kind !== 'genes')
-      .map((track) => this.runtimes.get(track.id))
+      .flatMap((track) => this.runtimesForTrack(track.id))
       .filter((track): track is TrackRuntime => Boolean(track))
     this.callbacks.onTracksChange(ordered)
   }
@@ -1463,6 +1548,52 @@ interface CanvasPalette {
   axisLine: string
   ideogramEmpty: string
   ideogramOutline: string
+}
+
+function runtimeDescriptors(track: TrackSpec): Array<Pick<TrackRuntime, 'id' | 'trackId' | 'sourceId' | 'channel'>> {
+  if (track.kind === 'genes') return []
+  if (track.kind === 'stranded') return [
+    { id: signalFeatureKey(track.id, 'plus'), trackId: track.id, sourceId: track.sourceIds[0], channel: 'plus' },
+    { id: signalFeatureKey(track.id, 'minus'), trackId: track.id, sourceId: track.sourceIds[1], channel: 'minus' },
+  ]
+  return track.sourceIds[0] ? [{
+    id: signalFeatureKey(track.id, track.kind === 'signal' ? track.signalStrand : undefined),
+    trackId: track.id,
+    sourceId: track.sourceIds[0],
+    channel: track.kind === 'signal' ? track.signalStrand : undefined,
+  }] : []
+}
+
+function maximumMagnitude(features: readonly SignalFeature[]): number {
+  let maximum = 0
+  for (const feature of features) maximum = Math.max(maximum, Math.abs(feature.score))
+  return maximum
+}
+
+function drawMagnitudeBins(
+  ctx: CanvasRenderingContext2D,
+  bins: readonly ({ min: number; max: number } | undefined)[],
+  left: number,
+  top: number,
+  bottom: number,
+  maximum: number,
+  color: string,
+  downward: boolean,
+): void {
+  const height = bottom - top
+  ctx.fillStyle = color
+  ctx.globalAlpha = 0.84
+  ctx.save()
+  ctx.beginPath(); ctx.rect(left, top, bins.length, height); ctx.clip()
+  for (let x = 0; x < bins.length; x += 1) {
+    const bin = bins[x]
+    if (!bin) continue
+    const magnitude = Math.max(Math.abs(bin.min), Math.abs(bin.max))
+    const barHeight = Math.max(1, (magnitude / maximum) * height)
+    ctx.fillRect(left + x, downward ? top : bottom - barHeight, 1.25, barHeight)
+  }
+  ctx.restore()
+  ctx.globalAlpha = 1
 }
 
 interface AlignmentRenderGroup {
