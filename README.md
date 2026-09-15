@@ -95,6 +95,7 @@ From an existing checkout, `Launch GeRAFE.cmd` opens the locally installed appli
 - Drag horizontally over the track data to pan.
 - Hold `Ctrl` while using the mouse wheel to zoom around the pointer.
 - Double-click the data area or use the toolbar `+` and `−` buttons to zoom.
+- The percentage between the zoom buttons is chromosome-relative: **100%** shows the full chromosome.
 - Use the normal mouse wheel to scroll through tracks or an overflowing gene track.
 
 ### Manage tracks
@@ -105,7 +106,7 @@ From an existing checkout, `Launch GeRAFE.cmd` opens the locally installed appli
 - Recognizable complementary BigWig, bedGraph, and TDF signal files link automatically. Right-click the combined track to set strand colors, relink either source, or separate the sources again. Automatic linking can be toggled under **Settings**.
 - Drag selected tracks to reorder them or move them between the upper and lower panes.
 - Click a group card to select the entire group; right-click it for group-wide options.
-- Use **Fit tracks** to fit the visible upper tracks into the available pane height.
+- Use **Fit tracks** to fit the visible upper tracks into the available pane height. Each channel of a linked positive/negative pair receives the same height as a regular signal track.
 
 ### BAM display controls
 

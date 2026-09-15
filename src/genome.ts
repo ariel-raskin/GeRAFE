@@ -56,6 +56,14 @@ export function formatBases(value: number): string {
   return `${Math.round(value)} bp`
 }
 
+/** Compact zoom label where 100% represents one full chromosome. */
+export function formatZoomPercentage(percentage: number): string {
+  if (percentage >= 1_000_000) return `${Number((percentage / 1_000_000).toPrecision(3))}m%`
+  if (percentage >= 1_000) return `${Number((percentage / 1_000).toPrecision(3))}k%`
+  if (percentage >= 100) return `${Math.round(percentage)}%`
+  return `${Number(percentage.toPrecision(3))}%`
+}
+
 function trim(value: number): string {
   return value.toFixed(value >= 10 ? 1 : 2).replace(/\.0+$|(?<=\.[0-9])0$/, '')
 }

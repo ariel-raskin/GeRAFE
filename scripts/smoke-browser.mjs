@@ -58,6 +58,10 @@ if (dataPaths.length > 0) {
 const trackDocument = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}'))
 const visualDataTrackCount = (trackDocument.tracks ?? []).filter((track) => track.kind !== 'genes').length
 const hasStrandedTrack = (trackDocument.tracks ?? []).some((track) => track.kind === 'stranded')
+const firstTrackSpec = (trackDocument.tracks ?? []).find((track) => track.kind !== 'genes')
+const firstTrackHeight = firstTrackSpec
+  ? Math.round((16 + Math.max(1, Math.min(100, firstTrackSpec.height)) * 3.6) * (firstTrackSpec.kind === 'stranded' ? 2 : 1))
+  : 132
 
 const canvas = page.locator('#genome-canvas')
 const box = await canvas.boundingBox()
@@ -67,15 +71,19 @@ await page.mouse.down()
 await page.mouse.move(box.x + box.width * 0.48, box.y + 95, { steps: 12 })
 await page.mouse.up()
 await page.mouse.move(box.x + box.width * 0.55, box.y + 95)
+const zoomBeforeWheel = await page.locator('#zoom-level').textContent()
 await page.keyboard.down('Control')
 await page.mouse.wheel(0, -300)
 await page.keyboard.up('Control')
 await page.waitForTimeout(500)
+const zoomAfterWheel = await page.locator('#zoom-level').textContent()
+const zoomTitle = await page.locator('#zoom-level').getAttribute('title')
 await page.locator('#file-menu-button').click()
 const fileMenuVisible = await page.locator('#file-menu-popup').isVisible()
 const fileMenuText = await page.locator('#file-menu-popup').textContent()
 const fileMenuActiveElement = await page.locator(':focus').getAttribute('id')
 await page.keyboard.press('Escape')
+if (hasStrandedTrack) await canvas.screenshot({ path: 'dist/smoke-stranded.png' })
 const contextX = box.x + 60
 const firstTrackY = box.y + 55
 if (dataPaths.length) await page.mouse.click(contextX, firstTrackY, { button: 'right' })
@@ -136,15 +144,15 @@ if (visualDataTrackCount > 1) {
   await page.keyboard.press('Escape')
   await page.mouse.click(contextX, firstTrackY)
   await page.keyboard.down('Control')
-  await page.mouse.click(contextX, firstTrackY + 132)
+  await page.mouse.click(contextX, firstTrackY + firstTrackHeight)
   await page.keyboard.up('Control')
-  await page.mouse.click(contextX, firstTrackY + 132, { button: 'right' })
+  await page.mouse.click(contextX, firstTrackY + firstTrackHeight, { button: 'right' })
   linkedScaleText = await page.locator('#track-context-menu').textContent()
   await page.locator('[data-context-action="color"]').click()
   colorDialogVisible = await page.locator('#color-dialog').isVisible()
   await page.screenshot({ path: 'dist/smoke-color.png', fullPage: true })
   await page.locator('#color-cancel').click()
-  await page.mouse.click(contextX, firstTrackY + 132, { button: 'right' })
+  await page.mouse.click(contextX, firstTrackY + firstTrackHeight, { button: 'right' })
   await page.locator('[data-context-action="link-scales"]').click()
   await page.mouse.click(contextX, firstTrackY, { button: 'right' })
   page.once('dialog', (dialog) => dialog.accept('Experiment A'))
@@ -245,13 +253,14 @@ await page.reload({ waitUntil: 'networkidle' })
 const customReferenceAfterReload = await page.locator('#reference-label').textContent()
 await browser.close()
 
-console.log(JSON.stringify({ ...result, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, geneDetailProbe, geneMenuText, geneInternalScrollChanged, initialBottomPaneHeight, initialBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, customReferenceBeforeReload, customReferenceAfterReload, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, geneDetailProbe, geneMenuText, geneInternalScrollChanged, initialBottomPaneHeight, initialBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, customReferenceBeforeReload, customReferenceAfterReload, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
 if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button') process.exitCode = 1
 if (!trackContextVisible) process.exitCode = 1
 if (trackContextFocusedAction || groupContextFocusedAction) process.exitCode = 1
 if (searchSelectAll.start !== 0 || searchSelectAll.end !== searchSelectAll.length) process.exitCode = 1
+if (!zoomBeforeWheel?.includes('%') || !zoomAfterWheel?.includes('%') || zoomBeforeWheel === zoomAfterWheel || !zoomTitle?.includes('100% shows the full chromosome')) process.exitCode = 1
 if (!geneMenuText?.includes('Expanded transcript view')) process.exitCode = 1
 if (!settingsMenuText?.includes('Show TSS elbow arrows')) process.exitCode = 1
 if (tssBeforeToggle === tssAfterToggle || tssAfterToggle !== tssAfterReload) process.exitCode = 1
