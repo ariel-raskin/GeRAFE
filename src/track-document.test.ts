@@ -6,18 +6,21 @@ import {
   assignDisplayGroup,
   computeScaleDomains,
   createTrackDocument,
+  inferSignalStrand,
   linkScales,
   normalizeTrackDocument,
   removeTrack,
   reorderTracks,
+  signalFeatureKey,
   TrackDocumentStore,
   unlinkScales,
+  unlinkStrandedTrack,
 } from './track-document.ts'
 
 function documentWithTwoTracks() {
   const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
-  addSignalTrack(document, { id: 's1', name: 'plus', format: 'bigwig', files: [] }, { id: 't1' })
-  addSignalTrack(document, { id: 's2', name: 'minus', format: 'bigwig', files: [] }, { id: 't2' })
+  addSignalTrack(document, { id: 's1', name: 'first.bw', format: 'bigwig', files: [] }, { id: 't1' })
+  addSignalTrack(document, { id: 's2', name: 'second.bw', format: 'bigwig', files: [] }, { id: 't2' })
   return document
 }
 
@@ -62,12 +65,12 @@ describe('track document', () => {
   it('round-trips JSON and supports undo/redo', () => {
     const initial = documentWithTwoTracks()
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(initial)))
-    expect(restored.tracks.map((track) => track.label)).toEqual(['plus', 'minus', 'RefSeq genes'])
+    expect(restored.tracks.map((track) => track.label)).toEqual(['first.bw', 'second.bw', 'RefSeq genes'])
     const store = new TrackDocumentStore(restored)
     store.edit((draft) => { draft.tracks[0].label = 'renamed' })
     expect(store.current.tracks[0].label).toBe('renamed')
     store.undo()
-    expect(store.current.tracks[0].label).toBe('plus')
+    expect(store.current.tracks[0].label).toBe('first.bw')
     store.redo()
     expect(store.current.tracks[0].label).toBe('renamed')
   })
@@ -113,8 +116,21 @@ describe('track document', () => {
     legacy.schemaVersion = 1
     for (const track of legacy.tracks) track.height = 1
     const restored = normalizeTrackDocument(legacy)
-    expect(restored.schemaVersion).toBe(4)
+    expect(restored.schemaVersion).toBe(5)
     expect(restored.tracks.every((track) => track.height >= 30 && track.height <= 33)).toBe(true)
+  })
+
+  it('migrates recognizable version 4 strand files into a persisted pair', () => {
+    const legacy = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 }) as any
+    addSignalTrack(legacy, { id: 'legacy-plus-source', name: 'treated.plus.tdf', format: 'tdf', files: [] }, { id: 'legacy-plus', autoPair: false })
+    addSignalTrack(legacy, { id: 'legacy-minus-source', name: 'treated.minus.tdf', format: 'tdf', files: [] }, { id: 'legacy-minus', autoPair: false })
+    legacy.schemaVersion = 4
+    for (const track of legacy.tracks) {
+      delete track.signalStrand
+      delete track.strandBaseLabel
+    }
+    const restored = normalizeTrackDocument(legacy)
+    expect(restored.tracks.find((track) => track.kind === 'stranded')).toMatchObject({ label: 'treated', sourceIds: ['legacy-plus-source', 'legacy-minus-source'] })
   })
 
   it('keeps group members contiguous and applies stored group defaults to additions', () => {
@@ -161,5 +177,75 @@ describe('track document', () => {
     expect(document.groups.some((group) => group.id === groupId)).toBe(false)
     expect(document.sources).toHaveLength(0)
     expect(document.scales).toHaveLength(0)
+  })
+
+  it('recognizes common strand tokens while preserving a shared base label', () => {
+    expect(inferSignalStrand('dTAG_2hr.plus.avg.tdf')).toEqual({ strand: 'plus', baseLabel: 'dTAG 2hr avg' })
+    expect(inferSignalStrand('dTAG_2hr.negative.avg.bigWig')).toEqual({ strand: 'minus', baseLabel: 'dTAG 2hr avg' })
+    expect(inferSignalStrand('sample+')).toEqual({ strand: 'plus', baseLabel: 'sample' })
+    expect(inferSignalStrand('ordinary-signal.bw')).toBeUndefined()
+  })
+
+  it('automatically combines complementary sources into one stranded track and can unlink them', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
+    addSignalTrack(document, { id: 'plus-source', name: 'PRO.plus.tdf', format: 'tdf', files: [] }, { id: 'plus-track', color: '#112233' })
+    const paired = addSignalTrack(document, { id: 'minus-source', name: 'PRO.minus.tdf', format: 'tdf', files: [] }, { id: 'minus-track', color: '#445566' })
+
+    expect(paired).toMatchObject({ kind: 'stranded', label: 'PRO', sourceIds: ['plus-source', 'minus-source'], color: '#112233', negativeColor: '#445566' })
+    expect(document.tracks.filter((track) => track.kind !== 'genes')).toHaveLength(1)
+    expect(paired.scaleBindingId).not.toBe(paired.negativeScaleBindingId)
+
+    const unlinked = unlinkStrandedTrack(document, paired.id)
+    expect(unlinked.map((track) => track.signalStrand)).toEqual(['plus', 'minus'])
+    expect(unlinked.every((track) => track.strandAutoLinkDisabled)).toBe(true)
+    expect(document.sources.map((source) => source.id)).toEqual(['plus-source', 'minus-source'])
+  })
+
+  it('links positive and negative group scales independently and normalizes magnitudes', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
+    const pairA = addSignalTrack(document, { id: 'a-plus-source', name: 'A.plus.bw', format: 'bigwig', files: [] }, { id: 'a-plus' })
+    const pairedA = addSignalTrack(document, { id: 'a-minus-source', name: 'A.minus.bw', format: 'bigwig', files: [] }, { id: 'a-minus' })
+    expect(pairA.kind).toBe('signal')
+    addSignalTrack(document, { id: 'b-plus-source', name: 'B.pos.bedgraph', format: 'bedgraph', files: [] }, { id: 'b-plus' })
+    const pairedB = addSignalTrack(document, { id: 'b-minus-source', name: 'B.neg.bedgraph', format: 'bedgraph', files: [] }, { id: 'b-minus' })
+    assignDisplayGroup(document, [pairedA.id, pairedB.id], 'PRO-seq')
+    linkScales(document, [pairedA.id, pairedB.id])
+
+    expect(pairedA.scaleBindingId).toBe(pairedB.scaleBindingId)
+    expect(pairedA.negativeScaleBindingId).toBe(pairedB.negativeScaleBindingId)
+    expect(pairedA.scaleBindingId).not.toBe(pairedA.negativeScaleBindingId)
+    const domains = computeScaleDomains(document, new Map([
+      [signalFeatureKey(pairedA.id, 'plus'), [{ start: 0, end: 10, score: 4 }]],
+      [signalFeatureKey(pairedA.id, 'minus'), [{ start: 0, end: 10, score: -17 }]],
+      [signalFeatureKey(pairedB.id, 'plus'), [{ start: 0, end: 10, score: 9 }]],
+      [signalFeatureKey(pairedB.id, 'minus'), [{ start: 0, end: 10, score: 6 }]],
+    ]))
+    expect(domains.get(pairedA.scaleBindingId!)).toEqual({ min: 0, max: 9 })
+    expect(domains.get(pairedA.negativeScaleBindingId!)).toEqual({ min: 0, max: 17 })
+  })
+
+  it('keeps ordinary, positive, and negative group color defaults separate', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
+    addSignalTrack(document, { id: 'plus-source', name: 'condition.plus.bw', format: 'bigwig', files: [] }, { id: 'plus-track' })
+    const paired = addSignalTrack(document, { id: 'minus-source', name: 'condition.minus.bw', format: 'bigwig', files: [] }, { id: 'minus-track' })
+    const ordinary = addSignalTrack(document, { id: 'ordinary-source', name: 'input.bw', format: 'bigwig', files: [] }, { id: 'ordinary-track' })
+    assignDisplayGroup(document, [paired.id, ordinary.id], 'Mixed')
+    const group = document.groups.find((item) => item.label === 'Mixed')!
+    Object.assign(group, { color: '#111111', positiveColor: '#222222', negativeColor: '#333333' })
+    assignDisplayGroup(document, [paired.id, ordinary.id], 'Mixed')
+    expect(ordinary.color).toBe('#111111')
+    expect(paired.color).toBe('#222222')
+    expect(paired.negativeColor).toBe('#333333')
+  })
+
+  it('uses an absolute magnitude domain for an unpaired negative-strand track', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
+    const track = addSignalTrack(document, { id: 'minus-source', name: 'orphan.minus.tdf', format: 'tdf', files: [] }, { id: 'minus-track', autoPair: false })
+    const domains = computeScaleDomains(document, new Map([[signalFeatureKey(track.id, 'minus'), [{ start: 0, end: 10, score: -12 }]]]))
+    expect(domains.get(track.scaleBindingId!)).toEqual({ min: 0, max: 12 })
+    const scale = document.scales.find((binding) => binding.id === track.scaleBindingId)!
+    scale.mode = 'fixed'
+    scale.limits = { min: -20, max: 0 }
+    expect(computeScaleDomains(document, new Map()).get(track.scaleBindingId!)).toEqual({ min: 0, max: 20 })
   })
 })

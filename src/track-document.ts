@@ -1,10 +1,12 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 4 as const
+export const TRACK_DOCUMENT_VERSION = 5 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 
 export type SourceFormat = 'bigwig' | 'bedgraph' | 'tdf' | 'bam' | 'bed'
 export type ScaleMode = 'auto-visible' | 'fixed'
+export type SignalStrand = 'plus' | 'minus'
+export type SignalScaleChannel = 'ordinary' | SignalStrand
 
 export interface SourceFileSpec {
   name: string
@@ -20,12 +22,16 @@ export interface TrackSourceSpec {
   name: string
   format: SourceFormat
   files: SourceFileSpec[]
+  strand?: SignalStrand
+  strandBaseLabel?: string
 }
 
 export interface DisplayGroup {
   id: string
   label: string
   color?: string
+  positiveColor?: string
+  negativeColor?: string
   scaleBehavior?: 'linked' | 'independent'
 }
 
@@ -39,7 +45,7 @@ export interface ScaleBinding {
 
 export interface TrackSpec {
   id: string
-  kind: 'signal' | 'interval' | 'alignment' | 'genes'
+  kind: 'signal' | 'stranded' | 'interval' | 'alignment' | 'genes'
   sourceIds: string[]
   label: string
   color: string
@@ -59,6 +65,11 @@ export interface TrackSpec {
   bamIncludeSupplementary?: boolean
   displayGroupId?: string
   scaleBindingId?: string
+  signalStrand?: SignalStrand
+  strandBaseLabel?: string
+  negativeColor?: string
+  negativeScaleBindingId?: string
+  strandAutoLinkDisabled?: boolean
 }
 
 export interface TrackDocument {
@@ -164,10 +175,13 @@ export function createTrackDocument(referenceId: string, region: Region): TrackD
 export function addSignalTrack(
   draft: TrackDocument,
   source: TrackSourceSpec,
-  options: { id?: string; label?: string; color?: string } = {},
+  options: { id?: string; label?: string; color?: string; displayGroupId?: string; autoPair?: boolean } = {},
 ): TrackSpec {
   const id = options.id ?? crypto.randomUUID()
   const scaleBindingId = crypto.randomUUID()
+  const inferred = inferSignalStrand(source.name)
+  source.strand = inferred?.strand
+  source.strandBaseLabel = inferred?.baseLabel
   const track: TrackSpec = {
     id,
     kind: 'signal',
@@ -178,12 +192,116 @@ export function addSignalTrack(
     height: 32,
     pane: 'main',
     scaleBindingId,
+    displayGroupId: options.displayGroupId,
+    signalStrand: inferred?.strand,
+    strandBaseLabel: inferred?.baseLabel,
   }
   draft.sources.push(source)
   draft.scales.push({ id: scaleBindingId, label: track.label, mode: 'auto-visible', includeZero: true })
   const bottomIndex = draft.tracks.findIndex((item) => item.pane === 'bottom')
   draft.tracks.splice(bottomIndex < 0 ? draft.tracks.length : bottomIndex, 0, track)
+  if (options.autoPair !== false && inferred) {
+    const complement = draft.tracks.find((candidate) => candidate.id !== track.id && candidate.kind === 'signal'
+      && !candidate.strandAutoLinkDisabled && candidate.signalStrand !== inferred.strand
+      && strandBaseKey(candidate.strandBaseLabel ?? candidate.label) === strandBaseKey(inferred.baseLabel))
+    if (complement) return pairStrandedTracks(draft, track.id, complement.id) ?? track
+  }
   return track
+}
+
+export function inferSignalStrand(name: string): { strand: SignalStrand; baseLabel: string } | undefined {
+  const extensionless = name.replace(/\.(?:bigwig|bw|bedgraph|tdf)$/i, '')
+  const words = extensionless.split(/([\s._()\[\]-]+)/)
+  const plus = /^(?:positive|pos|plus|forward|fwd|sense)$/i
+  const minus = /^(?:negative|neg|minus|reverse|rev|antisense)$/i
+  let strand: SignalStrand | undefined
+  const kept = words.filter((word) => {
+    const clean = word.trim()
+    if (!clean) return true
+    if (plus.test(clean)) { strand = 'plus'; return false }
+    if (minus.test(clean)) { strand = 'minus'; return false }
+    return true
+  })
+  if (!strand) {
+    const signMatch = extensionless.match(/^(.*?)(?:[\s._-]*)([+-])$/)
+    if (!signMatch) return undefined
+    strand = signMatch[2] === '+' ? 'plus' : 'minus'
+    kept.splice(0, kept.length, signMatch[1])
+  }
+  const baseLabel = kept.join('').replace(/(?:[\s._-]*strand)?[\s._-]*$/i, '').replace(/^[\s._-]+|[\s._-]+$/g, '').replace(/[._-]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return baseLabel ? { strand, baseLabel } : undefined
+}
+
+export function pairStrandedTracks(draft: TrackDocument, firstId: string, secondId: string): TrackSpec | undefined {
+  const firstIndex = draft.tracks.findIndex((track) => track.id === firstId)
+  const secondIndex = draft.tracks.findIndex((track) => track.id === secondId)
+  const first = draft.tracks[firstIndex]
+  const second = draft.tracks[secondIndex]
+  if (!first || !second || first.kind !== 'signal' || second.kind !== 'signal'
+    || !first.signalStrand || !second.signalStrand || first.signalStrand === second.signalStrand) return undefined
+  const firstBase = strandBaseKey(first.strandBaseLabel ?? first.label)
+  const secondBase = strandBaseKey(second.strandBaseLabel ?? second.label)
+  if (!firstBase || firstBase !== secondBase) return undefined
+  const plus = first.signalStrand === 'plus' ? first : second
+  const minus = first.signalStrand === 'minus' ? first : second
+  const insertionIndex = Math.min(firstIndex, secondIndex)
+  const groupId = plus.displayGroupId === minus.displayGroupId ? plus.displayGroupId : plus.displayGroupId ?? minus.displayGroupId
+  const paired: TrackSpec = {
+    id: firstIndex <= secondIndex ? first.id : second.id,
+    kind: 'stranded',
+    sourceIds: [plus.sourceIds[0], minus.sourceIds[0]],
+    label: plus.strandBaseLabel ?? minus.strandBaseLabel ?? plus.label,
+    color: plus.color,
+    negativeColor: minus.color,
+    enabled: plus.enabled || minus.enabled,
+    height: Math.max(plus.height, minus.height),
+    pane: firstIndex <= secondIndex ? first.pane : second.pane,
+    displayGroupId: groupId,
+    scaleBindingId: plus.scaleBindingId,
+    negativeScaleBindingId: minus.scaleBindingId,
+  }
+  draft.tracks = draft.tracks.filter((track) => track.id !== first.id && track.id !== second.id)
+  draft.tracks.splice(insertionIndex, 0, paired)
+  if (groupId) makeGroupContiguous(draft, groupId)
+  pruneDocument(draft)
+  return paired
+}
+
+export function autoPairStrandedTracks(draft: TrackDocument): TrackSpec[] {
+  const paired: TrackSpec[] = []
+  for (const track of [...draft.tracks]) {
+    if (track.kind !== 'signal' || !track.signalStrand || track.strandAutoLinkDisabled || !draft.tracks.includes(track)) continue
+    const complement = draft.tracks.find((candidate) => candidate.id !== track.id && candidate.kind === 'signal'
+      && !candidate.strandAutoLinkDisabled && candidate.signalStrand && candidate.signalStrand !== track.signalStrand
+      && strandBaseKey(candidate.strandBaseLabel ?? candidate.label) === strandBaseKey(track.strandBaseLabel ?? track.label))
+    const result = complement ? pairStrandedTracks(draft, track.id, complement.id) : undefined
+    if (result) paired.push(result)
+  }
+  return paired
+}
+
+export function unlinkStrandedTrack(draft: TrackDocument, trackId: string): TrackSpec[] {
+  const index = draft.tracks.findIndex((track) => track.id === trackId)
+  const paired = draft.tracks[index]
+  if (!paired || paired.kind !== 'stranded') return []
+  const plusSource = draft.sources.find((source) => source.id === paired.sourceIds[0])
+  const minusSource = draft.sources.find((source) => source.id === paired.sourceIds[1])
+  const common = { enabled: paired.enabled, height: paired.height, pane: paired.pane, displayGroupId: paired.displayGroupId, strandAutoLinkDisabled: true }
+  const plus: TrackSpec = {
+    ...common, id: paired.id, kind: 'signal', sourceIds: [paired.sourceIds[0]], label: plusSource?.name ?? `${paired.label} plus`,
+    color: paired.color, scaleBindingId: paired.scaleBindingId, signalStrand: 'plus', strandBaseLabel: paired.label,
+  }
+  const minus: TrackSpec = {
+    ...common, id: crypto.randomUUID(), kind: 'signal', sourceIds: [paired.sourceIds[1]], label: minusSource?.name ?? `${paired.label} minus`,
+    color: paired.negativeColor ?? paired.color, scaleBindingId: paired.negativeScaleBindingId, signalStrand: 'minus', strandBaseLabel: paired.label,
+  }
+  draft.tracks.splice(index, 1, plus, minus)
+  pruneDocument(draft)
+  return [plus, minus]
+}
+
+export function signalFeatureKey(trackId: string, strand?: SignalStrand): string {
+  return strand ? `${trackId}:${strand}` : trackId
 }
 
 export function addIntervalTrack(
@@ -239,16 +357,19 @@ export function duplicateTrack(draft: TrackDocument, trackId: string): TrackSpec
   const index = draft.tracks.findIndex((track) => track.id === trackId)
   const original = draft.tracks[index]
   if (!original || original.kind === 'genes') return undefined
-  const scaleBindingId = original.kind === 'signal' ? crypto.randomUUID() : undefined
+  const scaleBindingId = original.kind === 'signal' || original.kind === 'stranded' ? crypto.randomUUID() : undefined
+  const negativeScaleBindingId = original.kind === 'stranded' ? crypto.randomUUID() : undefined
   const copy: TrackSpec = {
     ...original,
     id: crypto.randomUUID(),
     sourceIds: [...original.sourceIds],
     label: `${original.label} copy`,
     scaleBindingId,
+    negativeScaleBindingId,
   }
   draft.tracks.splice(index + 1, 0, copy)
   if (scaleBindingId) draft.scales.push({ id: scaleBindingId, label: copy.label, mode: 'auto-visible', includeZero: true })
+  if (negativeScaleBindingId) draft.scales.push({ id: negativeScaleBindingId, label: `${copy.label} minus`, mode: 'auto-visible', includeZero: true })
   return copy
 }
 
@@ -323,43 +444,54 @@ export function assignDisplayGroup(draft: TrackDocument, trackIds: readonly stri
     track.displayGroupId = group.id
     if (pane) track.pane = pane
   }
-  if (group.color) for (const track of draft.tracks) if (track.displayGroupId === group.id) track.color = group.color
+  for (const track of draft.tracks) if (track.displayGroupId === group.id) {
+    const channel = track.kind === 'stranded' ? 'plus' : track.kind === 'signal' ? track.signalStrand ?? 'ordinary' : 'ordinary'
+    if (channel === 'ordinary' && group.color) track.color = group.color
+    if (channel === 'plus' && group.positiveColor) track.color = group.positiveColor
+    if (track.kind === 'stranded' && group.negativeColor) track.negativeColor = group.negativeColor
+    if (channel === 'minus' && group.negativeColor) track.color = group.negativeColor
+  }
   makeGroupContiguous(draft, group.id)
-  const members = draft.tracks.filter((track) => track.kind === 'signal' && track.displayGroupId === group.id).map((track) => track.id)
+  const members = draft.tracks.filter((track) => (track.kind === 'signal' || track.kind === 'stranded') && track.displayGroupId === group.id).map((track) => track.id)
   if (group.scaleBehavior === 'linked') linkScales(draft, members)
   if (group.scaleBehavior === 'independent') unlinkScales(draft, trackIds)
   pruneDocument(draft)
 }
 
 export function linkScales(draft: TrackDocument, trackIds: readonly string[]): void {
-  const targets = draft.tracks.filter((track) => track.kind === 'signal' && trackIds.includes(track.id))
-  if (targets.length < 2) return
-  const previous = targets.map((track) => draft.scales.find((scale) => scale.id === track.scaleBindingId)).find(Boolean)
-  const binding: ScaleBinding = {
-    id: crypto.randomUUID(),
-    label: `Linked scale (${targets.length})`,
-    mode: previous?.mode ?? 'auto-visible',
-    includeZero: previous?.includeZero ?? true,
-    limits: previous?.limits ? { ...previous.limits } : undefined,
+  const targets = draft.tracks.filter((track) => (track.kind === 'signal' || track.kind === 'stranded') && trackIds.includes(track.id))
+  for (const channel of ['ordinary', 'plus', 'minus'] as const) {
+    const refs = targets.flatMap((track) => scaleChannelRefs(track).filter((ref) => ref.channel === channel))
+    if (refs.length < 2) continue
+    const previous = refs.map((ref) => draft.scales.find((scale) => scale.id === ref.scaleBindingId)).find(Boolean)
+    const binding: ScaleBinding = {
+      id: crypto.randomUUID(),
+      label: `Linked ${channel === 'ordinary' ? '' : `${channel} `}scale (${refs.length})`.replace('  ', ' '),
+      mode: previous?.mode ?? 'auto-visible',
+      includeZero: previous?.includeZero ?? true,
+      limits: previous?.limits ? { ...previous.limits } : undefined,
+    }
+    draft.scales.push(binding)
+    for (const ref of refs) setScaleChannelBinding(ref.track, channel, binding.id)
   }
-  draft.scales.push(binding)
-  for (const track of targets) track.scaleBindingId = binding.id
   pruneDocument(draft)
 }
 
 export function unlinkScales(draft: TrackDocument, trackIds: readonly string[]): void {
   for (const track of draft.tracks) {
-    if (track.kind !== 'signal' || !trackIds.includes(track.id)) continue
-    const existing = draft.scales.find((scale) => scale.id === track.scaleBindingId)
-    const binding: ScaleBinding = {
-      id: crypto.randomUUID(),
-      label: track.label,
-      mode: existing?.mode ?? 'auto-visible',
-      includeZero: existing?.includeZero ?? true,
-      limits: existing?.limits ? { ...existing.limits } : undefined,
+    if ((track.kind !== 'signal' && track.kind !== 'stranded') || !trackIds.includes(track.id)) continue
+    for (const ref of scaleChannelRefs(track)) {
+      const existing = draft.scales.find((scale) => scale.id === ref.scaleBindingId)
+      const binding: ScaleBinding = {
+        id: crypto.randomUUID(),
+        label: `${track.label}${ref.channel === 'ordinary' ? '' : ` ${ref.channel}`}`,
+        mode: existing?.mode ?? 'auto-visible',
+        includeZero: existing?.includeZero ?? true,
+        limits: existing?.limits ? { ...existing.limits } : undefined,
+      }
+      draft.scales.push(binding)
+      setScaleChannelBinding(track, ref.channel, binding.id)
     }
-    draft.scales.push(binding)
-    track.scaleBindingId = binding.id
   }
   pruneDocument(draft)
 }
@@ -371,16 +503,23 @@ export function computeScaleDomains(
   const result = new Map<string, { min: number; max: number }>()
   for (const binding of document.scales) {
     if (binding.mode === 'fixed' && binding.limits) {
-      result.set(binding.id, safeDomain(binding.limits.min, binding.limits.max, binding.includeZero))
+      const magnitudeChannel = document.tracks.some((track) => scaleChannelRefs(track).some((ref) => ref.scaleBindingId === binding.id && ref.channel !== 'ordinary'))
+      result.set(binding.id, magnitudeChannel
+        ? safeDomain(0, Math.max(Math.abs(binding.limits.min), Math.abs(binding.limits.max)), true)
+        : safeDomain(binding.limits.min, binding.limits.max, binding.includeZero))
       continue
     }
     let min = binding.includeZero ? 0 : Number.POSITIVE_INFINITY
     let max = binding.includeZero ? 0 : Number.NEGATIVE_INFINITY
     for (const track of document.tracks) {
-      if (!track.enabled || track.scaleBindingId !== binding.id) continue
-      for (const feature of featuresByTrack.get(track.id) ?? []) {
-        min = Math.min(min, feature.score)
-        max = Math.max(max, feature.score)
+      if (!track.enabled) continue
+      for (const ref of scaleChannelRefs(track)) {
+        if (ref.scaleBindingId !== binding.id) continue
+        for (const feature of featuresByTrack.get(signalFeatureKey(track.id, ref.channel === 'ordinary' ? undefined : ref.channel)) ?? []) {
+          const score = ref.channel === 'ordinary' ? feature.score : Math.abs(feature.score)
+          min = Math.min(min, score)
+          max = Math.max(max, score)
+        }
       }
     }
     if (!Number.isFinite(min) || !Number.isFinite(max)) { min = 0; max = 1 }
@@ -390,7 +529,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -410,6 +549,11 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     sourceIds: track.sourceIds.filter((id) => sourceIds.has(id)),
     displayGroupId: track.displayGroupId && groupIds.has(track.displayGroupId) ? track.displayGroupId : undefined,
     scaleBindingId: track.scaleBindingId && scaleIds.has(track.scaleBindingId) ? track.scaleBindingId : undefined,
+    signalStrand: track.kind === 'signal' && (track.signalStrand === 'plus' || track.signalStrand === 'minus') ? track.signalStrand : undefined,
+    strandBaseLabel: track.kind === 'signal' && typeof track.strandBaseLabel === 'string' ? track.strandBaseLabel : undefined,
+    negativeColor: track.kind === 'stranded' && typeof track.negativeColor === 'string' ? track.negativeColor : undefined,
+    negativeScaleBindingId: track.kind === 'stranded' && track.negativeScaleBindingId && scaleIds.has(track.negativeScaleBindingId) ? track.negativeScaleBindingId : undefined,
+    strandAutoLinkDisabled: track.kind === 'signal' && track.strandAutoLinkDisabled === true ? true : undefined,
     geneDisplayMode: track.kind === 'genes' && (track.geneDisplayMode === 'collapsed' || track.geneDisplayMode === 'expanded' || track.geneDisplayMode === 'squished')
       ? track.geneDisplayMode
       : track.kind === 'genes' ? 'collapsed' : undefined,
@@ -439,6 +583,16 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
   }
   for (const track of document.tracks) {
     const sourceFormat = document.sources.find((source) => track.sourceIds.includes(source.id))?.format
+    const source = document.sources.find((candidate) => candidate.id === track.sourceIds[0])
+    if (track.kind === 'signal' && !track.signalStrand && source) {
+      const inferred = inferSignalStrand(source.name)
+      if (inferred) {
+        track.signalStrand = inferred.strand
+        track.strandBaseLabel = inferred.baseLabel
+        source.strand = inferred.strand
+        source.strandBaseLabel = inferred.baseLabel
+      }
+    }
     if (track.kind === 'signal' && sourceFormat === 'bam') {
       track.kind = 'alignment'
       track.scaleBindingId = undefined
@@ -450,12 +604,18 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
       track.bamMinMapq = 0
     }
     if (track.kind === 'genes' && track.displayGroupId === 'reference-annotation') track.displayGroupId = undefined
-    if (track.kind === 'signal' && !track.scaleBindingId) {
+    if ((track.kind === 'signal' || track.kind === 'stranded') && !track.scaleBindingId) {
       const binding = { id: crypto.randomUUID(), label: track.label, mode: 'auto-visible' as const, includeZero: true }
       document.scales.push(binding)
       track.scaleBindingId = binding.id
     }
+    if (track.kind === 'stranded' && !track.negativeScaleBindingId) {
+      const binding = { id: crypto.randomUUID(), label: `${track.label} minus`, mode: 'auto-visible' as const, includeZero: true }
+      document.scales.push(binding)
+      track.negativeScaleBindingId = binding.id
+    }
   }
+  if (value.schemaVersion < TRACK_DOCUMENT_VERSION) autoPairStrandedTracks(document)
   pruneDocument(document)
   return document
 }
@@ -467,7 +627,7 @@ export function cloneDocument(document: TrackDocument): TrackDocument {
 function pruneDocument(document: TrackDocument): void {
   const usedSources = new Set(document.tracks.flatMap((track) => track.sourceIds))
   const usedGroups = new Set(document.tracks.map((track) => track.displayGroupId).filter(Boolean))
-  const usedScales = new Set(document.tracks.map((track) => track.scaleBindingId).filter(Boolean))
+  const usedScales = new Set(document.tracks.flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
   document.sources = document.sources.filter((source) => usedSources.has(source.id))
   document.groups = document.groups.filter((group) => usedGroups.has(group.id))
   document.scales = document.scales.filter((scale) => usedScales.has(scale.id))
@@ -511,6 +671,8 @@ function isRegion(value: unknown): value is Region {
 function isSourceSpec(value: unknown): value is TrackSourceSpec {
   return isRecord(value) && typeof value.id === 'string' && typeof value.name === 'string'
     && ['bigwig', 'bedgraph', 'tdf', 'bam', 'bed'].includes(value.format) && Array.isArray(value.files) && value.files.every(isSourceFileSpec)
+    && (value.strand === undefined || value.strand === 'plus' || value.strand === 'minus')
+    && (value.strandBaseLabel === undefined || typeof value.strandBaseLabel === 'string')
 }
 
 function isSourceFileSpec(value: unknown): value is SourceFileSpec {
@@ -522,6 +684,8 @@ function isSourceFileSpec(value: unknown): value is SourceFileSpec {
 function isGroup(value: unknown): value is DisplayGroup {
   return isRecord(value) && typeof value.id === 'string' && typeof value.label === 'string'
     && (value.color === undefined || typeof value.color === 'string')
+    && (value.positiveColor === undefined || typeof value.positiveColor === 'string')
+    && (value.negativeColor === undefined || typeof value.negativeColor === 'string')
     && (value.scaleBehavior === undefined || ['linked', 'independent'].includes(value.scaleBehavior))
 }
 
@@ -531,7 +695,7 @@ function isScale(value: unknown): value is ScaleBinding {
 }
 
 function isTrack(value: unknown, legacyHeight = false): value is TrackSpec {
-  return isRecord(value) && typeof value.id === 'string' && ['signal', 'interval', 'alignment', 'genes'].includes(value.kind)
+  return isRecord(value) && typeof value.id === 'string' && ['signal', 'stranded', 'interval', 'alignment', 'genes'].includes(value.kind)
     && Array.isArray(value.sourceIds) && value.sourceIds.every((id: unknown) => typeof id === 'string')
     && typeof value.label === 'string' && typeof value.color === 'string' && typeof value.enabled === 'boolean'
     && Number.isFinite(value.height) && value.height >= (legacyHeight ? 0.5 : 1) && value.height <= (legacyHeight ? 3 : 100)
@@ -546,6 +710,24 @@ function legacyHeightScore(kind: TrackSpec['kind'], multiplier: number): number 
 
 function cloneSource(source: TrackSourceSpec): TrackSourceSpec {
   return { ...source, files: source.files.map((file) => ({ ...file })) }
+}
+
+function strandBaseKey(label: string): string {
+  return label.toLocaleLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+function scaleChannelRefs(track: TrackSpec): Array<{ track: TrackSpec; channel: SignalScaleChannel; scaleBindingId?: string }> {
+  if (track.kind === 'stranded') return [
+    { track, channel: 'plus', scaleBindingId: track.scaleBindingId },
+    { track, channel: 'minus', scaleBindingId: track.negativeScaleBindingId },
+  ]
+  if (track.kind === 'signal') return [{ track, channel: track.signalStrand ?? 'ordinary', scaleBindingId: track.scaleBindingId }]
+  return []
+}
+
+function setScaleChannelBinding(track: TrackSpec, channel: SignalScaleChannel, scaleBindingId: string): void {
+  if (channel === 'minus' && track.kind === 'stranded') track.negativeScaleBindingId = scaleBindingId
+  else track.scaleBindingId = scaleBindingId
 }
 
 function cloneScale(scale: ScaleBinding): ScaleBinding {

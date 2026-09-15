@@ -83,6 +83,9 @@ export type TrackStatus = 'offline' | 'idle' | 'loading' | 'ready' | 'error'
 /** Runtime-only state. Files and decoded features deliberately never enter the saved document. */
 export interface TrackRuntime {
   id: string
+  trackId: string
+  sourceId: string
+  channel?: 'plus' | 'minus'
   source?: TrackSource
   features: TrackFeature[]
   loadedRegion?: Region
