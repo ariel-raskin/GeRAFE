@@ -36,6 +36,8 @@ import { describeNativeFile, isDesktopApp, NativeFileHandle } from './native-fil
 import type { LocalFileDescriptor } from './native-file.ts'
 import { SUPPORTED_TRACK_DIALOG_EXTENSIONS, SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
 import { migrateLegacyStorage, STORAGE_KEYS } from './storage.ts'
+import { AppUpdateController, createTauriUpdateBackend, updateProgressPercent } from './app-update.ts'
+import type { AppUpdateState } from './app-update.ts'
 
 type Theme = 'light' | 'dark'
 const {
@@ -94,6 +96,14 @@ app.innerHTML = `
             <button class="menu-item" id="stranded-auto-link-menu-item" type="button" role="menuitemcheckbox" aria-checked="true">
               <span>Auto-link stranded signals</span><small id="stranded-auto-link-state">On</small>
             </button>
+          </div>
+        </div>
+        <div class="app-menu" id="help-menu-root">
+          <button class="menu-trigger" id="help-menu-button" type="button" aria-haspopup="menu" aria-expanded="false">Help</button>
+          <div class="menu-popover" id="help-menu-popup" role="menu" hidden>
+            <button class="menu-item" id="check-updates-menu-item" type="button" role="menuitem"><span>Check for updates…</span></button>
+            <span class="menu-separator"></span>
+            <button class="menu-item" id="about-menu-item" type="button" role="menuitem"><span>About GeRAFE</span><small>v${__GERAFE_VERSION__}</small></button>
           </div>
         </div>
       </nav>
@@ -165,6 +175,31 @@ app.innerHTML = `
       <div><button class="dialog-button secondary" id="color-cancel" type="button">Cancel</button><button class="dialog-button primary" type="submit">Set color</button></div>
     </form>
   </div>
+  <div class="update-dialog" id="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-dialog-title" hidden>
+    <section class="update-dialog-card">
+      <header>
+        <img src="/gerafe-icon.png" alt="" />
+        <div><strong id="update-dialog-title">About GeRAFE</strong><span id="update-installed-version">Version ${__GERAFE_VERSION__}</span></div>
+        <button class="update-dialog-close" id="update-dialog-close" type="button" aria-label="Close">×</button>
+      </header>
+      <div class="update-dialog-content">
+        <strong id="update-status-heading">GeRAFE ${__GERAFE_VERSION__}</strong>
+        <p id="update-status-message">Genomic Renderer and Figure Editor</p>
+        <div class="update-release-notes" id="update-release-notes" hidden>
+          <span>What’s new</span>
+          <p id="update-release-notes-text"></p>
+        </div>
+        <div class="update-progress" id="update-progress" hidden>
+          <progress id="update-progress-bar" max="100"></progress>
+          <span id="update-progress-label">Preparing download…</span>
+        </div>
+      </div>
+      <footer>
+        <button class="dialog-button secondary" id="update-later" type="button">Close</button>
+        <button class="dialog-button primary" id="update-primary-action" type="button">Check for updates</button>
+      </footer>
+    </section>
+  </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 `
 
@@ -194,6 +229,17 @@ const trackColorHue = document.querySelector<HTMLInputElement>('#track-color-hue
 const trackColorPreview = document.querySelector<HTMLElement>('#track-color-preview')!
 const colorDialog = document.querySelector<HTMLElement>('#color-dialog')!
 const colorDialogForm = document.querySelector<HTMLFormElement>('#color-dialog-form')!
+const updateDialog = document.querySelector<HTMLElement>('#update-dialog')!
+const updateDialogClose = document.querySelector<HTMLButtonElement>('#update-dialog-close')!
+const updateLater = document.querySelector<HTMLButtonElement>('#update-later')!
+const updatePrimaryAction = document.querySelector<HTMLButtonElement>('#update-primary-action')!
+const updateStatusHeading = document.querySelector<HTMLElement>('#update-status-heading')!
+const updateStatusMessage = document.querySelector<HTMLElement>('#update-status-message')!
+const updateReleaseNotes = document.querySelector<HTMLElement>('#update-release-notes')!
+const updateReleaseNotesText = document.querySelector<HTMLElement>('#update-release-notes-text')!
+const updateProgress = document.querySelector<HTMLElement>('#update-progress')!
+const updateProgressBar = document.querySelector<HTMLProgressElement>('#update-progress-bar')!
+const updateProgressLabel = document.querySelector<HTMLElement>('#update-progress-label')!
 
 const runtimeSources = new Map<string, TrackSource>()
 const selectedTrackIds = new Set<string>()
@@ -205,6 +251,8 @@ let pendingColorGroupId: string | undefined
 let pendingColorChannel: SignalScaleChannel | undefined
 let bottomPaneAutoFit = true
 let colorHsv = { h: 250, s: 62, v: 88 }
+let appUpdater: AppUpdateController | undefined
+let appUpdaterPromise: Promise<AppUpdateController> | undefined
 
 interface OpenedSource {
   source: TrackSource
@@ -349,6 +397,15 @@ document.querySelector<HTMLButtonElement>('#stranded-auto-link-menu-item')!.addE
   if (enabled) store.edit((draft) => { autoPairStrandedTracks(draft) })
   updateStrandedAutoLinkControl()
 })
+document.querySelector<HTMLButtonElement>('#check-updates-menu-item')!.addEventListener('click', () => {
+  closeMenus()
+  openUpdateDialog()
+  void checkForAppUpdates(true)
+})
+document.querySelector<HTMLButtonElement>('#about-menu-item')!.addEventListener('click', () => {
+  closeMenus()
+  openUpdateDialog()
+})
 for (const menu of document.querySelectorAll<HTMLElement>('.app-menu')) {
   const trigger = menu.querySelector<HTMLButtonElement>('.menu-trigger')!
   trigger.addEventListener('click', () => toggleMenu(menu))
@@ -357,10 +414,10 @@ document.addEventListener('pointerdown', (event) => {
   if (!(event.target as Element).closest?.('.app-menu')) closeMenus()
   if (!(event.target as Element).closest?.('.reference-picker')) setReferenceMenu(false)
   if (!(event.target as Element).closest?.('.track-context-menu')) closeTrackContextMenu()
-  if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog')) clearTrackSelection()
+  if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog')) clearTrackSelection()
 })
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') { closeMenus(); setReferenceMenu(false); closeTrackContextMenu(); closeColorDialog() }
+  if (event.key === 'Escape') { closeMenus(); setReferenceMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog() }
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'o') {
     event.preventDefault()
     closeMenus()
@@ -442,6 +499,10 @@ colorDialogForm.addEventListener('submit', (event) => {
 })
 document.querySelector('#color-cancel')!.addEventListener('click', closeColorDialog)
 colorDialog.addEventListener('pointerdown', (event) => { if (event.target === colorDialog) closeColorDialog() })
+updateDialogClose.addEventListener('click', closeUpdateDialog)
+updateLater.addEventListener('click', closeUpdateDialog)
+updateDialog.addEventListener('pointerdown', (event) => { if (event.target === updateDialog) closeUpdateDialog() })
+updatePrimaryAction.addEventListener('click', () => void handleUpdatePrimaryAction())
 app.addEventListener('contextmenu', (event) => event.preventDefault())
 paneResizer.addEventListener('pointerdown', (event) => {
   event.preventDefault()
@@ -480,6 +541,7 @@ dropZone.addEventListener('drop', (event) => {
   void loadFiles(event.dataTransfer?.files)
 })
 if (isDesktopApp()) void bindNativeFileDrop()
+if (isDesktopApp()) window.setTimeout(() => void checkForAppUpdates(false), 1_800)
 
 async function bindNativeFileDrop(): Promise<void> {
   await getCurrentWebview().onDragDropEvent((event) => {
@@ -1186,6 +1248,135 @@ function closeColorDialog(): void {
   colorDialog.hidden = true
   pendingColorGroupId = undefined
   pendingColorChannel = undefined
+}
+
+function openUpdateDialog(): void {
+  updateDialog.hidden = false
+  if (appUpdater) renderAppUpdateState(appUpdater.state)
+  else renderAppUpdateState({ phase: 'idle', currentVersion: __GERAFE_VERSION__, downloadedBytes: 0 })
+  window.setTimeout(() => updatePrimaryAction.focus(), 0)
+}
+
+function closeUpdateDialog(): void {
+  const phase = appUpdater?.state.phase
+  if (phase === 'downloading' || phase === 'restarting') return
+  updateDialog.hidden = true
+}
+
+async function ensureAppUpdater(): Promise<AppUpdateController> {
+  if (appUpdater) return appUpdater
+  if (!isDesktopApp()) throw new Error('Updates are available only in the desktop application.')
+  appUpdaterPromise ??= createTauriUpdateBackend().then((backend) => {
+    const controller = new AppUpdateController(backend, __GERAFE_VERSION__)
+    controller.subscribe(renderAppUpdateState)
+    appUpdater = controller
+    return controller
+  })
+  return appUpdaterPromise
+}
+
+async function checkForAppUpdates(manual: boolean): Promise<void> {
+  try {
+    const controller = await ensureAppUpdater()
+    await controller.check()
+    if (manual || controller.state.phase === 'available') openUpdateDialog()
+  } catch (error) {
+    console.error('Could not initialize GeRAFE updates', error)
+    if (!manual) return
+    updateStatusHeading.textContent = 'Updates unavailable'
+    updateStatusMessage.textContent = isDesktopApp()
+      ? 'GeRAFE could not initialize the update service. Restart the app and try again.'
+      : 'Update checks are available in the installed desktop application.'
+    updateReleaseNotes.hidden = true
+    updateProgress.hidden = true
+    updatePrimaryAction.textContent = isDesktopApp() ? 'Try again' : 'Desktop app only'
+    updatePrimaryAction.disabled = !isDesktopApp()
+  }
+}
+
+async function handleUpdatePrimaryAction(): Promise<void> {
+  if (!isDesktopApp()) return
+  const controller = await ensureAppUpdater()
+  if (controller.state.phase === 'available' || (controller.state.phase === 'error' && controller.state.candidate)) {
+    await controller.install(persistWorkspaceNow)
+    return
+  }
+  await checkForAppUpdates(true)
+}
+
+function renderAppUpdateState(state: Readonly<AppUpdateState>): void {
+  const candidate = state.candidate
+  const busy = state.phase === 'downloading' || state.phase === 'restarting'
+  updateDialogClose.disabled = busy
+  updateLater.disabled = busy
+  updateLater.textContent = state.phase === 'available' ? 'Later' : 'Close'
+  updatePrimaryAction.disabled = state.phase === 'checking' || busy || !isDesktopApp()
+  updateReleaseNotes.hidden = !candidate || !candidate.body
+  updateReleaseNotesText.textContent = candidate?.body?.trim() || ''
+  updateProgress.hidden = state.phase !== 'downloading' && state.phase !== 'restarting'
+
+  if (state.phase === 'checking') {
+    updateStatusHeading.textContent = 'Checking for updates…'
+    updateStatusMessage.textContent = `Installed version ${state.currentVersion}`
+    updatePrimaryAction.textContent = 'Checking…'
+    return
+  }
+  if (state.phase === 'current') {
+    updateStatusHeading.textContent = 'GeRAFE is up to date'
+    updateStatusMessage.textContent = `Version ${state.currentVersion} is the newest published beta.`
+    updatePrimaryAction.textContent = 'Check again'
+    return
+  }
+  if (state.phase === 'available' && candidate) {
+    updateStatusHeading.textContent = `GeRAFE ${candidate.version} is available`
+    updateStatusMessage.textContent = `Installed version ${state.currentVersion} → beta ${candidate.version}`
+    updatePrimaryAction.textContent = 'Update and restart'
+    return
+  }
+  if (state.phase === 'downloading') {
+    const percent = updateProgressPercent(state)
+    updateStatusHeading.textContent = `Downloading GeRAFE ${candidate?.version ?? ''}…`.trim()
+    updateStatusMessage.textContent = 'Your workspace has been saved. GeRAFE will restart after the signed update is installed.'
+    if (percent === undefined) updateProgressBar.removeAttribute('value')
+    else updateProgressBar.value = percent
+    updateProgressLabel.textContent = percent === undefined
+      ? `${formatByteCount(state.downloadedBytes)} downloaded`
+      : `${Math.round(percent)}% · ${formatByteCount(state.downloadedBytes)} of ${formatByteCount(state.totalBytes ?? 0)}`
+    updatePrimaryAction.textContent = 'Installing…'
+    return
+  }
+  if (state.phase === 'restarting') {
+    updateStatusHeading.textContent = 'Update installed'
+    updateStatusMessage.textContent = 'Restarting GeRAFE…'
+    updateProgressBar.value = 100
+    updateProgressLabel.textContent = '100%'
+    updatePrimaryAction.textContent = 'Restarting…'
+    return
+  }
+  if (state.phase === 'error') {
+    updateStatusHeading.textContent = 'Update could not be completed'
+    updateStatusMessage.textContent = state.error ?? 'Try the update again.'
+    updatePrimaryAction.textContent = candidate ? 'Retry update' : 'Try again'
+    return
+  }
+
+  updateStatusHeading.textContent = `GeRAFE ${state.currentVersion}`
+  updateStatusMessage.textContent = isDesktopApp()
+    ? 'Genomic Renderer and Figure Editor · prerelease beta'
+    : 'Update checks are available in the installed desktop application.'
+  updatePrimaryAction.textContent = isDesktopApp() ? 'Check for updates' : 'Desktop app only'
+}
+
+function persistWorkspaceNow(): void {
+  window.clearTimeout(persistTimer)
+  persistTimer = undefined
+  localStorage.setItem(WORKSPACE_KEY, JSON.stringify(store.current))
+}
+
+function formatByteCount(bytes: number): string {
+  if (bytes < 1_024) return `${Math.max(0, bytes)} B`
+  if (bytes < 1_048_576) return `${(bytes / 1_024).toFixed(1)} KB`
+  return `${(bytes / 1_048_576).toFixed(1)} MB`
 }
 
 function visibleLimits(trackId: string): { min: number; max: number } {
