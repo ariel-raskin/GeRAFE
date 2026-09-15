@@ -1,0 +1,70 @@
+name: Bug report
+description: Report a reproducible problem in GeRAFE
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve GeRAFE. Do not upload private, controlled-access, or unpublished genomic data. Use a synthetic or public example whenever possible.
+  - type: input
+    id: version
+    attributes:
+      label: GeRAFE version
+      description: Commit hash, branch, or release version.
+      placeholder: e.g. main at abc1234
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Windows version and any relevant hardware details.
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: dropdown
+    id: format
+    attributes:
+      label: Track format
+      description: Select the most relevant format, if any.
+      options:
+        - Not file-format-specific
+        - BigWig
+        - bedGraph
+        - TDF
+        - BAM plus BAI/CSI
+        - BED
+        - Built-in genes/reference
+        - Workspace
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Give the smallest complete sequence that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Screenshots, console output, or links to public test data. Remove local paths and sensitive information first.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Data-safety confirmation
+      options:
+        - label: I have not attached private, controlled-access, or unpublished genomic data.
+          required: true
