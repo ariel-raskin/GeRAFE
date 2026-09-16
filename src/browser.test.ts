@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chevronExonOverlap, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, phasedArrowPositions, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, phasedArrowPositions, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { InteractionFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 
@@ -38,6 +38,11 @@ describe('track layout and ruler formatting', () => {
   it('centers text line blocks around a track midpoint', () => {
     expect(verticallyCenteredBaseline(0, 100, 1, 15)).toBe(54)
     expect(verticallyCenteredBaseline(0, 100, 2, 15)).toBe(46.5)
+  })
+
+  it('distributes every fit pixel while honoring label-height minimums', () => {
+    expect(distributeFittedPixels([50, 20, 100], [1, 1, 2], 403)).toEqual([108, 78, 217])
+    expect(distributeFittedPixels([50, 50], [1, 1], 80)).toEqual([50, 50])
   })
 })
 
