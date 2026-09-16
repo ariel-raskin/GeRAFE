@@ -99,6 +99,7 @@ export interface TrackQueryOptions {
   bamIncludeSupplementary?: boolean
   matrixResolution?: number
   matrixNormalization?: string
+  matrixMaxDistance?: number
 }
 
 export interface TrackSource {

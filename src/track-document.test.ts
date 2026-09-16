@@ -166,15 +166,25 @@ describe('track document', () => {
       files: [{ name: 'contacts.mcool', size: 84, lastModified: 123, role: 'signal', path: 'C:\\data\\contacts.mcool' }],
     }, { id: 'matrix-track', defaultNormalization: 'weight' })
     Object.assign(track, {
-      matrixDirection: 'down', matrixResolution: 10_000, matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42,
+      matrixDirection: 'down', matrixResolution: 10_000, matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42, matrixPalette: 'warm',
     })
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
     expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
     expect(restored.sources[0]).toMatchObject({ format: 'mcool', name: 'contacts.mcool' })
     expect(restored.tracks.find((item) => item.id === 'matrix-track')).toMatchObject({
       kind: 'matrix', matrixDirection: 'down', matrixResolution: 10_000,
-      matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42,
+      matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42, matrixPalette: 'warm',
     })
+  })
+
+  it('migrates version 10 matrix tracks to the monochrome palette', () => {
+    const legacy = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 1_000_000 }) as any
+    legacy.schemaVersion = 10
+    legacy.tracks.push({
+      id: 'matrix-track', kind: 'matrix', sourceIds: [], label: 'contacts', color: '#6d55e0',
+      enabled: true, height: 80, pane: 'main', matrixDirection: 'up', matrixTransform: 'log1p',
+    })
+    expect(normalizeTrackDocument(legacy).tracks.find((item) => item.id === 'matrix-track')?.matrixPalette).toBe('monochrome')
   })
 
   it('migrates version 6 workspaces to the interaction-aware schema', () => {

@@ -47,6 +47,7 @@ export class NativeMatrixSource implements TrackSource {
         pixelWidth: Math.max(1, Math.round(pixelWidth)),
         resolution: options?.matrixResolution,
         normalization: options?.matrixNormalization ?? this.matrixMetadata.defaultNormalization,
+        maxDistance: options?.matrixMaxDistance,
       },
     })
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')

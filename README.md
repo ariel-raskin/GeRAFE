@@ -176,7 +176,9 @@ BAM track menus provide:
 
 ### Contact-matrix display controls
 
-Right-click a `.hic`, `.cool`, or `.mcool` track to choose automatic or source-specific resolution, select an available normalization, switch between log and linear intensity, set an automatic or fixed maximum, and flip the triangular matrix above or below its baseline. Automatic resolution follows the current genomic span and avoids requesting cells much finer than the display can show.
+Right-click a `.hic`, `.cool`, or `.mcool` track to open compact dropdowns for resolution, normalization, intensity, and color scale. Resolution can follow the visible span automatically or use a source-specific value. Intensity can use an off-diagonal automatic z-maximum or a fixed z-max with either log or linear transformation. Contact cells can use the track's single color or a publication-oriented yellow → red → black scale. The triangular matrix can also be flipped above or below its baseline.
+
+GeRAFE reads genomic coordinates from each Cooler's stored bin table and canonicalizes the triangle orientation of both Cooler and `.hic` cells before drawing. Matrix readers and their indexes are reused across queries, pans use an overscanned window, and contacts too distant to be visible within the track height are omitted from the render payload to keep navigation responsive.
 
 ### Workspaces and persistence
 

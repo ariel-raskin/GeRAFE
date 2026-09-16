@@ -655,6 +655,21 @@ body.is-track-dragging, body.is-track-dragging * { cursor: grabbing !important; 
 .context-item.danger { color: #b14455; }
 .context-item.danger:hover, .context-item.danger:focus-visible { color: white; background: #a64253; }
 .context-separator { display: block; height: 1px; margin: 5px 4px; background: var(--line); }
+.context-submenu > summary { list-style: none; padding-right: 25px; }
+.context-submenu > summary::-webkit-details-marker { display: none; }
+.context-submenu > summary::after {
+  content: '›';
+  position: absolute;
+  right: 9px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  transition: transform .14s ease;
+}
+.context-submenu[open] > summary::after { transform: rotate(90deg); }
+.context-submenu > summary:hover::after, .context-submenu > summary:focus-visible::after { color: white; }
+.context-submenu-items { margin: 1px 0 4px 8px; padding-left: 5px; border-left: 1px solid var(--line); }
+.context-submenu-items .context-item { min-height: 29px; }
 
 .browser-footer {
   min-height: 36px;
