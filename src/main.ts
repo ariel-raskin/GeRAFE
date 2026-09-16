@@ -53,6 +53,7 @@ const {
   strandedAutoLink: STRANDED_AUTO_LINK_KEY,
   groupAutoscale: GROUP_AUTOSCALE_KEY,
   strandedAutoColors: STRANDED_AUTO_COLORS_KEY,
+  upperPaneAutoFit: UPPER_PANE_AUTO_FIT_KEY,
 } = STORAGE_KEYS
 migrateLegacyStorage(localStorage)
 applyTheme(savedTheme())
@@ -122,15 +123,21 @@ app.innerHTML = `
       <input id="workspace-file-input" type="file" accept=".json,.gerafe.json,.locus.json" />
       <input id="relink-file-input" type="file" multiple />
       <form class="locus-form" id="locus-form">
-        <select id="chromosome-select" aria-label="Chromosome"></select>
+        <div class="reference-picker chromosome-picker" id="chromosome-picker">
+          <button class="reference-trigger chromosome-trigger" id="chromosome-button" type="button" aria-haspopup="listbox" aria-expanded="false" title="Choose a chromosome"><span id="chromosome-label"></span><i aria-hidden="true"></i></button>
+          <div class="reference-popover chromosome-popover" id="chromosome-popup" role="listbox" hidden></div>
+        </div>
         <input id="locus-input" aria-label="Gene name or genomic locus" placeholder="Gene or locus" spellcheck="false" />
         <button type="submit" aria-label="Go to locus">Go</button>
       </form>
       <div class="toolbar-spacer"></div>
-      <button class="fit-tracks-button" id="fit-tracks" type="button" title="Fit all upper tracks into the visible upper pane">Fit tracks</button>
+      <div class="fit-tracks-control">
+        <button class="fit-tracks-button" id="fit-tracks" type="button" title="Fit all upper tracks into the visible upper pane">Fit tracks</button>
+        <button class="fit-tracks-auto" id="fit-tracks-auto" type="button" aria-pressed="false" title="Automatically keep upper tracks fitted"><i aria-hidden="true"></i></button>
+      </div>
       <div class="zoom-controls" aria-label="Zoom controls">
         <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
-        <span class="zoom-meter" id="zoom-level" role="status" aria-live="polite" title="Zoom level"><i></i></span>
+        <input class="zoom-meter" id="zoom-level" type="range" min="0" max="100" step="0.1" value="0" aria-label="Zoom level" title="Zoom level" />
         <button id="zoom-in" type="button" aria-label="Zoom in">＋</button>
       </div>
       <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch color theme"></button>
@@ -223,7 +230,10 @@ const bottomPane = document.querySelector<HTMLElement>('#bottom-pane')!
 const paneResizer = document.querySelector<HTMLElement>('#pane-resizer')!
 const mainTrackScroll = document.querySelector<HTMLElement>('#main-track-scroll')!
 const locusInput = document.querySelector<HTMLInputElement>('#locus-input')!
-const chromosomeSelect = document.querySelector<HTMLSelectElement>('#chromosome-select')!
+const chromosomePicker = document.querySelector<HTMLElement>('#chromosome-picker')!
+const chromosomeButton = document.querySelector<HTMLButtonElement>('#chromosome-button')!
+const chromosomeLabel = document.querySelector<HTMLElement>('#chromosome-label')!
+const chromosomePopup = document.querySelector<HTMLElement>('#chromosome-popup')!
 const referencePicker = document.querySelector<HTMLElement>('#reference-picker')!
 const referenceButton = document.querySelector<HTMLButtonElement>('#reference-button')!
 const referenceLabel = document.querySelector<HTMLElement>('#reference-label')!
@@ -259,6 +269,8 @@ const tssIndicatorsToggle = document.querySelector<HTMLInputElement>('#tss-indic
 const strandedAutoLinkToggle = document.querySelector<HTMLInputElement>('#stranded-auto-link-toggle')!
 const groupAutoscaleToggle = document.querySelector<HTMLInputElement>('#group-autoscale-toggle')!
 const strandedAutoColorsToggle = document.querySelector<HTMLInputElement>('#stranded-auto-colors-toggle')!
+const zoomLevel = document.querySelector<HTMLInputElement>('#zoom-level')!
+const fitTracksAuto = document.querySelector<HTMLButtonElement>('#fit-tracks-auto')!
 
 const runtimeSources = new Map<string, TrackSource>()
 const selectedTrackIds = new Set<string>()
@@ -269,6 +281,8 @@ let pendingOpenGroupId: string | undefined
 let pendingColorGroupId: string | undefined
 let pendingColorChannel: SignalScaleChannel | undefined
 let bottomPaneAutoFit = true
+let upperPaneAutoFit = savedUpperPaneAutoFit()
+let upperAutoFitFrame: number | undefined
 let colorHsv = { h: 250, s: 62, v: 88 }
 let appUpdater: AppUpdateController | undefined
 let appUpdaterPromise: Promise<AppUpdateController> | undefined
@@ -289,7 +303,7 @@ const store = new TrackDocumentStore(restoredDocument && restoredDocument.refere
 const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChromosomes, initialRegion, {
   onRegionChange(region) {
     locusInput.value = formatLocus(region)
-    chromosomeSelect.value = region.chr
+    setActiveChromosome(region.chr)
     updateZoomLevel(region)
     store.setViewport(activeReference.id, region)
     void ensureGeneDetails(region.chr)
@@ -341,12 +355,15 @@ store.subscribe((document, reason) => {
   updateUndoControls()
   browser.setSelectedTracks(selectedTrackIds)
   if (bottomPaneAutoFit && reason !== 'viewport') requestAnimationFrame(fitBottomPaneToContent)
+  if (reason !== 'viewport') scheduleUpperAutoFit()
 })
 browser.syncDocument(store.current, runtimeSources)
 if (isDesktopApp()) void restorePersistedSources()
 browser.setSelectedTracks(selectedTrackIds)
 fitBottomPaneToContent()
 window.setTimeout(fitBottomPaneToContent, 0)
+updateUpperAutoFitControl()
+scheduleUpperAutoFit()
 
 populateReferences()
 populateChromosomes(activeChromosomes)
@@ -379,6 +396,13 @@ referencePopup.addEventListener('click', (event) => {
 })
 document.querySelector<HTMLButtonElement>('#reference-import')!.addEventListener('click', () => referenceFileInput.click())
 referenceFileInput.addEventListener('change', () => void importReference(referenceFileInput.files?.[0]))
+chromosomeButton.addEventListener('click', () => setChromosomeMenu(chromosomePopup.hasAttribute('hidden')))
+chromosomePopup.addEventListener('click', (event) => {
+  const option = (event.target as Element).closest<HTMLButtonElement>('[data-chromosome]')
+  if (!option) return
+  setChromosomeMenu(false)
+  switchChromosome(option.dataset.chromosome!)
+})
 
 document.querySelector<HTMLButtonElement>('#open-tracks-menu-item')!.addEventListener('click', () => {
   closeMenus()
@@ -433,12 +457,13 @@ for (const menu of document.querySelectorAll<HTMLElement>('.app-menu')) {
 }
 document.addEventListener('pointerdown', (event) => {
   if (!(event.target as Element).closest?.('.app-menu')) closeMenus()
-  if (!(event.target as Element).closest?.('.reference-picker')) setReferenceMenu(false)
+  if (!(event.target as Element).closest?.('#reference-picker')) setReferenceMenu(false)
+  if (!(event.target as Element).closest?.('#chromosome-picker')) setChromosomeMenu(false)
   if (!(event.target as Element).closest?.('.track-context-menu')) closeTrackContextMenu()
   if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog, #track-options-dialog')) clearTrackSelection()
 })
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') { closeMenus(); setReferenceMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog() }
+  if (event.key === 'Escape') { closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog() }
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'o') {
     event.preventDefault()
     closeMenus()
@@ -469,18 +494,24 @@ document.addEventListener('keydown', (event) => {
   }
 })
 
-chromosomeSelect.addEventListener('change', () => {
-  const chr = chromosomeSelect.value
+function switchChromosome(chr: string): void {
   const length = activeChromosomes.get(chr)
   if (!length) return
   const current = browser.getRegion()
   const span = Math.min(current.end - current.start, length)
   browser.setRegion({ chr, start: Math.max(0, (length - span) / 2), end: Math.max(0, (length - span) / 2) + span })
-})
+}
 
 document.querySelector('#zoom-in')!.addEventListener('click', () => browser.zoom(0.5))
 document.querySelector('#zoom-out')!.addEventListener('click', () => browser.zoom(2))
-document.querySelector('#fit-tracks')!.addEventListener('click', fitUpperTracks)
+zoomLevel.addEventListener('input', () => zoomFromSlider(Number(zoomLevel.value)))
+document.querySelector('#fit-tracks')!.addEventListener('click', () => fitUpperTracks())
+fitTracksAuto.addEventListener('click', () => {
+  upperPaneAutoFit = !upperPaneAutoFit
+  localStorage.setItem(UPPER_PANE_AUTO_FIT_KEY, String(upperPaneAutoFit))
+  updateUpperAutoFitControl()
+  if (upperPaneAutoFit) scheduleUpperAutoFit()
+})
 const themeToggle = document.querySelector<HTMLButtonElement>('#theme-toggle')!
 updateThemeButton(themeToggle)
 themeToggle.addEventListener('click', () => {
@@ -540,10 +571,14 @@ const finishPaneResize = (event: PointerEvent) => {
   if (!paneResizer.hasPointerCapture(event.pointerId)) return
   paneResizer.releasePointerCapture(event.pointerId)
   bottomPane.classList.remove('is-resizing')
+  scheduleUpperAutoFit()
 }
 paneResizer.addEventListener('pointerup', finishPaneResize)
 paneResizer.addEventListener('pointercancel', finishPaneResize)
-window.addEventListener('resize', () => bottomPaneAutoFit ? fitBottomPaneToContent() : setBottomPaneHeight(bottomPane.getBoundingClientRect().height))
+window.addEventListener('resize', () => {
+  bottomPaneAutoFit ? fitBottomPaneToContent() : setBottomPaneHeight(bottomPane.getBoundingClientRect().height)
+  scheduleUpperAutoFit()
+})
 
 for (const eventName of ['dragenter', 'dragover']) {
   dropZone.addEventListener(eventName, (event) => {
@@ -803,13 +838,24 @@ async function restorePersistedSources(): Promise<void> {
 
 function populateChromosomes(chromosomes: ReadonlyMap<string, number>): void {
   const current = browser.getRegion().chr
-  chromosomeSelect.replaceChildren(...[...chromosomes.keys()].map((chr) => {
-    const option = document.createElement('option')
-    option.value = chr
+  chromosomePopup.replaceChildren(...[...chromosomes.keys()].map((chr) => {
+    const option = document.createElement('button')
+    option.type = 'button'
+    option.className = 'reference-option chromosome-option'
+    option.dataset.chromosome = chr
+    option.setAttribute('role', 'option')
+    option.setAttribute('aria-selected', String(chr === current))
     option.textContent = chr
-    option.selected = chr === current
     return option
   }))
+  setActiveChromosome(current)
+}
+
+function setActiveChromosome(chr: string): void {
+  chromosomeLabel.textContent = chr
+  for (const option of chromosomePopup.querySelectorAll<HTMLElement>('[data-chromosome]')) {
+    option.setAttribute('aria-selected', String(option.dataset.chromosome === chr))
+  }
 }
 
 function populateReferences(): void {
@@ -827,10 +873,23 @@ function populateReferences(): void {
 }
 
 function setReferenceMenu(open: boolean): void {
+  if (open) setChromosomeMenu(false)
   referencePopup.hidden = !open
   referenceButton.setAttribute('aria-expanded', String(open))
   referencePicker.classList.toggle('is-open', open)
   if (open) referencePopup.querySelector<HTMLElement>('[aria-selected="true"]')?.focus()
+}
+
+function setChromosomeMenu(open: boolean): void {
+  if (open) {
+    referencePopup.hidden = true
+    referenceButton.setAttribute('aria-expanded', 'false')
+    referencePicker.classList.remove('is-open')
+  }
+  chromosomePopup.hidden = !open
+  chromosomeButton.setAttribute('aria-expanded', String(open))
+  chromosomePicker.classList.toggle('is-open', open)
+  if (open) chromosomePopup.querySelector<HTMLElement>('[aria-selected="true"]')?.focus()
 }
 
 function toggleMenu(menu: HTMLElement): void {
@@ -923,14 +982,17 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const interactionGeneDetail = target.kind === 'interaction' && target.interactionFilterMode === 'genes'
     ? escapeHtml((target.interactionFilterGenes ?? []).join(', '))
     : ''
-  const action = (id: string, label: string, detail = '', disabled = false, danger = false) =>
-    `<button class="context-item${danger ? ' danger' : ''}" data-context-action="${id}" type="button" role="menuitem" ${disabled ? 'disabled' : ''}><span>${label}</span>${detail ? `<small>${detail}</small>` : ''}</button>`
+  const action = (id: string, label: string, detail = '', disabled = false, danger = false) => {
+    const current = detail === 'current' || detail === 'on'
+    const visibleDetail = current || detail === 'off' ? '' : detail
+    return `<button class="context-item${current ? ' is-current' : ''}${danger ? ' danger' : ''}" data-context-action="${id}" type="button" role="menuitem" ${current ? 'aria-current="true"' : ''} ${disabled ? 'disabled' : ''}><span>${label}</span>${visibleDetail ? `<small>${visibleDetail}</small>` : ''}</button>`
+  }
   trackContextMenu.innerHTML = `
     <div class="context-heading"><strong>${one ? escapeHtml(target.label) : `${selected.length} tracks selected`}</strong><span>${one ? (target.kind === 'genes' ? 'Gene annotation' : target.kind === 'interval' ? 'Interval track' : target.kind === 'interaction' ? 'BEDPE interactions' : target.kind === 'alignment' ? 'BAM alignments' : target.kind === 'stranded' ? 'Linked stranded signal' : target.signalStrand ? `${target.signalStrand === 'plus' ? 'Positive' : 'Negative'}-strand signal` : 'Signal track') : 'Shared actions'}</span></div>
     ${one ? action('rename', 'Rename…') : ''}
     ${one && target.kind === 'stranded' ? action('color-plus', 'Set positive-strand color…') + action('color-minus', 'Set negative-strand color…') : action('color', one ? 'Set color…' : 'Set selected colors…')}
     ${action('height', one ? 'Set track height…' : 'Set selected heights…')}
-    ${action('group', selected.length > 1 ? 'Group selected…' : 'Set visual group…')}
+    ${action('group', 'Group selected')}
     ${selected.some((track) => track.displayGroupId) ? action('remove-from-group', selected.length > 1 ? 'Remove selected tracks from groups' : 'Remove from group') : ''}
     <span class="context-separator"></span>
     ${signals.length ? action('scale-auto', 'Scale automatically', 'visible window') : ''}
@@ -952,8 +1014,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     ${one && target.kind === 'interval' ? action('duplicate', 'Duplicate track') : ''}
     ${one && target.kind === 'interval' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
     ${one && target.kind === 'interaction' ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'interaction' ? action('interaction-base-bottom', 'Arc base at bottom', target.interactionDirection === 'down' ? '' : 'current') : ''}
-    ${one && target.kind === 'interaction' ? action('interaction-base-top', 'Arc base at top', target.interactionDirection === 'down' ? 'current' : '') : ''}
+    ${one && target.kind === 'interaction' ? action('interaction-flip', 'Flip arcs upside down', target.interactionDirection === 'down' ? 'current' : '') : ''}
     ${one && target.kind === 'interaction' ? '<span class="context-separator"></span>' : ''}
     ${one && target.kind === 'interaction' ? action('interaction-filter-all', 'Show all interactions', !target.interactionFilterMode || target.interactionFilterMode === 'all' ? 'current' : '') : ''}
     ${one && target.kind === 'interaction' ? action('interaction-filter-genes', 'Filter by gene symbols…', interactionGeneDetail) : ''}
@@ -1011,8 +1072,11 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
   const hasMinusColor = members.some((track) => track.kind === 'stranded' || (track.kind === 'signal' && track.signalStrand === 'minus'))
   const memberIds = new Set(members.map((track) => track.id))
   const selectedOutside = store.current.tracks.filter((track) => track.kind !== 'genes' && selectedTrackIds.has(track.id) && !memberIds.has(track.id))
-  const action = (id: string, label: string, detail = '', disabled = false, danger = false) =>
-    `<button class="context-item${danger ? ' danger' : ''}" data-context-action="${id}" type="button" role="menuitem" ${disabled ? 'disabled' : ''}><span>${label}</span>${detail ? `<small>${detail}</small>` : ''}</button>`
+  const action = (id: string, label: string, detail = '', disabled = false, danger = false) => {
+    const current = detail === 'current' || detail === 'on'
+    const visibleDetail = current || detail === 'off' ? '' : detail
+    return `<button class="context-item${current ? ' is-current' : ''}${danger ? ' danger' : ''}" data-context-action="${id}" type="button" role="menuitem" ${current ? 'aria-current="true"' : ''} ${disabled ? 'disabled' : ''}><span>${label}</span>${visibleDetail ? `<small>${visibleDetail}</small>` : ''}</button>`
+  }
   trackContextMenu.innerHTML = `
     <div class="context-heading"><strong>${escapeHtml(group.label)}</strong><span>${members.length} track${members.length === 1 ? '' : 's'} · group options</span></div>
     ${action('group-select', 'Select tracks in group')}
@@ -1133,9 +1197,9 @@ function handleTrackContextAction(event: MouseEvent): void {
     const mode = command.slice(9) as 'collapsed' | 'expanded' | 'squished'
     store.edit((draft) => { const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'interval'); if (track) track.intervalDisplayMode = mode })
   }
-  if (command === 'interaction-base-bottom' || command === 'interaction-base-top') store.edit((draft) => {
+  if (command === 'interaction-flip') store.edit((draft) => {
     const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'interaction')
-    if (track) track.interactionDirection = command === 'interaction-base-top' ? 'down' : 'up'
+    if (track) track.interactionDirection = track.interactionDirection === 'down' ? 'up' : 'down'
   })
   if (command === 'interaction-filter-all' || command === 'interaction-filter-visible') store.edit((draft) => {
     const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'interaction')
@@ -1298,9 +1362,12 @@ function setTrackHeights(trackIds: readonly string[]): void {
   })
 }
 
-function fitUpperTracks(): void {
+function fitUpperTracks(announce = true): void {
   const upperTracks = store.current.tracks.filter((track) => track.enabled && track.pane === 'main')
-  if (!upperTracks.length) return showToast('There are no upper tracks to fit.')
+  if (!upperTracks.length) {
+    if (announce) showToast('There are no upper tracks to fit.')
+    return
+  }
   const visibleHeight = Math.max(40, mainTrackScroll.clientHeight - bottomPane.getBoundingClientRect().height - headerCanvas.getBoundingClientRect().height)
   // BED tracks deliberately keep their compact label-fitting height. Fit the
   // quantitative, alignment, and gene tracks into the remaining space.
@@ -1324,7 +1391,22 @@ function fitUpperTracks(): void {
   })
   mainTrackScroll.scrollTop = 0
   requestAnimationFrame(() => { mainTrackScroll.scrollTop = 0 })
-  showToast(`Fit ${upperTracks.length} upper track${upperTracks.length === 1 ? '' : 's'} to the visible pane.`)
+  if (announce) showToast(`Fit ${upperTracks.length} upper track${upperTracks.length === 1 ? '' : 's'} to the visible pane.`)
+}
+
+function scheduleUpperAutoFit(): void {
+  if (!upperPaneAutoFit) return
+  if (upperAutoFitFrame !== undefined) cancelAnimationFrame(upperAutoFitFrame)
+  upperAutoFitFrame = requestAnimationFrame(() => {
+    upperAutoFitFrame = undefined
+    fitUpperTracks(false)
+  })
+}
+
+function updateUpperAutoFitControl(): void {
+  fitTracksAuto.classList.toggle('is-active', upperPaneAutoFit)
+  fitTracksAuto.setAttribute('aria-pressed', String(upperPaneAutoFit))
+  fitTracksAuto.title = upperPaneAutoFit ? 'Automatic track fitting is on' : 'Automatically keep upper tracks fitted'
 }
 
 function openColorDialog(title: string, initialColor: string): void {
@@ -1774,6 +1856,10 @@ function savedStrandedAutoColors(): boolean {
   return localStorage.getItem(STRANDED_AUTO_COLORS_KEY) !== 'false'
 }
 
+function savedUpperPaneAutoFit(): boolean {
+  return localStorage.getItem(UPPER_PANE_AUTO_FIT_KEY) === 'true'
+}
+
 function updateTrackOptionsControls(): void {
   tssIndicatorsToggle.checked = savedTssIndicators()
   strandedAutoLinkToggle.checked = savedStrandedAutoLink()
@@ -1796,11 +1882,23 @@ function updateZoomLevel(region: { chr: string; start: number; end: number }): v
   if (!chromosomeLength) return
   const span = Math.max(1, region.end - region.start)
   const percentage = chromosomeLength / span * 100
-  const label = document.querySelector<HTMLElement>('#zoom-level')!
-  const position = Math.max(0, Math.min(1, Math.log10(Math.max(100, percentage) / 100) / 5))
-  label.style.setProperty('--zoom-position', String(position))
-  label.setAttribute('aria-label', `Zoom: ${formatZoomPercentage(percentage)}`)
-  label.title = `${percentage.toLocaleString(undefined, { maximumFractionDigits: 1 })}% zoom · ${formatBases(span)} visible · 100% shows the full chromosome`
+  const minimumSpan = Math.min(10, chromosomeLength)
+  const position = chromosomeLength === minimumSpan
+    ? 0
+    : Math.log(chromosomeLength / Math.min(chromosomeLength, span)) / Math.log(chromosomeLength / minimumSpan)
+  zoomLevel.value = String(Math.max(0, Math.min(100, position * 100)))
+  zoomLevel.setAttribute('aria-label', `Zoom: ${formatZoomPercentage(percentage)}`)
+  zoomLevel.title = `${percentage.toLocaleString(undefined, { maximumFractionDigits: 1 })}% zoom · ${formatBases(span)} visible · 100% shows the full chromosome`
+}
+
+function zoomFromSlider(value: number): void {
+  const current = browser.getRegion()
+  const chromosomeLength = activeChromosomes.get(current.chr)
+  if (!chromosomeLength) return
+  const minimumSpan = Math.min(10, chromosomeLength)
+  const position = Math.max(0, Math.min(1, value / 100))
+  const targetSpan = chromosomeLength * Math.pow(minimumSpan / chromosomeLength, position)
+  browser.zoom(targetSpan / Math.max(1, current.end - current.start))
 }
 
 function fitBottomPaneToContent(): void {

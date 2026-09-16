@@ -226,21 +226,30 @@ button, label { -webkit-tap-highlight-color: transparent; }
   height: 36px;
   display: flex;
   align-items: stretch;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--field-line);
   border-radius: 6px;
   background: var(--field);
 }
 
-.locus-form select {
+.chromosome-picker {
   width: 78px;
-  border: 0;
+  flex: none;
   border-right: 1px solid var(--line);
-  padding: 0 8px;
-  color: var(--ink);
-  background: var(--field-muted);
-  outline: none;
-  cursor: pointer;
+}
+.chromosome-trigger {
+  width: 100%;
+  height: 34px;
+  border-radius: 5px 0 0 5px;
+  padding: 0 9px;
+}
+.chromosome-popover {
+  top: 39px;
+  width: 150px;
+  max-height: min(420px, calc(100vh - 90px));
+}
+.chromosome-option {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 .locus-form input {
@@ -255,12 +264,15 @@ button, label { -webkit-tap-highlight-color: transparent; }
 }
 
 .locus-form:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(104,78,224,.1); }
-.locus-form button { border: 0; padding: 0 14px; color: white; background: var(--accent); font-size: 11px; font-weight: 700; cursor: pointer; }
+.locus-form > button[type='submit'] { border: 0; border-radius: 0 5px 5px 0; padding: 0 14px; color: white; background: var(--accent); font-size: 11px; font-weight: 700; cursor: pointer; }
 
 .zoom-controls { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; letter-spacing: .04em; }
-.zoom-meter { --zoom-position: 0; position: relative; width: 46px; height: 18px; display: inline-block; }
-.zoom-meter::before { content: ''; position: absolute; inset: 8px 2px auto; height: 1px; background: var(--field-line); }
-.zoom-meter i { position: absolute; top: 4px; left: calc(2px + (100% - 12px) * var(--zoom-position)); width: 10px; height: 10px; border: 2px solid var(--accent); border-radius: 50%; background: var(--paper); box-shadow: 0 0 0 1px color-mix(in srgb, var(--canvas-bg) 70%, transparent); }
+.zoom-meter { width: 48px; height: 18px; margin: 0; padding: 0; appearance: none; background: transparent; cursor: ew-resize; }
+.zoom-meter::-webkit-slider-runnable-track { height: 1px; background: var(--field-line); }
+.zoom-meter::-webkit-slider-thumb { width: 11px; height: 11px; margin-top: -5px; border: 2px solid var(--accent); border-radius: 50%; appearance: none; background: var(--paper); box-shadow: 0 0 0 1px color-mix(in srgb, var(--canvas-bg) 70%, transparent); }
+.zoom-meter::-moz-range-track { height: 1px; background: var(--field-line); }
+.zoom-meter::-moz-range-thumb { width: 8px; height: 8px; border: 2px solid var(--accent); border-radius: 50%; background: var(--paper); box-shadow: 0 0 0 1px color-mix(in srgb, var(--canvas-bg) 70%, transparent); }
+.zoom-meter:focus-visible { outline: none; filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent) 55%, transparent)); }
 .zoom-controls button { width: 30px; height: 30px; border: 0; border-radius: 5px; color: var(--button-ink); background: var(--button-muted); font-size: 16px; cursor: pointer; }
 .zoom-controls button:hover { color: white; background: var(--accent); }
 
@@ -277,17 +289,23 @@ button, label { -webkit-tap-highlight-color: transparent; }
 }
 .theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
 
-.fit-tracks-button {
+.fit-tracks-control { height: 30px; display: flex; align-items: stretch; }
+.fit-tracks-button, .fit-tracks-auto {
   height: 30px;
   border: 1px solid var(--line);
-  border-radius: 5px;
-  padding: 0 10px;
   color: var(--button-ink);
   background: var(--button-muted);
-  font-size: 10px;
   cursor: pointer;
 }
-.fit-tracks-button:hover { border-color: var(--accent); color: white; background: var(--accent); }
+.fit-tracks-button { border-radius: 5px 0 0 5px; padding: 0 9px; font-size: 10px; }
+.fit-tracks-auto { position: relative; width: 27px; border-left: 0; border-radius: 0 5px 5px 0; padding: 0; }
+.fit-tracks-auto::before { content: ''; position: absolute; top: 5px; bottom: 5px; left: 0; width: 1px; background: var(--line); }
+.fit-tracks-auto i { display: block; width: 8px; height: 8px; margin: auto; border: 1px solid var(--muted); border-radius: 50%; background: transparent; transition: background .12s ease, border-color .12s ease, box-shadow .12s ease; }
+.fit-tracks-auto.is-active i { border-color: var(--accent); background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.fit-tracks-button:hover, .fit-tracks-auto:hover { border-color: var(--accent); color: white; background: var(--accent); }
+.fit-tracks-auto:hover::before { background: transparent; }
+.fit-tracks-auto:hover i { border-color: white; }
+.fit-tracks-auto.is-active:hover i { background: white; box-shadow: none; }
 
 .browser-body {
   position: relative;
@@ -610,6 +628,7 @@ body.is-track-dragging, body.is-track-dragging * { cursor: grabbing !important; 
 .context-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .context-heading span { color: var(--muted); font-size: 9px; }
 .context-item {
+  position: relative;
   width: 100%;
   min-height: 32px;
   display: flex;
@@ -625,8 +644,12 @@ body.is-track-dragging, body.is-track-dragging * { cursor: grabbing !important; 
   font-size: 11px;
   cursor: pointer;
 }
+.context-item.is-current { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.context-item.is-current::after { content: '✓'; position: absolute; right: 9px; color: var(--accent); font-size: 11px; font-weight: 800; }
+.context-item.is-current > span { padding-right: 20px; }
 .context-item small { color: var(--muted); font-size: 9px; }
 .context-item:hover, .context-item:focus-visible { color: white; background: var(--accent); outline: none; }
+.context-item.is-current:hover::after, .context-item.is-current:focus-visible::after { color: white; }
 .context-item:hover small, .context-item:focus-visible small { color: rgba(255,255,255,.78); }
 .context-item:disabled { opacity: .38; cursor: default; }
 .context-item:disabled:hover { color: var(--ink); background: transparent; }
