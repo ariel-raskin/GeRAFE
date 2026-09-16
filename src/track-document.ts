@@ -1,11 +1,11 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 6 as const
+export const TRACK_DOCUMENT_VERSION = 7 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
 
-export type SourceFormat = 'bigwig' | 'bedgraph' | 'tdf' | 'bam' | 'bed'
+export type SourceFormat = 'bigwig' | 'bedgraph' | 'tdf' | 'bam' | 'bed' | 'bedpe'
 export type ScaleMode = 'auto-visible' | 'fixed'
 export type SignalStrand = 'plus' | 'minus'
 export type SignalScaleChannel = 'ordinary' | SignalStrand
@@ -47,7 +47,7 @@ export interface ScaleBinding {
 
 export interface TrackSpec {
   id: string
-  kind: 'signal' | 'stranded' | 'interval' | 'alignment' | 'genes'
+  kind: 'signal' | 'stranded' | 'interval' | 'interaction' | 'alignment' | 'genes'
   sourceIds: string[]
   label: string
   color: string
@@ -344,6 +344,27 @@ export function addIntervalTrack(
   return track
 }
 
+export function addInteractionTrack(
+  draft: TrackDocument,
+  source: TrackSourceSpec,
+  options: { id?: string; label?: string; color?: string } = {},
+): TrackSpec {
+  const track: TrackSpec = {
+    id: options.id ?? crypto.randomUUID(),
+    kind: 'interaction',
+    sourceIds: [source.id],
+    label: options.label ?? source.name,
+    color: options.color ?? TRACK_COLORS[draft.tracks.filter((item) => item.kind !== 'genes').length % TRACK_COLORS.length],
+    enabled: true,
+    height: 32,
+    pane: 'main',
+  }
+  draft.sources.push(source)
+  const bottomIndex = draft.tracks.findIndex((item) => item.pane === 'bottom')
+  draft.tracks.splice(bottomIndex < 0 ? draft.tracks.length : bottomIndex, 0, track)
+  return track
+}
+
 export function addAlignmentTrack(
   draft: TrackDocument,
   source: TrackSourceSpec,
@@ -553,7 +574,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -695,7 +716,7 @@ function isRegion(value: unknown): value is Region {
 
 function isSourceSpec(value: unknown): value is TrackSourceSpec {
   return isRecord(value) && typeof value.id === 'string' && typeof value.name === 'string'
-    && ['bigwig', 'bedgraph', 'tdf', 'bam', 'bed'].includes(value.format) && Array.isArray(value.files) && value.files.every(isSourceFileSpec)
+    && ['bigwig', 'bedgraph', 'tdf', 'bam', 'bed', 'bedpe'].includes(value.format) && Array.isArray(value.files) && value.files.every(isSourceFileSpec)
     && (value.strand === undefined || value.strand === 'plus' || value.strand === 'minus')
     && (value.strandBaseLabel === undefined || typeof value.strandBaseLabel === 'string')
 }
@@ -720,7 +741,7 @@ function isScale(value: unknown): value is ScaleBinding {
 }
 
 function isTrack(value: unknown, legacyHeight = false): value is TrackSpec {
-  return isRecord(value) && typeof value.id === 'string' && ['signal', 'stranded', 'interval', 'alignment', 'genes'].includes(value.kind)
+  return isRecord(value) && typeof value.id === 'string' && ['signal', 'stranded', 'interval', 'interaction', 'alignment', 'genes'].includes(value.kind)
     && Array.isArray(value.sourceIds) && value.sourceIds.every((id: unknown) => typeof id === 'string')
     && typeof value.label === 'string' && typeof value.color === 'string' && typeof value.enabled === 'boolean'
     && Number.isFinite(value.height) && value.height >= (legacyHeight ? 0.5 : 1) && value.height <= (legacyHeight ? 3 : 100)

@@ -40,6 +40,7 @@ GeRAFE is currently developed and tested as a Windows desktop application.
 - Automatic positive/negative signal pairing from common filename markers such as `plus`/`minus` and `pos`/`neg`, with one shared zero axis, red/blue strand colors, and independently scaled strand magnitudes.
 - Stranded pairs remain compatible with visual groups; grouped autoscaling and color controls keep ordinary, positive, and negative channels separate.
 - Collapsed, expanded, and squished layouts for interval and gene tracks.
+- Arc-style BEDPE interaction tracks with endpoint anchors, score-weighted emphasis, optional item colors, and interchromosomal markers.
 - Persistent light and dark themes.
 - Automatic restoration of local desktop tracks between launches, with relinking when a source has moved or changed.
 - Versioned `.gerafe.json` workspace files with track layout, source provenance, and display settings, plus 100-step undo/redo while editing. Legacy `.locus.json` workspaces remain supported.
@@ -53,6 +54,7 @@ GeRAFE is currently developed and tested as a Windows desktop application.
 | TDF | `.tdf` | Indexed IGV signal tiles, including compressed and uncompressed fixed-step, variable-step, BED, and BED-with-name tiles |
 | BAM | `.bam` with `.bai` or `.csi` | Coverage and packed read alignments with CIGAR geometry, pairing, mismatches, indels, and splice gaps |
 | BED | `.bed` | BED3–BED12 intervals, blocks, thick regions, strand, labels, scores, and item colors |
+| BEDPE | `.bedpe` | Paired genomic interactions as arcs and anchor blocks; interchromosomal contacts use labeled markers |
 
 On desktop, GeRAFE automatically looks beside a BAM for conventional `sample.bam.bai`, `sample.bai`, `sample.bam.csi`, and `sample.csi` index names. When using the browser development build, select the BAM and its index together.
 
@@ -176,6 +178,7 @@ Use **File → Save workspace…** to export a `.gerafe.json` document and **Ope
 - The desktop application and release installer are currently built and tested on Windows x64 only.
 - Release updates have a required Tauri updater signature but not yet a Windows Authenticode certificate, so SmartScreen may warn on the first installer download.
 - The supported track formats are limited to those listed above.
+- BEDPE is currently an in-memory arc track for files up to 50 MB, with at most 2,000 highest-scoring interactions drawn per visible window. Dense `.hic` and `.cool`/`.mcool` matrix heatmaps are not yet supported.
 - Custom references provide coordinate navigation but do not automatically include gene annotations or cytobands.
 - Individual BAM reads are drawn below a 250 kb visible span; BAM requests are limited to 2 Mb to avoid unbounded pileups.
 - Mismatches can be read from BAM MD tags. Reconstructing mismatches for BAMs without MD tags is unavailable because reference-sequence bases are not currently loaded.

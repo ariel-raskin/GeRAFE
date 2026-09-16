@@ -4,6 +4,7 @@ import { GenomeBrowser, heightScoreForPixels, trackPixelHeight } from './browser
 import { BedGraphSource } from './data/bedgraph.ts'
 import { gzipText } from './data/gzip.ts'
 import { BedSource } from './data/bed.ts'
+import { BedPeSource } from './data/bedpe.ts'
 import { BigWigSource } from './data/bigwig.ts'
 import { TdfSource } from './data/tdf.ts'
 import { BamAlignmentSource, findBamIndex } from './data/bam.ts'
@@ -14,6 +15,7 @@ import type { ReferenceGenome, StoredReferenceGenome } from './reference.ts'
 import {
   addSignalTrack,
   addIntervalTrack,
+  addInteractionTrack,
   addAlignmentTrack,
   applyAutomaticStrandedColors,
   autoPairStrandedTracks,
@@ -274,7 +276,7 @@ let appUpdaterPromise: Promise<AppUpdateController> | undefined
 interface OpenedSource {
   source: TrackSource
   sourceSpec: TrackSourceSpec
-  kind: 'signal' | 'interval' | 'alignment'
+  kind: 'signal' | 'interval' | 'interaction' | 'alignment'
 }
 
 const initialRegion = restoredDocument && restoredDocument.referenceId === activeReference.id
@@ -586,7 +588,8 @@ async function loadFiles(files: FileList | null | undefined): Promise<void> {
       runtimeSources.set(sourceSpec.id, source)
       store.edit((draft) => {
         const added = kind === 'interval' ? addIntervalTrack(draft, sourceSpec, { id: trackId })
-          : kind === 'alignment' ? addAlignmentTrack(draft, sourceSpec, { id: trackId })
+          : kind === 'interaction' ? addInteractionTrack(draft, sourceSpec, { id: trackId })
+            : kind === 'alignment' ? addAlignmentTrack(draft, sourceSpec, { id: trackId })
             : addSignalTrack(draft, sourceSpec, { id: trackId, displayGroupId: destinationGroupId, autoPair: savedStrandedAutoLink(), autoStrandColors: savedStrandedAutoColors() })
         if (destinationGroupId) addTracksToGroup(draft, destinationGroupId, [added.id])
       })
@@ -621,6 +624,11 @@ async function sourceFromFile(file: File, selected: readonly File[]): Promise<Op
     sourceSpec: makeSourceSpec(file, 'bed'),
     kind: 'interval',
   }
+  if (name.endsWith('.bedpe')) return {
+    source: await BedPeSource.fromFile(file),
+    sourceSpec: makeSourceSpec(file, 'bedpe'),
+    kind: 'interaction',
+  }
   if (name.endsWith('.bam')) {
     const index = findBamIndex(file, selected)
     if (!index) throw new Error(`${file.name}: select its .bai or .csi index at the same time.`)
@@ -630,7 +638,7 @@ async function sourceFromFile(file: File, selected: readonly File[]): Promise<Op
       kind: 'alignment',
     }
   }
-  throw new Error(`${file.name}: supported data files are .bw/.bigWig, .bedGraph/.bedGraph.gz, .tdf, indexed .bam, and .bed.`)
+  throw new Error(`${file.name}: supported data files are .bw/.bigWig, .bedGraph/.bedGraph.gz, .tdf, indexed .bam, .bed, and .bedpe.`)
 }
 
 function makeSourceSpec(file: File | LocalFileDescriptor, format: SourceFormat, index?: File | LocalFileDescriptor): TrackSourceSpec {
@@ -677,7 +685,8 @@ async function loadNativePaths(paths: readonly string[]): Promise<void> {
       runtimeSources.set(sourceSpec.id, source)
       store.edit((draft) => {
         const added = kind === 'interval' ? addIntervalTrack(draft, sourceSpec, { id: trackId })
-          : kind === 'alignment' ? addAlignmentTrack(draft, sourceSpec, { id: trackId })
+          : kind === 'interaction' ? addInteractionTrack(draft, sourceSpec, { id: trackId })
+            : kind === 'alignment' ? addAlignmentTrack(draft, sourceSpec, { id: trackId })
             : addSignalTrack(draft, sourceSpec, { id: trackId, displayGroupId: destinationGroupId, autoPair: savedStrandedAutoLink(), autoStrandColors: savedStrandedAutoColors() })
         if (destinationGroupId) addTracksToGroup(draft, destinationGroupId, [added.id])
       })
@@ -712,6 +721,11 @@ async function sourceFromNativeFile(file: LocalFileDescriptor, selected: readonl
     sourceSpec: makeSourceSpec(file, 'bed'),
     kind: 'interval',
   }
+  if (name.endsWith('.bedpe')) return {
+    source: await BedPeSource.fromFile(nativeTextInput(file, handle)),
+    sourceSpec: makeSourceSpec(file, 'bedpe'),
+    kind: 'interaction',
+  }
   if (name.endsWith('.bam')) {
     const index = findNativeBamIndex(file, selected) ?? await findAdjacentNativeBamIndex(file)
     if (!index) throw new Error(`${file.name}: no adjacent .bai/.csi was found; select the BAM and its index together.`)
@@ -721,7 +735,7 @@ async function sourceFromNativeFile(file: LocalFileDescriptor, selected: readonl
       kind: 'alignment',
     }
   }
-  throw new Error(`${file.name}: supported data files are .bw/.bigWig, .bedGraph/.bedGraph.gz, .tdf, indexed .bam, and .bed.`)
+  throw new Error(`${file.name}: supported data files are .bw/.bigWig, .bedGraph/.bedGraph.gz, .tdf, indexed .bam, .bed, and .bedpe.`)
 }
 
 function nativeTextInput(file: LocalFileDescriptor, handle: NativeFileHandle): { name: string; size: number; text(): Promise<string> } {
@@ -900,7 +914,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const action = (id: string, label: string, detail = '', disabled = false, danger = false) =>
     `<button class="context-item${danger ? ' danger' : ''}" data-context-action="${id}" type="button" role="menuitem" ${disabled ? 'disabled' : ''}><span>${label}</span>${detail ? `<small>${detail}</small>` : ''}</button>`
   trackContextMenu.innerHTML = `
-    <div class="context-heading"><strong>${one ? escapeHtml(target.label) : `${selected.length} tracks selected`}</strong><span>${one ? (target.kind === 'genes' ? 'Gene annotation' : target.kind === 'interval' ? 'Interval track' : target.kind === 'alignment' ? 'BAM alignments' : target.kind === 'stranded' ? 'Linked stranded signal' : target.signalStrand ? `${target.signalStrand === 'plus' ? 'Positive' : 'Negative'}-strand signal` : 'Signal track') : 'Shared actions'}</span></div>
+    <div class="context-heading"><strong>${one ? escapeHtml(target.label) : `${selected.length} tracks selected`}</strong><span>${one ? (target.kind === 'genes' ? 'Gene annotation' : target.kind === 'interval' ? 'Interval track' : target.kind === 'interaction' ? 'BEDPE interactions' : target.kind === 'alignment' ? 'BAM alignments' : target.kind === 'stranded' ? 'Linked stranded signal' : target.signalStrand ? `${target.signalStrand === 'plus' ? 'Positive' : 'Negative'}-strand signal` : 'Signal track') : 'Shared actions'}</span></div>
     ${one ? action('rename', 'Rename…') : ''}
     ${one && target.kind === 'stranded' ? action('color-plus', 'Set positive-strand color…') + action('color-minus', 'Set negative-strand color…') : action('color', one ? 'Set color…' : 'Set selected colors…')}
     ${action('height', one ? 'Set track height…' : 'Set selected heights…')}
@@ -925,6 +939,9 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     ${one && target.kind === 'interval' ? action('interval-squished', 'Squished interval view', target.intervalDisplayMode === 'squished' ? 'current' : '') : ''}
     ${one && target.kind === 'interval' ? action('duplicate', 'Duplicate track') : ''}
     ${one && target.kind === 'interval' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
+    ${one && target.kind === 'interaction' ? '<span class="context-separator"></span>' : ''}
+    ${one && target.kind === 'interaction' ? action('duplicate', 'Duplicate track') : ''}
+    ${one && target.kind === 'interaction' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
     ${one && target.kind === 'alignment' ? '<span class="context-separator"></span>' : ''}
     ${one && target.kind === 'alignment' ? action('bam-view-both', 'Coverage and alignments', target.bamViewMode === 'both' || !target.bamViewMode ? 'current' : '') : ''}
     ${one && target.kind === 'alignment' ? action('bam-view-coverage', 'Coverage only', target.bamViewMode === 'coverage' ? 'current' : '') : ''}
@@ -1495,7 +1512,7 @@ async function applyRelink(id: string, opened: OpenedSource, channel?: 'plus' | 
     const track = store.current.tracks.find((item) => item.id === id)
     if (!track || track.kind === 'genes') throw new Error('This track cannot be relinked.')
     const expectedKind = track.kind === 'stranded' ? 'signal' : track.kind
-    if (expectedKind !== opened.kind) throw new Error(`Choose another ${track.kind === 'interval' ? 'BED interval' : track.kind === 'alignment' ? 'BAM and matching index' : 'signal'} file for this track.`)
+    if (expectedKind !== opened.kind) throw new Error(`Choose another ${track.kind === 'interval' ? 'BED interval' : track.kind === 'interaction' ? 'BEDPE interaction' : track.kind === 'alignment' ? 'BAM and matching index' : 'signal'} file for this track.`)
     const { source, sourceSpec } = opened
     const sourceIndex = track.kind === 'stranded' && channel === 'minus' ? 1 : 0
     const expectedSourceId = track.sourceIds[sourceIndex]

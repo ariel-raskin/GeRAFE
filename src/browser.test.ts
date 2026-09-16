@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { chevronExonOverlap, formatCoordinate, formatScore, heightScoreForPixels, phasedArrowPositions, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { chevronExonOverlap, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, phasedArrowPositions, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import type { InteractionFeature } from './types.ts'
 
 describe('gene direction arrow geometry', () => {
   it('keeps arrow phase attached to the transcript while panning', () => {
@@ -36,5 +37,22 @@ describe('track layout and ruler formatting', () => {
   it('centers text line blocks around a track midpoint', () => {
     expect(verticallyCenteredBaseline(0, 100, 1, 15)).toBe(54)
     expect(verticallyCenteredBaseline(0, 100, 2, 15)).toBe(46.5)
+  })
+})
+
+describe('interaction rendering helpers', () => {
+  it('bounds arc height while retaining span emphasis', () => {
+    expect(interactionArcHeight(4, 100)).toBeCloseTo(8.4)
+    expect(interactionArcHeight(100, 100)).toBeGreaterThan(8)
+    expect(interactionArcHeight(100_000, 100)).toBe(86)
+  })
+
+  it('deterministically retains the strongest interactions in a dense window', () => {
+    const interactions = [1, 9, 4].map((score, index) => ({
+      featureType: 'interaction', start: index, end: index + 1,
+      chrom1: 'chr1', start1: index, end1: index + 1,
+      chrom2: 'chr1', start2: index + 10, end2: index + 11, score,
+    } satisfies InteractionFeature))
+    expect(selectInteractionFeatures(interactions, 2).map((feature) => feature.score)).toEqual([9, 4])
   })
 })

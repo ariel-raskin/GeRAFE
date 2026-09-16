@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   addSignalTrack,
   addAlignmentTrack,
+  addInteractionTrack,
   addIntervalTrack,
   applyAutomaticStrandedColors,
   assignDisplayGroup,
@@ -125,8 +126,26 @@ describe('track document', () => {
     legacy.schemaVersion = 1
     for (const track of legacy.tracks) track.height = 1
     const restored = normalizeTrackDocument(legacy)
-    expect(restored.schemaVersion).toBe(6)
+    expect(restored.schemaVersion).toBe(7)
     expect(restored.tracks.every((track) => track.height >= 30 && track.height <= 33)).toBe(true)
+  })
+
+  it('persists BEDPE interaction tracks across workspace normalization', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
+    addInteractionTrack(document, {
+      id: 'bedpe-source', name: 'loops.bedpe', format: 'bedpe',
+      files: [{ name: 'loops.bedpe', size: 42, lastModified: 123, role: 'signal', path: 'C:\\data\\loops.bedpe' }],
+    }, { id: 'interaction-track' })
+    const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
+    expect(restored.schemaVersion).toBe(7)
+    expect(restored.sources[0]).toMatchObject({ format: 'bedpe', name: 'loops.bedpe' })
+    expect(restored.tracks.find((track) => track.id === 'interaction-track')).toMatchObject({ kind: 'interaction', height: 32 })
+  })
+
+  it('migrates version 6 workspaces to the interaction-aware schema', () => {
+    const legacy = documentWithTwoTracks() as any
+    legacy.schemaVersion = 6
+    expect(normalizeTrackDocument(legacy).schemaVersion).toBe(7)
   })
 
   it('migrates recognizable version 4 strand files into a persisted pair', () => {
