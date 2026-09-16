@@ -40,6 +40,21 @@ export interface InteractionFeature {
   itemRgb?: string
 }
 
+export interface MatrixCell {
+  bin1: number
+  bin2: number
+  value: number
+}
+
+/** Sparse cells from a square cis contact-matrix query. */
+export interface MatrixFeature {
+  featureType: 'matrix'
+  start: number
+  end: number
+  resolution: number
+  cells: MatrixCell[]
+}
+
 export interface AlignmentDifference {
   kind: 'substitution' | 'insertion' | 'deletion' | 'skip' | 'soft-clip' | 'hard-clip'
   position: number
@@ -73,7 +88,7 @@ export interface AlignmentCoverageFeature extends SignalFeature {
   featureType: 'coverage'
 }
 
-export type TrackFeature = SignalFeature | IntervalFeature | InteractionFeature | AlignmentFeature | AlignmentCoverageFeature
+export type TrackFeature = SignalFeature | IntervalFeature | InteractionFeature | MatrixFeature | AlignmentFeature | AlignmentCoverageFeature
 
 export interface TrackQueryOptions {
   bamViewMode?: 'coverage' | 'alignments' | 'both'
@@ -82,6 +97,8 @@ export interface TrackQueryOptions {
   bamIncludeDuplicates?: boolean
   bamIncludeSecondary?: boolean
   bamIncludeSupplementary?: boolean
+  matrixResolution?: number
+  matrixNormalization?: string
 }
 
 export interface TrackSource {

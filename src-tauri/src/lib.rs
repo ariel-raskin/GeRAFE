@@ -9,6 +9,7 @@ use std::{
 use tauri::Manager;
 
 mod bedgraph_cache;
+mod contact_matrix;
 
 const LEGACY_APP_IDENTIFIER: &str = "org.stengelraskin.locusglide";
 const APP_IDENTIFIER: &str = "org.arielraskin.gerafe";
@@ -73,6 +74,27 @@ async fn prepare_bedgraph_cache(
     })
     .await
     .map_err(|error| format!("The bedGraph indexer stopped unexpectedly: {error}"))?
+}
+
+#[tauri::command]
+async fn contact_matrix_metadata(
+    path: String,
+    format: String,
+) -> Result<contact_matrix::MatrixMetadata, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        contact_matrix::metadata(Path::new(&path), &format)
+    })
+    .await
+    .map_err(|error| format!("The contact-matrix reader stopped unexpectedly: {error}"))?
+}
+
+#[tauri::command]
+async fn query_contact_matrix(
+    options: contact_matrix::MatrixQuery,
+) -> Result<contact_matrix::MatrixQueryResult, String> {
+    tauri::async_runtime::spawn_blocking(move || contact_matrix::query(options))
+        .await
+        .map_err(|error| format!("The contact-matrix reader stopped unexpectedly: {error}"))?
 }
 
 fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
@@ -194,7 +216,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             stat_file,
             read_file_range,
-            prepare_bedgraph_cache
+            prepare_bedgraph_cache,
+            contact_matrix_metadata,
+            query_contact_matrix
         ])
         .run(tauri::generate_context!())
         .expect("error while running GeRAFE");

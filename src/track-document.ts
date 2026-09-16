@@ -1,11 +1,11 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 9 as const
+export const TRACK_DOCUMENT_VERSION = 10 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
 
-export type SourceFormat = 'bigwig' | 'bedgraph' | 'tdf' | 'bam' | 'bed' | 'bedpe'
+export type SourceFormat = 'bigwig' | 'bedgraph' | 'tdf' | 'bam' | 'bed' | 'bedpe' | 'hic' | 'cool' | 'mcool'
 export type ScaleMode = 'auto-visible' | 'fixed'
 export type SignalStrand = 'plus' | 'minus'
 export type SignalScaleChannel = 'ordinary' | SignalStrand
@@ -49,7 +49,7 @@ export interface ScaleBinding {
 
 export interface TrackSpec {
   id: string
-  kind: 'signal' | 'stranded' | 'interval' | 'interaction' | 'alignment' | 'genes'
+  kind: 'signal' | 'stranded' | 'interval' | 'interaction' | 'matrix' | 'alignment' | 'genes'
   sourceIds: string[]
   label: string
   color: string
@@ -63,6 +63,11 @@ export interface TrackSpec {
   interactionDirection?: InteractionDirection
   interactionFilterMode?: InteractionFilterMode
   interactionFilterGenes?: string[]
+  matrixDirection?: InteractionDirection
+  matrixResolution?: number
+  matrixNormalization?: string
+  matrixTransform?: 'linear' | 'log1p'
+  matrixScaleMax?: number
   alignmentDisplayMode?: 'collapsed' | 'expanded' | 'squished'
   bamViewMode?: 'coverage' | 'alignments' | 'both'
   bamColorMode?: 'track' | 'strand' | 'pair-orientation' | 'mapping-quality'
@@ -374,6 +379,30 @@ export function addInteractionTrack(
   return track
 }
 
+export function addMatrixTrack(
+  draft: TrackDocument,
+  source: TrackSourceSpec,
+  options: { id?: string; label?: string; color?: string; defaultNormalization?: string } = {},
+): TrackSpec {
+  const track: TrackSpec = {
+    id: options.id ?? crypto.randomUUID(),
+    kind: 'matrix',
+    sourceIds: [source.id],
+    label: options.label ?? source.name,
+    color: options.color ?? '#d94b5f',
+    enabled: true,
+    height: 50,
+    pane: 'main',
+    matrixDirection: 'up',
+    matrixNormalization: options.defaultNormalization ?? 'raw',
+    matrixTransform: 'log1p',
+  }
+  draft.sources.push(source)
+  const bottomIndex = draft.tracks.findIndex((item) => item.pane === 'bottom')
+  draft.tracks.splice(bottomIndex < 0 ? draft.tracks.length : bottomIndex, 0, track)
+  return track
+}
+
 export function addAlignmentTrack(
   draft: TrackDocument,
   source: TrackSourceSpec,
@@ -583,7 +612,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -626,6 +655,19 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
       : track.kind === 'interaction' ? ('all' as InteractionFilterMode) : undefined,
     interactionFilterGenes: track.kind === 'interaction' && Array.isArray(track.interactionFilterGenes)
       ? [...new Set(track.interactionFilterGenes.filter((gene: unknown): gene is string => typeof gene === 'string').map((gene: string) => gene.trim()).filter(Boolean))].slice(0, 100)
+      : undefined,
+    matrixDirection: track.kind === 'matrix' && (track.matrixDirection === 'up' || track.matrixDirection === 'down')
+      ? track.matrixDirection
+      : track.kind === 'matrix' ? 'up' : undefined,
+    matrixResolution: track.kind === 'matrix' && typeof track.matrixResolution === 'number' && Number.isSafeInteger(track.matrixResolution) && track.matrixResolution > 0
+      ? track.matrixResolution
+      : undefined,
+    matrixNormalization: track.kind === 'matrix' && typeof track.matrixNormalization === 'string' && track.matrixNormalization.trim()
+      ? track.matrixNormalization.trim()
+      : track.kind === 'matrix' ? 'raw' : undefined,
+    matrixTransform: track.kind === 'matrix' && track.matrixTransform === 'linear' ? 'linear' as const : track.kind === 'matrix' ? 'log1p' as const : undefined,
+    matrixScaleMax: track.kind === 'matrix' && typeof track.matrixScaleMax === 'number' && Number.isFinite(track.matrixScaleMax) && track.matrixScaleMax > 0
+      ? track.matrixScaleMax
       : undefined,
     alignmentDisplayMode: track.kind === 'alignment' && (track.alignmentDisplayMode === 'collapsed' || track.alignmentDisplayMode === 'expanded' || track.alignmentDisplayMode === 'squished')
       ? track.alignmentDisplayMode
@@ -740,7 +782,7 @@ function isRegion(value: unknown): value is Region {
 
 function isSourceSpec(value: unknown): value is TrackSourceSpec {
   return isRecord(value) && typeof value.id === 'string' && typeof value.name === 'string'
-    && ['bigwig', 'bedgraph', 'tdf', 'bam', 'bed', 'bedpe'].includes(value.format) && Array.isArray(value.files) && value.files.every(isSourceFileSpec)
+    && ['bigwig', 'bedgraph', 'tdf', 'bam', 'bed', 'bedpe', 'hic', 'cool', 'mcool'].includes(value.format) && Array.isArray(value.files) && value.files.every(isSourceFileSpec)
     && (value.strand === undefined || value.strand === 'plus' || value.strand === 'minus')
     && (value.strandBaseLabel === undefined || typeof value.strandBaseLabel === 'string')
 }
@@ -765,7 +807,7 @@ function isScale(value: unknown): value is ScaleBinding {
 }
 
 function isTrack(value: unknown, legacyHeight = false): value is TrackSpec {
-  return isRecord(value) && typeof value.id === 'string' && ['signal', 'stranded', 'interval', 'interaction', 'alignment', 'genes'].includes(value.kind)
+  return isRecord(value) && typeof value.id === 'string' && ['signal', 'stranded', 'interval', 'interaction', 'matrix', 'alignment', 'genes'].includes(value.kind)
     && Array.isArray(value.sourceIds) && value.sourceIds.every((id: unknown) => typeof id === 'string')
     && typeof value.label === 'string' && typeof value.color === 'string' && typeof value.enabled === 'boolean'
     && Number.isFinite(value.height) && value.height >= (legacyHeight ? 0.5 : 1) && value.height <= (legacyHeight ? 3 : 100)
