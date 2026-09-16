@@ -1,7 +1,9 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 5 as const
+export const TRACK_DOCUMENT_VERSION = 6 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
+export const STRANDED_POSITIVE_COLOR = '#e3342f'
+export const STRANDED_NEGATIVE_COLOR = '#2878d4'
 
 export type SourceFormat = 'bigwig' | 'bedgraph' | 'tdf' | 'bam' | 'bed'
 export type ScaleMode = 'auto-visible' | 'fixed'
@@ -70,6 +72,8 @@ export interface TrackSpec {
   negativeColor?: string
   negativeScaleBindingId?: string
   strandAutoLinkDisabled?: boolean
+  /** False clamps ordinary signal values to the zero baseline for display and autoscaling. */
+  allowNegativeValues?: boolean
 }
 
 export interface TrackDocument {
@@ -175,7 +179,7 @@ export function createTrackDocument(referenceId: string, region: Region): TrackD
 export function addSignalTrack(
   draft: TrackDocument,
   source: TrackSourceSpec,
-  options: { id?: string; label?: string; color?: string; displayGroupId?: string; autoPair?: boolean } = {},
+  options: { id?: string; label?: string; color?: string; displayGroupId?: string; autoPair?: boolean; autoStrandColors?: boolean } = {},
 ): TrackSpec {
   const id = options.id ?? crypto.randomUUID()
   const scaleBindingId = crypto.randomUUID()
@@ -204,7 +208,7 @@ export function addSignalTrack(
     const complement = draft.tracks.find((candidate) => candidate.id !== track.id && candidate.kind === 'signal'
       && !candidate.strandAutoLinkDisabled && candidate.signalStrand !== inferred.strand
       && strandBaseKey(candidate.strandBaseLabel ?? candidate.label) === strandBaseKey(inferred.baseLabel))
-    if (complement) return pairStrandedTracks(draft, track.id, complement.id) ?? track
+    if (complement) return pairStrandedTracks(draft, track.id, complement.id, { autoColors: options.autoStrandColors }) ?? track
   }
   return track
 }
@@ -232,7 +236,7 @@ export function inferSignalStrand(name: string): { strand: SignalStrand; baseLab
   return baseLabel ? { strand, baseLabel } : undefined
 }
 
-export function pairStrandedTracks(draft: TrackDocument, firstId: string, secondId: string): TrackSpec | undefined {
+export function pairStrandedTracks(draft: TrackDocument, firstId: string, secondId: string, options: { autoColors?: boolean } = {}): TrackSpec | undefined {
   const firstIndex = draft.tracks.findIndex((track) => track.id === firstId)
   const secondIndex = draft.tracks.findIndex((track) => track.id === secondId)
   const first = draft.tracks[firstIndex]
@@ -251,8 +255,8 @@ export function pairStrandedTracks(draft: TrackDocument, firstId: string, second
     kind: 'stranded',
     sourceIds: [plus.sourceIds[0], minus.sourceIds[0]],
     label: plus.strandBaseLabel ?? minus.strandBaseLabel ?? plus.label,
-    color: plus.color,
-    negativeColor: minus.color,
+    color: options.autoColors ? STRANDED_POSITIVE_COLOR : plus.color,
+    negativeColor: options.autoColors ? STRANDED_NEGATIVE_COLOR : minus.color,
     enabled: plus.enabled || minus.enabled,
     height: Math.max(plus.height, minus.height),
     pane: firstIndex <= secondIndex ? first.pane : second.pane,
@@ -267,17 +271,25 @@ export function pairStrandedTracks(draft: TrackDocument, firstId: string, second
   return paired
 }
 
-export function autoPairStrandedTracks(draft: TrackDocument): TrackSpec[] {
+export function autoPairStrandedTracks(draft: TrackDocument, options: { autoColors?: boolean } = {}): TrackSpec[] {
   const paired: TrackSpec[] = []
   for (const track of [...draft.tracks]) {
     if (track.kind !== 'signal' || !track.signalStrand || track.strandAutoLinkDisabled || !draft.tracks.includes(track)) continue
     const complement = draft.tracks.find((candidate) => candidate.id !== track.id && candidate.kind === 'signal'
       && !candidate.strandAutoLinkDisabled && candidate.signalStrand && candidate.signalStrand !== track.signalStrand
       && strandBaseKey(candidate.strandBaseLabel ?? candidate.label) === strandBaseKey(track.strandBaseLabel ?? track.label))
-    const result = complement ? pairStrandedTracks(draft, track.id, complement.id) : undefined
+    const result = complement ? pairStrandedTracks(draft, track.id, complement.id, options) : undefined
     if (result) paired.push(result)
   }
   return paired
+}
+
+export function applyAutomaticStrandedColors(draft: TrackDocument): void {
+  for (const track of draft.tracks) {
+    if (track.kind !== 'stranded') continue
+    track.color = STRANDED_POSITIVE_COLOR
+    track.negativeColor = STRANDED_NEGATIVE_COLOR
+  }
 }
 
 export function unlinkStrandedTrack(draft: TrackDocument, trackId: string): TrackSpec[] {
@@ -304,6 +316,12 @@ export function signalFeatureKey(trackId: string, strand?: SignalStrand): string
   return strand ? `${trackId}:${strand}` : trackId
 }
 
+/** Compact BED tracks start just tall enough for their wrapped left-card label. */
+export function intervalLabelHeightScore(label: string): number {
+  const estimatedLines = Math.max(1, Math.ceil(label.length / 20))
+  return Math.max(5, Math.min(20, Math.ceil(estimatedLines * 15 / 3.6)))
+}
+
 export function addIntervalTrack(
   draft: TrackDocument,
   source: TrackSourceSpec,
@@ -316,7 +334,7 @@ export function addIntervalTrack(
     label: options.label ?? source.name,
     color: options.color ?? TRACK_COLORS[draft.tracks.filter((item) => item.kind !== 'genes').length % TRACK_COLORS.length],
     enabled: true,
-    height: 32,
+    height: intervalLabelHeightScore(options.label ?? source.name),
     pane: 'main',
     intervalDisplayMode: 'collapsed',
   }
@@ -425,7 +443,7 @@ export function reorderTracks(
   draft.tracks = pane === 'main' ? [...target, ...other] : [...other, ...target]
 }
 
-export function assignDisplayGroup(draft: TrackDocument, trackIds: readonly string[], label: string): void {
+export function assignDisplayGroup(draft: TrackDocument, trackIds: readonly string[], label: string, options: { autoScale?: boolean } = {}): void {
   const cleanLabel = label.trim()
   if (!cleanLabel) {
     for (const track of draft.tracks) if (trackIds.includes(track.id)) track.displayGroupId = undefined
@@ -434,8 +452,12 @@ export function assignDisplayGroup(draft: TrackDocument, trackIds: readonly stri
   }
   let group = draft.groups.find((item) => item.label.toLocaleLowerCase() === cleanLabel.toLocaleLowerCase())
   if (!group) {
-    group = { id: crypto.randomUUID(), label: cleanLabel }
+    group = { id: crypto.randomUUID(), label: cleanLabel, scaleBehavior: options.autoScale === false ? 'independent' : 'linked' }
     draft.groups.push(group)
+  } else if (group.scaleBehavior === undefined && options.autoScale !== false) {
+    // Workspaces created before group autoscaling did not persist a behavior.
+    // Adopt the current preference the next time that group is edited.
+    group.scaleBehavior = 'linked'
   }
   const existingMember = draft.tracks.find((track) => track.displayGroupId === group.id)
   const firstTarget = draft.tracks.find((track) => trackIds.includes(track.id))
@@ -516,7 +538,9 @@ export function computeScaleDomains(
       for (const ref of scaleChannelRefs(track)) {
         if (ref.scaleBindingId !== binding.id) continue
         for (const feature of featuresByTrack.get(signalFeatureKey(track.id, ref.channel === 'ordinary' ? undefined : ref.channel)) ?? []) {
-          const score = ref.channel === 'ordinary' ? feature.score : Math.abs(feature.score)
+          const score = ref.channel === 'ordinary'
+            ? (track.allowNegativeValues === false ? Math.max(0, feature.score) : feature.score)
+            : Math.abs(feature.score)
           min = Math.min(min, score)
           max = Math.max(max, score)
         }
@@ -529,7 +553,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -554,6 +578,7 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     negativeColor: track.kind === 'stranded' && typeof track.negativeColor === 'string' ? track.negativeColor : undefined,
     negativeScaleBindingId: track.kind === 'stranded' && track.negativeScaleBindingId && scaleIds.has(track.negativeScaleBindingId) ? track.negativeScaleBindingId : undefined,
     strandAutoLinkDisabled: track.kind === 'signal' && track.strandAutoLinkDisabled === true ? true : undefined,
+    allowNegativeValues: track.kind === 'signal' ? track.allowNegativeValues !== false : undefined,
     geneDisplayMode: track.kind === 'genes' && (track.geneDisplayMode === 'collapsed' || track.geneDisplayMode === 'expanded' || track.geneDisplayMode === 'squished')
       ? track.geneDisplayMode
       : track.kind === 'genes' ? 'collapsed' : undefined,

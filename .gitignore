@@ -6,6 +6,7 @@ public/
 src-tauri/target/
 *.log
 *.tsbuildinfo
+to_do_list.txt
 
 # Local configuration and signing material. Public verification keys such as
 # *.key.pub remain trackable.

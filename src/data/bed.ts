@@ -44,7 +44,10 @@ export class BedSource implements TrackSource {
     for (const rawLine of text.split(/\r?\n/)) {
       const line = rawLine.trim()
       if (!line || line.startsWith('#') || line.startsWith('track') || line.startsWith('browser')) continue
-      const fields = line.split(/\t| +/)
+      // Standard BED is tab-delimited. Keeping that boundary intact also
+      // supports common UCSC exports whose name field itself contains spaces
+      // (for example, "CpG: 361"). Whitespace-only BED remains accepted.
+      const fields = line.includes('\t') ? line.split('\t') : line.split(/ +/)
       const chr = fields[0]
       const start = Number(fields[1])
       const end = Number(fields[2])

@@ -331,6 +331,11 @@ export class GenomeBrowser {
     canvas.addEventListener('pointercancel', finishPointer)
     canvas.addEventListener('wheel', (event) => {
       if (!event.ctrlKey && !event.metaKey) {
+        if (event.deltaX !== 0) {
+          event.preventDefault()
+          this.panHorizontally(canvas, event.deltaX)
+          return
+        }
         const hit = this.itemAt(canvas, pane, event.offsetX, event.offsetY)
         const spec = hit?.kind === 'track' ? this.document.tracks.find((track) => track.id === hit.id && track.kind === 'genes') : undefined
         if (spec && this.scrollGeneTrack(spec, event.deltaY, this.cssWidth(canvas))) event.preventDefault()
@@ -383,7 +388,13 @@ export class GenomeBrowser {
     canvas.addEventListener('pointerup', finish)
     canvas.addEventListener('pointercancel', finish)
     canvas.addEventListener('wheel', (event) => {
-      if (!event.ctrlKey && !event.metaKey) return
+      if (!event.ctrlKey && !event.metaKey) {
+        if (event.deltaX !== 0) {
+          event.preventDefault()
+          this.panHorizontally(canvas, event.deltaX)
+        }
+        return
+      }
       event.preventDefault()
       this.zoom(Math.exp(event.deltaY * 0.0015), Math.max(0, Math.min(1, (event.offsetX - PLOT_LEFT) / Math.max(1, this.cssWidth(canvas) - PLOT_LEFT))))
     }, { passive: false })
@@ -391,6 +402,17 @@ export class GenomeBrowser {
       if (event.offsetX >= PLOT_LEFT) this.zoom(0.5, (event.offsetX - PLOT_LEFT) / Math.max(1, this.cssWidth(canvas) - PLOT_LEFT))
     })
     canvas.addEventListener('contextmenu', (event) => event.preventDefault())
+  }
+
+  private panHorizontally(canvas: HTMLCanvasElement, deltaPixels: number): void {
+    const chromosomeLength = this.chromosomes.get(this.region.chr)
+    if (!chromosomeLength) return
+    const plotWidth = Math.max(1, this.cssWidth(canvas) - PLOT_LEFT)
+    const shift = deltaPixels * (this.region.end - this.region.start) / plotWidth
+    this.region = clampRegion({ chr: this.region.chr, start: this.region.start + shift, end: this.region.end + shift }, chromosomeLength)
+    this.callbacks.onRegionChange(this.region)
+    this.scheduleRender()
+    if (!this.hasOverscanCoverage()) void this.ensureData()
   }
 
   private resize(): void {
@@ -702,7 +724,11 @@ export class GenomeBrowser {
     ctx.stroke()
 
     const rawVisible = track.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) as SignalFeature[]
-    const visible = spec.signalStrand ? rawVisible.map((feature) => ({ ...feature, score: Math.abs(feature.score) })) : rawVisible
+    const visible = spec.signalStrand
+      ? rawVisible.map((feature) => ({ ...feature, score: Math.abs(feature.score) }))
+      : spec.allowNegativeValues === false
+        ? rawVisible.map((feature) => ({ ...feature, score: Math.max(0, feature.score) }))
+        : rawVisible
     let previewMin = domain?.min ?? 0
     let previewMax = domain?.max ?? 0
     if (!domain) for (const feature of visible) { previewMin = Math.min(previewMin, feature.score); previewMax = Math.max(previewMax, feature.score) }
@@ -716,7 +742,7 @@ export class GenomeBrowser {
     const maxLabelLines = track.status === 'error' || track.status === 'offline' ? 2 : Math.max(1, Math.floor((height - 20) / 15))
     const labelBounds = trackLabelBounds(scaleLaneWidth)
     const labelLayout = wrappedLines(ctx, spec.label, labelBounds.width, maxLabelLines)
-    const labelTop = top + Math.max(15, (height - labelLayout.length * 15) / 2 + 4)
+    const labelTop = verticallyCenteredBaseline(top, height, labelLayout.length, 15)
     drawCenteredTextLines(ctx, labelLayout, labelBounds.center, labelTop, 15)
     if (track.status === 'error' || track.status === 'offline') {
       ctx.fillStyle = palette.error
@@ -833,7 +859,7 @@ export class GenomeBrowser {
     ctx.font = '600 12px Inter, system-ui, sans-serif'
     const labelBounds = trackLabelBounds(scaleLaneWidth)
     const labelLayout = wrappedLines(ctx, spec.label, labelBounds.width, Math.max(1, Math.floor((height - 20) / 15)))
-    drawCenteredTextLines(ctx, labelLayout, labelBounds.center, top + Math.max(15, (height - labelLayout.length * 15) / 2 + 4), 15)
+    drawCenteredTextLines(ctx, labelLayout, labelBounds.center, verticallyCenteredBaseline(top, height, labelLayout.length, 15), 15)
 
     const chartTop = top + 12
     const chartBottom = bottom - 10
@@ -900,7 +926,7 @@ export class GenomeBrowser {
     ctx.font = '600 12px Inter, system-ui, sans-serif'
     const labelBounds = trackLabelBounds()
     const labelLines = wrappedLines(ctx, spec.label, labelBounds.width, Math.max(1, Math.floor((height - 16) / 15)))
-    drawCenteredTextLines(ctx, labelLines, labelBounds.center, top + Math.max(15, (height - labelLines.length * 15) / 2 + 4), 15)
+    drawCenteredTextLines(ctx, labelLines, labelBounds.center, verticallyCenteredBaseline(top, height, labelLines.length, 15), 15)
     if (track.status === 'error' || track.status === 'offline') {
       ctx.fillStyle = palette.error
       ctx.font = '11px Inter, system-ui, sans-serif'
@@ -936,7 +962,7 @@ export class GenomeBrowser {
         while (rawX1 <= (laneEnds[lane] ?? Number.NEGATIVE_INFINITY)) lane += 1
         laneEnds[lane] = rawX2 + labelWidth + 5
       }
-      const centerY = top + 9 + lane * rowHeight
+      const centerY = mode === 'collapsed' ? top + height / 2 : top + 9 + lane * rowHeight
       if (centerY + featureHeight > bottom) continue
       const color = feature.itemRgb ?? spec.color
       ctx.strokeStyle = color
@@ -1127,10 +1153,13 @@ export class GenomeBrowser {
     const group = this.document.groups.find((item) => item.id === groupId)
     if (!group) return
     const ctx = this.context
-    const memberColor = this.document.tracks.find((track) => track.displayGroupId === groupId)?.color
-    const memberIds = this.document.tracks.filter((track) => track.displayGroupId === groupId).map((track) => track.id)
+    const members = this.document.tracks.filter((track) => track.displayGroupId === groupId)
+    const memberIds = members.map((track) => track.id)
     const selected = memberIds.length > 0 && memberIds.every((id) => this.selectedTrackIds.has(id))
-    const color = group.color ?? memberColor ?? palette.selection
+    const memberColors = members.flatMap((track) => track.kind === 'stranded' ? [track.color, track.negativeColor ?? track.color] : [track.color])
+    const color = memberColors.length > 0 && memberColors.every((memberColor) => memberColor === memberColors[0])
+      ? memberColors[0]
+      : palette.axisLine
     const cardTop = top + 3.5
     const cardHeight = Math.max(5, bottom - top - 7)
     ctx.save()
@@ -1278,8 +1307,9 @@ export class GenomeBrowser {
         const arrowHalfHeight = mode === 'squished' ? 0.8 : 1.7
         ctx.lineWidth = mode === 'squished' ? 0.75 : 1
         for (const arrowX of phasedArrowPositions(rawTxX1, PLOT_LEFT + 3, Math.min(width, rawTxX2) - 4, 36, 14)) {
-          const overlapsExon = exonPixels.some((exon) => arrowX + 3 >= exon.start && arrowX - 3 <= exon.end)
-          ctx.strokeStyle = overlapsExon ? palette.geneTrack : color
+          const exonOverlap = chevronExonOverlap(arrowX, exonPixels, 3)
+          if (exonOverlap === 'partial') continue
+          ctx.strokeStyle = exonOverlap === 'inside' ? palette.geneTrack : color
           ctx.beginPath()
           ctx.moveTo(arrowX - direction * 3, centerY - arrowHalfHeight)
           ctx.lineTo(arrowX + direction * 2, centerY)
@@ -1366,13 +1396,29 @@ export class GenomeBrowser {
 
   private hasOverscanCoverage(): boolean {
     return this.visibleSourceSpecs().every((spec) => {
-      return this.runtimesForTrack(spec.id).every((track) => !track.source || Boolean(track.loadedRegion && contains(track.loadedRegion, this.region)))
+      return this.runtimesForTrack(spec.id).every((track) => !track.source || this.hasSuitableData(track))
     })
+  }
+
+  /**
+   * Overscan makes ordinary pans inexpensive, but it must not keep a coarse
+   * summary after zooming in. Sources choose their indexed summary level from
+   * the requested bases-per-pixel value, so refresh once the viewport asks for
+   * materially finer detail.
+   */
+  private hasSuitableData(track: TrackRuntime): boolean {
+    if (!track.loadedRegion || !contains(track.loadedRegion, this.region)) return false
+    if (!track.loadedBasesPerPixel) return false
+    const plotWidth = Math.max(1, this.cssWidth() - PLOT_LEFT)
+    // The query requests three times as many pixels for a three-times-wider
+    // overscan region, so its effective resolution is viewport span / width.
+    const requestedBasesPerPixel = (this.region.end - this.region.start) / plotWidth
+    return track.loadedBasesPerPixel <= requestedBasesPerPixel * 1.25
   }
 
   private async ensureData(): Promise<void> {
     await Promise.all(this.visibleSourceSpecs().flatMap((spec) => this.runtimesForTrack(spec.id)).map(async (track) => {
-      if (track?.source && (!track.loadedRegion || !contains(track.loadedRegion, this.region))) await this.loadTrack(track)
+      if (track?.source && !this.hasSuitableData(track)) await this.loadTrack(track)
     }))
   }
 
@@ -1416,6 +1462,7 @@ export class GenomeBrowser {
       if (version !== track.requestVersion) return
       track.features = features
       track.loadedRegion = queryRegion
+      track.loadedBasesPerPixel = (queryRegion.end - queryRegion.start) / Math.max(1, plotWidth * 3)
       track.status = 'ready'
     } catch (error) {
       if (version !== track.requestVersion || isAbortError(error)) return
@@ -1785,8 +1832,8 @@ export function formatCoordinate(value: number, step = 1, referenceValue = value
   return Math.round(value).toString()
 }
 
-function formatScore(value: number): string {
-  if (Math.abs(value) >= 1000) return value.toExponential(1)
+export function formatScore(value: number): string {
+  if (Math.abs(value) >= 1000) return Math.round(value).toString()
   return Number(value.toPrecision(3)).toString()
 }
 
@@ -1797,6 +1844,14 @@ export function phasedArrowPositions(rawFeatureStart: number, visibleStart: numb
   const positions: number[] = []
   for (let position = origin + first * spacing; position < visibleEnd; position += spacing) positions.push(position)
   return positions
+}
+
+/** Keeps directional chevrons fully inside a visible exon, or omits them when none can hold one. */
+export function chevronExonOverlap(position: number, exons: readonly { start: number; end: number }[], halfWidth: number): 'outside' | 'inside' | 'partial' {
+  const left = position - halfWidth
+  const right = position + halfWidth
+  if (exons.some((exon) => left >= exon.start && right <= exon.end)) return 'inside'
+  return exons.some((exon) => right > exon.start && left < exon.end) ? 'partial' : 'outside'
 }
 
 function cytobandColor(stain: string, palette: CanvasPalette): string {
@@ -1884,6 +1939,11 @@ function drawCenteredTextLines(ctx: CanvasRenderingContext2D, lines: readonly st
   ctx.textAlign = 'center'
   drawTextLines(ctx, lines, centerX, y, lineHeight)
   ctx.textAlign = 'start'
+}
+
+/** First baseline that visually centers a line block for the canvas text metrics used here. */
+export function verticallyCenteredBaseline(top: number, height: number, lineCount: number, lineHeight: number): number {
+  return top + height / 2 - (Math.max(1, lineCount) - 1) * lineHeight / 2 + 4
 }
 
 function trackLabelBounds(scaleLaneWidth = 0): { width: number; center: number } {

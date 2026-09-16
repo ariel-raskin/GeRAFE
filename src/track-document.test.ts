@@ -3,10 +3,12 @@ import {
   addSignalTrack,
   addAlignmentTrack,
   addIntervalTrack,
+  applyAutomaticStrandedColors,
   assignDisplayGroup,
   computeScaleDomains,
   createTrackDocument,
   inferSignalStrand,
+  intervalLabelHeightScore,
   linkScales,
   normalizeTrackDocument,
   removeTrack,
@@ -25,20 +27,22 @@ function documentWithTwoTracks() {
 }
 
 describe('track document', () => {
-  it('keeps visual grouping and scale linkage independent', () => {
+  it('links scales automatically for a new visual group and can opt out', () => {
     const document = documentWithTwoTracks()
     assignDisplayGroup(document, ['t1', 't2'], 'Condition A')
     expect(document.tracks.find((track) => track.id === 't1')?.displayGroupId)
       .toBe(document.tracks.find((track) => track.id === 't2')?.displayGroupId)
     expect(document.tracks.find((track) => track.id === 't1')?.scaleBindingId)
-      .not.toBe(document.tracks.find((track) => track.id === 't2')?.scaleBindingId)
-
-    linkScales(document, ['t1', 't2'])
-    expect(document.tracks.find((track) => track.id === 't1')?.scaleBindingId)
       .toBe(document.tracks.find((track) => track.id === 't2')?.scaleBindingId)
+
     unlinkScales(document, ['t1', 't2'])
     expect(document.tracks.find((track) => track.id === 't1')?.scaleBindingId)
       .not.toBe(document.tracks.find((track) => track.id === 't2')?.scaleBindingId)
+
+    const independent = documentWithTwoTracks()
+    assignDisplayGroup(independent, ['t1', 't2'], 'Independent', { autoScale: false })
+    expect(independent.tracks.find((track) => track.id === 't1')?.scaleBindingId)
+      .not.toBe(independent.tracks.find((track) => track.id === 't2')?.scaleBindingId)
   })
 
   it('uses one scale domain for linked tracks', () => {
@@ -89,6 +93,11 @@ describe('track document', () => {
     expect(restored.tracks.find((track) => track.id === 'bed-track')).toMatchObject({ kind: 'interval', intervalDisplayMode: 'expanded' })
   })
 
+  it('starts interval tracks at a compact label-fitting height', () => {
+    expect(intervalLabelHeightScore('peaks.bed')).toBe(5)
+    expect(intervalLabelHeightScore('a very long interval-track label that wraps')).toBeGreaterThan(5)
+  })
+
   it('creates alignment tracks with independent BAM display and filtering options', () => {
     const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
     const track = addAlignmentTrack(document, { id: 'bam-source', name: 'reads.bam', format: 'bam', files: [] }, { id: 'bam-track' })
@@ -116,7 +125,7 @@ describe('track document', () => {
     legacy.schemaVersion = 1
     for (const track of legacy.tracks) track.height = 1
     const restored = normalizeTrackDocument(legacy)
-    expect(restored.schemaVersion).toBe(5)
+    expect(restored.schemaVersion).toBe(6)
     expect(restored.tracks.every((track) => track.height >= 30 && track.height <= 33)).toBe(true)
   })
 
@@ -201,6 +210,16 @@ describe('track document', () => {
     expect(document.sources.map((source) => source.id)).toEqual(['plus-source', 'minus-source'])
   })
 
+  it('uses red and blue for automatically colored stranded pairs without changing manual colors otherwise', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
+    addSignalTrack(document, { id: 'plus-source', name: 'PRO.plus.tdf', format: 'tdf', files: [] }, { id: 'plus-track', color: '#112233' })
+    const paired = addSignalTrack(document, { id: 'minus-source', name: 'PRO.minus.tdf', format: 'tdf', files: [] }, { id: 'minus-track', color: '#445566', autoStrandColors: true })
+    expect(paired).toMatchObject({ color: '#e3342f', negativeColor: '#2878d4' })
+    paired.color = '#ffffff'
+    applyAutomaticStrandedColors(document)
+    expect(paired).toMatchObject({ color: '#e3342f', negativeColor: '#2878d4' })
+  })
+
   it('links positive and negative group scales independently and normalizes magnitudes', () => {
     const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
     const pairA = addSignalTrack(document, { id: 'a-plus-source', name: 'A.plus.bw', format: 'bigwig', files: [] }, { id: 'a-plus' })
@@ -247,5 +266,13 @@ describe('track document', () => {
     scale.mode = 'fixed'
     scale.limits = { min: -20, max: 0 }
     expect(computeScaleDomains(document, new Map()).get(track.scaleBindingId!)).toEqual({ min: 0, max: 20 })
+  })
+
+  it('can clamp an ordinary signal track to zero for display-scale calculations', () => {
+    const document = documentWithTwoTracks()
+    const track = document.tracks.find((item) => item.id === 't1')!
+    track.allowNegativeValues = false
+    const domain = computeScaleDomains(document, new Map([[track.id, [{ start: 0, end: 10, score: -7 }, { start: 10, end: 20, score: 3 }]]]))
+    expect(domain.get(track.scaleBindingId!)).toEqual({ min: 0, max: 3 })
   })
 })
