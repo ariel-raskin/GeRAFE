@@ -8,6 +8,8 @@ import { BedPeSource } from './data/bedpe.ts'
 import { BigWigSource } from './data/bigwig.ts'
 import { TdfSource } from './data/tdf.ts'
 import { BamAlignmentSource, findBamIndex } from './data/bam.ts'
+import { isNativeMatrixSource, NativeMatrixSource } from './data/matrix.ts'
+import type { MatrixFormat } from './data/matrix.ts'
 import { formatBases, formatLocus, formatZoomPercentage, hg38, parseLocus, resolveChromosome } from './genome.ts'
 import { parseCytobands } from './cytoband.ts'
 import { GeneSource, parseChromosomeIndex, restoreReference, serializeReference } from './reference.ts'
@@ -16,6 +18,7 @@ import {
   addSignalTrack,
   addIntervalTrack,
   addInteractionTrack,
+  addMatrixTrack,
   addAlignmentTrack,
   applyAutomaticStrandedColors,
   autoPairStrandedTracks,
@@ -290,7 +293,7 @@ let appUpdaterPromise: Promise<AppUpdateController> | undefined
 interface OpenedSource {
   source: TrackSource
   sourceSpec: TrackSourceSpec
-  kind: 'signal' | 'interval' | 'interaction' | 'alignment'
+  kind: 'signal' | 'interval' | 'interaction' | 'matrix' | 'alignment'
 }
 
 const initialRegion = restoredDocument && restoredDocument.referenceId === activeReference.id
@@ -626,6 +629,7 @@ async function loadFiles(files: FileList | null | undefined): Promise<void> {
       store.edit((draft) => {
         const added = kind === 'interval' ? addIntervalTrack(draft, sourceSpec, { id: trackId })
           : kind === 'interaction' ? addInteractionTrack(draft, sourceSpec, { id: trackId })
+            : kind === 'matrix' ? addMatrixTrack(draft, sourceSpec, { id: trackId, defaultNormalization: isNativeMatrixSource(source) ? source.matrixMetadata.defaultNormalization : undefined })
             : kind === 'alignment' ? addAlignmentTrack(draft, sourceSpec, { id: trackId })
             : addSignalTrack(draft, sourceSpec, { id: trackId, displayGroupId: destinationGroupId, autoPair: savedStrandedAutoLink(), autoStrandColors: savedStrandedAutoColors() })
         if (destinationGroupId) addTracksToGroup(draft, destinationGroupId, [added.id])
@@ -641,6 +645,7 @@ async function loadFiles(files: FileList | null | undefined): Promise<void> {
 
 async function sourceFromFile(file: File, selected: readonly File[]): Promise<OpenedSource> {
   const name = file.name.toLowerCase()
+  if (matrixFormatForName(name)) throw new Error(`${file.name}: contact matrices are opened directly from disk; use the GeRAFE desktop app's Open tracks command.`)
   if (name.endsWith('.bw') || name.endsWith('.bigwig')) return {
     source: await BigWigSource.fromFile(file),
     sourceSpec: makeSourceSpec(file, 'bigwig'),
@@ -675,7 +680,7 @@ async function sourceFromFile(file: File, selected: readonly File[]): Promise<Op
       kind: 'alignment',
     }
   }
-  throw new Error(`${file.name}: supported data files are .bw/.bigWig, .bedGraph/.bedGraph.gz, .tdf, indexed .bam, .bed, and .bedpe.`)
+  throw new Error(`${file.name}: this file type is not currently supported.`)
 }
 
 function makeSourceSpec(file: File | LocalFileDescriptor, format: SourceFormat, index?: File | LocalFileDescriptor): TrackSourceSpec {
@@ -723,6 +728,7 @@ async function loadNativePaths(paths: readonly string[]): Promise<void> {
       store.edit((draft) => {
         const added = kind === 'interval' ? addIntervalTrack(draft, sourceSpec, { id: trackId })
           : kind === 'interaction' ? addInteractionTrack(draft, sourceSpec, { id: trackId })
+            : kind === 'matrix' ? addMatrixTrack(draft, sourceSpec, { id: trackId, defaultNormalization: isNativeMatrixSource(source) ? source.matrixMetadata.defaultNormalization : undefined })
             : kind === 'alignment' ? addAlignmentTrack(draft, sourceSpec, { id: trackId })
             : addSignalTrack(draft, sourceSpec, { id: trackId, displayGroupId: destinationGroupId, autoPair: savedStrandedAutoLink(), autoStrandColors: savedStrandedAutoColors() })
         if (destinationGroupId) addTracksToGroup(draft, destinationGroupId, [added.id])
@@ -738,6 +744,12 @@ async function loadNativePaths(paths: readonly string[]): Promise<void> {
 async function sourceFromNativeFile(file: LocalFileDescriptor, selected: readonly LocalFileDescriptor[]): Promise<OpenedSource> {
   const name = file.name.toLowerCase()
   const handle = new NativeFileHandle(file.path)
+  const matrixFormat = matrixFormatForName(name)
+  if (matrixFormat) return {
+    source: await NativeMatrixSource.open(file.name, file.path, matrixFormat),
+    sourceSpec: makeSourceSpec(file, matrixFormat),
+    kind: 'matrix',
+  }
   if (name.endsWith('.bw') || name.endsWith('.bigwig')) return {
     source: await BigWigSource.fromFilehandle(file.name, handle),
     sourceSpec: makeSourceSpec(file, 'bigwig'),
@@ -772,7 +784,15 @@ async function sourceFromNativeFile(file: LocalFileDescriptor, selected: readonl
       kind: 'alignment',
     }
   }
-  throw new Error(`${file.name}: supported data files are .bw/.bigWig, .bedGraph/.bedGraph.gz, .tdf, indexed .bam, .bed, and .bedpe.`)
+  throw new Error(`${file.name}: this file type is not currently supported.`)
+}
+
+function matrixFormatForName(name: string): MatrixFormat | undefined {
+  const lower = name.toLowerCase()
+  if (lower.endsWith('.hic')) return 'hic'
+  if (lower.endsWith('.mcool')) return 'mcool'
+  if (lower.endsWith('.cool')) return 'cool'
+  return undefined
 }
 
 async function sourceFromNativeBedGraph(file: LocalFileDescriptor, handle: NativeFileHandle): Promise<TrackSource> {
@@ -982,6 +1002,8 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const resizableTracks = selected.filter((track) => track.kind !== 'genes' || track.pane !== 'bottom')
   const one = selected.length === 1
   const pairable = selected.length === 2 && selected.every((track) => track.kind === 'signal') && canPairSelectedStrands(selected as TrackSpec[])
+  const matrixSource = target.kind === 'matrix' ? runtimeSources.get(target.sourceIds[0]) : undefined
+  const matrixMetadata = isNativeMatrixSource(matrixSource) ? matrixSource.matrixMetadata : undefined
   const interactionGeneDetail = target.kind === 'interaction' && target.interactionFilterMode === 'genes'
     ? escapeHtml((target.interactionFilterGenes ?? []).join(', '))
     : ''
@@ -991,7 +1013,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     return `<button class="context-item${current ? ' is-current' : ''}${danger ? ' danger' : ''}" data-context-action="${id}" type="button" role="menuitem" ${current ? 'aria-current="true"' : ''} ${disabled ? 'disabled' : ''}><span>${label}</span>${visibleDetail ? `<small>${visibleDetail}</small>` : ''}</button>`
   }
   trackContextMenu.innerHTML = `
-    <div class="context-heading"><strong>${one ? escapeHtml(target.label) : `${selected.length} tracks selected`}</strong><span>${one ? (target.kind === 'genes' ? 'Gene annotation' : target.kind === 'interval' ? 'Interval track' : target.kind === 'interaction' ? 'BEDPE interactions' : target.kind === 'alignment' ? 'BAM alignments' : target.kind === 'stranded' ? 'Linked stranded signal' : target.signalStrand ? `${target.signalStrand === 'plus' ? 'Positive' : 'Negative'}-strand signal` : 'Signal track') : 'Shared actions'}</span></div>
+    <div class="context-heading"><strong>${one ? escapeHtml(target.label) : `${selected.length} tracks selected`}</strong><span>${one ? (target.kind === 'genes' ? 'Gene annotation' : target.kind === 'interval' ? 'Interval track' : target.kind === 'interaction' ? 'BEDPE interactions' : target.kind === 'matrix' ? 'Contact matrix' : target.kind === 'alignment' ? 'BAM alignments' : target.kind === 'stranded' ? 'Linked stranded signal' : target.signalStrand ? `${target.signalStrand === 'plus' ? 'Positive' : 'Negative'}-strand signal` : 'Signal track') : 'Shared actions'}</span></div>
     ${one ? action('rename', 'Rename…') : ''}
     ${one && target.kind === 'stranded' ? action('color-plus', 'Set positive-strand color…') + action('color-minus', 'Set negative-strand color…') : action('color', one ? 'Set color…' : 'Set selected colors…')}
     ${resizableTracks.length ? action('height', one ? 'Set track height…' : 'Set selected heights…') : ''}
@@ -1025,6 +1047,21 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     ${one && target.kind === 'interaction' ? '<span class="context-separator"></span>' : ''}
     ${one && target.kind === 'interaction' ? action('duplicate', 'Duplicate track') : ''}
     ${one && target.kind === 'interaction' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
+    ${one && target.kind === 'matrix' ? '<span class="context-separator"></span>' : ''}
+    ${one && target.kind === 'matrix' ? action('matrix-flip', 'Flip matrix upside down', target.matrixDirection === 'down' ? 'current' : '') : ''}
+    ${one && target.kind === 'matrix' ? '<span class="context-separator"></span>' : ''}
+    ${one && target.kind === 'matrix' ? action('matrix-resolution-auto', 'Automatic resolution', target.matrixResolution === undefined ? 'current' : '') : ''}
+    ${one && target.kind === 'matrix' ? (matrixMetadata?.resolutions ?? []).map((resolution, index) => action(`matrix-resolution-${index}`, `${formatBases(resolution)} resolution`, target.matrixResolution === resolution ? 'current' : '')).join('') : ''}
+    ${one && target.kind === 'matrix' ? '<span class="context-separator"></span>' : ''}
+    ${one && target.kind === 'matrix' ? (matrixMetadata?.normalizations ?? []).map((normalization, index) => action(`matrix-normalization-${index}`, `${escapeHtml(normalization)} normalization`, target.matrixNormalization === normalization ? 'current' : '')).join('') : ''}
+    ${one && target.kind === 'matrix' ? '<span class="context-separator"></span>' : ''}
+    ${one && target.kind === 'matrix' ? action('matrix-transform-log', 'Log intensity', target.matrixTransform !== 'linear' ? 'current' : '') : ''}
+    ${one && target.kind === 'matrix' ? action('matrix-transform-linear', 'Linear intensity', target.matrixTransform === 'linear' ? 'current' : '') : ''}
+    ${one && target.kind === 'matrix' ? action('matrix-scale-auto', 'Automatic intensity range', target.matrixScaleMax === undefined ? 'current' : '') : ''}
+    ${one && target.kind === 'matrix' ? action('matrix-scale-fixed', 'Set maximum intensity…', target.matrixScaleMax ? String(target.matrixScaleMax) : '') : ''}
+    ${one && target.kind === 'matrix' ? '<span class="context-separator"></span>' : ''}
+    ${one && target.kind === 'matrix' ? action('duplicate', 'Duplicate track') : ''}
+    ${one && target.kind === 'matrix' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
     ${one && target.kind === 'alignment' ? '<span class="context-separator"></span>' : ''}
     ${one && target.kind === 'alignment' ? action('bam-view-both', 'Coverage and alignments', target.bamViewMode === 'both' || !target.bamViewMode ? 'current' : '') : ''}
     ${one && target.kind === 'alignment' ? action('bam-view-coverage', 'Coverage only', target.bamViewMode === 'coverage' ? 'current' : '') : ''}
@@ -1224,6 +1261,49 @@ function handleTrackContextAction(event: MouseEvent): void {
       const unresolved = activeGeneSource ? genes.filter((gene) => !activeGeneSource?.find(gene)) : genes
       if (unresolved.length) showToast(`${unresolved.join(', ')} ${unresolved.length === 1 ? 'was' : 'were'} not found in the active annotation; matching BEDPE names instead.`)
     }
+  }
+  if (command === 'matrix-flip') store.edit((draft) => {
+    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
+    if (track) track.matrixDirection = track.matrixDirection === 'down' ? 'up' : 'down'
+  })
+  if (command === 'matrix-resolution-auto') store.edit((draft) => {
+    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
+    if (track) track.matrixResolution = undefined
+  })
+  if (command?.startsWith('matrix-resolution-') && command !== 'matrix-resolution-auto') {
+    const track = store.current.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
+    const source = track ? runtimeSources.get(track.sourceIds[0]) : undefined
+    const resolution = isNativeMatrixSource(source) ? source.matrixMetadata.resolutions[Number(command.slice('matrix-resolution-'.length))] : undefined
+    if (resolution) store.edit((draft) => {
+      const item = draft.tracks.find((candidate) => candidate.id === targetId && candidate.kind === 'matrix')
+      if (item) item.matrixResolution = resolution
+    })
+  }
+  if (command?.startsWith('matrix-normalization-')) {
+    const track = store.current.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
+    const source = track ? runtimeSources.get(track.sourceIds[0]) : undefined
+    const normalization = isNativeMatrixSource(source) ? source.matrixMetadata.normalizations[Number(command.slice('matrix-normalization-'.length))] : undefined
+    if (normalization) store.edit((draft) => {
+      const item = draft.tracks.find((candidate) => candidate.id === targetId && candidate.kind === 'matrix')
+      if (item) item.matrixNormalization = normalization
+    })
+  }
+  if (command === 'matrix-transform-log' || command === 'matrix-transform-linear') store.edit((draft) => {
+    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
+    if (track) track.matrixTransform = command === 'matrix-transform-linear' ? 'linear' : 'log1p'
+  })
+  if (command === 'matrix-scale-auto') store.edit((draft) => {
+    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
+    if (track) track.matrixScaleMax = undefined
+  })
+  if (command === 'matrix-scale-fixed') {
+    const track = store.current.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
+    const entered = window.prompt('Maximum contact intensity:', track?.matrixScaleMax ? String(track.matrixScaleMax) : '')
+    const maximum = Number(entered)
+    if (entered !== null && Number.isFinite(maximum) && maximum > 0) store.edit((draft) => {
+      const item = draft.tracks.find((candidate) => candidate.id === targetId && candidate.kind === 'matrix')
+      if (item) item.matrixScaleMax = maximum
+    })
   }
   if (command?.startsWith('bam-view-')) {
     const mode = command.slice(9) as 'coverage' | 'alignments' | 'both'
@@ -1652,7 +1732,7 @@ async function applyRelink(id: string, opened: OpenedSource, channel?: 'plus' | 
     const track = store.current.tracks.find((item) => item.id === id)
     if (!track || track.kind === 'genes') throw new Error('This track cannot be relinked.')
     const expectedKind = track.kind === 'stranded' ? 'signal' : track.kind
-    if (expectedKind !== opened.kind) throw new Error(`Choose another ${track.kind === 'interval' ? 'BED interval' : track.kind === 'interaction' ? 'BEDPE interaction' : track.kind === 'alignment' ? 'BAM and matching index' : 'signal'} file for this track.`)
+    if (expectedKind !== opened.kind) throw new Error(`Choose another ${track.kind === 'interval' ? 'BED interval' : track.kind === 'interaction' ? 'BEDPE interaction' : track.kind === 'matrix' ? 'contact matrix' : track.kind === 'alignment' ? 'BAM and matching index' : 'signal'} file for this track.`)
     const { source, sourceSpec } = opened
     const sourceIndex = track.kind === 'stranded' && channel === 'minus' ? 1 : 0
     const expectedSourceId = track.sourceIds[sourceIndex]
@@ -1664,6 +1744,11 @@ async function applyRelink(id: string, opened: OpenedSource, channel?: 'plus' | 
         id: expectedSourceId,
         strand: track.kind === 'stranded' ? (channel ?? 'plus') : sourceSpec.strand,
         strandBaseLabel: track.kind === 'stranded' ? track.label : sourceSpec.strandBaseLabel,
+      }
+      const draftTrack = draft.tracks.find((item) => item.id === id)
+      if (draftTrack?.kind === 'matrix' && isNativeMatrixSource(source)) {
+        draftTrack.matrixResolution = undefined
+        draftTrack.matrixNormalization = source.matrixMetadata.defaultNormalization
       }
     })
     runtimeSources.set(expectedSourceId, source)

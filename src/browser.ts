@@ -3,7 +3,7 @@ import type { Cytoband } from './cytoband.ts'
 import type { GeneFeature, GeneSource, TranscriptFeature } from './reference.ts'
 import { computeScaleDomains, createTrackDocument, signalFeatureKey } from './track-document.ts'
 import type { TrackDocument, TrackSpec } from './track-document.ts'
-import type { AlignmentCoverageFeature, AlignmentFeature, InteractionFeature, IntervalFeature, Region, SignalFeature, TrackSource, TrackRuntime } from './types.ts'
+import type { AlignmentCoverageFeature, AlignmentFeature, InteractionFeature, IntervalFeature, MatrixFeature, Region, SignalFeature, TrackSource, TrackRuntime } from './types.ts'
 import { SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
 
 const RULER_HEIGHT = 108
@@ -173,6 +173,7 @@ export class GenomeBrowser {
     ctx.restore()
     if (spec.kind === 'stranded') return (lineCount > 1 ? 50 : 20) * 2
     if (spec.kind === 'alignment' || spec.kind === 'genes') return lineCount > 1 ? 60 : 36
+    if (spec.kind === 'matrix') return lineCount > 1 ? 64 : 48
     return lineCount > 1 ? (spec.kind === 'signal' ? 50 : 46) : 20
   }
 
@@ -185,6 +186,12 @@ export class GenomeBrowser {
       const previous = this.document.tracks.find((track) => track.id === spec.id)
       if (spec.kind === 'genes' && previous?.geneDisplayMode !== spec.geneDisplayMode) this.geneScrollOffsets.delete(spec.id)
       if (spec.kind === 'alignment' && previous?.kind === 'alignment' && alignmentQueryChanged(previous, spec)) {
+        for (const runtime of this.runtimesForTrack(spec.id)) {
+          this.abortControllers.get(runtime.id)?.abort()
+          Object.assign(runtime, { features: [], loadedRegion: undefined, status: runtime.source ? 'idle' : 'offline' })
+        }
+      }
+      if (spec.kind === 'matrix' && previous?.kind === 'matrix' && matrixQueryChanged(previous, spec)) {
         for (const runtime of this.runtimesForTrack(spec.id)) {
           this.abortControllers.get(runtime.id)?.abort()
           Object.assign(runtime, { features: [], loadedRegion: undefined, status: runtime.source ? 'idle' : 'offline' })
@@ -536,6 +543,8 @@ export class GenomeBrowser {
         visibleFeatures += this.drawIntervalTrack(spec, this.runtimes.get(spec.id)!, index, top, rowHeight, width, palette)
       } else if (spec.kind === 'interaction') {
         visibleFeatures += this.drawInteractionTrack(spec, this.runtimes.get(spec.id)!, index, top, rowHeight, width, palette)
+      } else if (spec.kind === 'matrix') {
+        visibleFeatures += this.drawMatrixTrack(spec, this.runtimes.get(spec.id)!, index, top, rowHeight, width, palette)
       } else if (spec.kind === 'alignment') {
         visibleFeatures += this.drawAlignmentTrack(spec, this.runtimes.get(spec.id)!, index, top, rowHeight, width, palette)
       } else visibleFeatures += this.drawGeneTrack(spec, width, top, rowHeight, palette)
@@ -1126,6 +1135,92 @@ export class GenomeBrowser {
     return shown.length
   }
 
+  private drawMatrixTrack(
+    spec: TrackSpec,
+    track: TrackRuntime,
+    index: number,
+    top: number,
+    height: number,
+    width: number,
+    palette: CanvasPalette,
+  ): number {
+    const ctx = this.context
+    const bottom = top + height
+    const plotWidth = width - PLOT_LEFT
+    ctx.fillStyle = index % 2 === 0 ? palette.track : palette.trackAlternate
+    ctx.fillRect(LABEL_WIDTH, top, plotWidth, height)
+    ctx.fillStyle = palette.gutter
+    ctx.fillRect(0, top, LABEL_WIDTH, height)
+    if (this.selectedTrackIds.has(spec.id)) { ctx.fillStyle = palette.selectionFill; ctx.fillRect(0, top, LABEL_WIDTH, height) }
+    ctx.strokeStyle = palette.line
+    ctx.beginPath(); ctx.moveTo(0, bottom - 0.5); ctx.lineTo(width, bottom - 0.5); ctx.stroke()
+
+    const matrix = track.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
+    ctx.fillStyle = palette.ink
+    ctx.font = '600 12px Inter, system-ui, sans-serif'
+    const labelBounds = trackLabelBounds()
+    const labelLines = wrappedLines(ctx, spec.label, labelBounds.width, Math.max(1, Math.floor((height - 30) / 15)))
+    drawCenteredTextLines(ctx, labelLines, labelBounds.center, top + Math.max(15, (height - labelLines.length * 15) / 2), 15)
+    ctx.fillStyle = palette.muted
+    ctx.font = '9px Inter, system-ui, sans-serif'
+    ctx.textAlign = 'center'
+    const resolution = matrix?.resolution ?? spec.matrixResolution
+    const normalization = spec.matrixNormalization ?? 'raw'
+    ctx.fillText(`${resolution ? formatBases(resolution) : 'auto'} · ${normalization} · ${spec.matrixTransform === 'linear' ? 'linear' : 'log'}`, labelBounds.center, bottom - 8)
+    ctx.textAlign = 'start'
+    if (track.status === 'error' || track.status === 'offline') {
+      ctx.fillStyle = palette.error
+      ctx.font = '11px Inter, system-ui, sans-serif'
+      wrapText(ctx, track.error ?? 'Could not load contact matrix', 24, bottom - 38, 136, 15, 2)
+      return 0
+    }
+    if (!matrix?.cells.length) {
+      if (track.status === 'loading') {
+        ctx.fillStyle = palette.muted
+        ctx.font = '12px Inter, system-ui, sans-serif'
+        ctx.fillText('Loading contacts…', PLOT_LEFT + 22, top + height / 2)
+      }
+      return 0
+    }
+
+    const values = matrix.cells.map((cell) => cell.value).filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b)
+    const automaticMaximum = values[Math.min(values.length - 1, Math.floor(values.length * 0.98))] ?? 1
+    const maximum = Math.max(Number.EPSILON, spec.matrixScaleMax ?? automaticMaximum)
+    const transform = spec.matrixTransform === 'linear'
+      ? (value: number) => value / maximum
+      : (value: number) => Math.log1p(value) / Math.log1p(maximum)
+    const scale = plotWidth / Math.max(1, this.region.end - this.region.start)
+    const direction = spec.matrixDirection === 'down' ? 1 : -1
+    const baseline = direction > 0 ? top + 3 : bottom - 3
+    const halfCell = Math.max(0.55, matrix.resolution * scale / 2)
+    ctx.save()
+    ctx.beginPath(); ctx.rect(PLOT_LEFT, top + 1, plotWidth, height - 2); ctx.clip()
+    ctx.fillStyle = spec.color
+    for (const cell of matrix.cells) {
+      if (!(cell.value > 0) || cell.bin2 + matrix.resolution <= this.region.start || cell.bin1 >= this.region.end) continue
+      const firstCenter = cell.bin1 + matrix.resolution / 2
+      const secondCenter = cell.bin2 + matrix.resolution / 2
+      const x = PLOT_LEFT + (((firstCenter + secondCenter) / 2) - this.region.start) * scale
+      const y = baseline + direction * ((secondCenter - firstCenter) / 2) * scale
+      if (x + halfCell < PLOT_LEFT || x - halfCell > width || y + halfCell < top || y - halfCell > bottom) continue
+      const intensity = Math.max(0, Math.min(1, transform(cell.value)))
+      if (!Number.isFinite(intensity) || intensity <= 0) continue
+      ctx.globalAlpha = 0.08 + Math.pow(intensity, 0.72) * 0.92
+      ctx.beginPath()
+      ctx.moveTo(x - halfCell, y)
+      ctx.lineTo(x, y + halfCell)
+      ctx.lineTo(x + halfCell, y)
+      ctx.lineTo(x, y - halfCell)
+      ctx.closePath()
+      ctx.fill()
+    }
+    ctx.globalAlpha = 1
+    ctx.strokeStyle = palette.axisLine
+    ctx.beginPath(); ctx.moveTo(PLOT_LEFT, baseline + 0.5); ctx.lineTo(width, baseline + 0.5); ctx.stroke()
+    ctx.restore()
+    return matrix.cells.length
+  }
+
   private drawAlignmentTrack(
     spec: TrackSpec,
     track: TrackRuntime,
@@ -1547,6 +1642,7 @@ export class GenomeBrowser {
   private async loadTrack(track: TrackRuntime): Promise<void> {
     const source = track.source
     if (!source) return
+    const spec = this.document.tracks.find((item) => item.id === track.trackId)
     const chromosomeLength = this.chromosomes.get(this.region.chr) ?? source.chromosomes.get(this.region.chr)
     if (!chromosomeLength) {
       track.status = 'error'
@@ -1556,10 +1652,11 @@ export class GenomeBrowser {
       return
     }
     const span = this.region.end - this.region.start
+    const overscanFactor = spec?.kind === 'matrix' ? 0.25 : OVERSCAN_FACTOR
     const queryRegion = clampRegion({
       chr: this.region.chr,
-      start: this.region.start - span * OVERSCAN_FACTOR,
-      end: this.region.end + span * OVERSCAN_FACTOR,
+      start: this.region.start - span * overscanFactor,
+      end: this.region.end + span * overscanFactor,
     }, chromosomeLength)
     const version = ++track.requestVersion
     this.abortControllers.get(track.id)?.abort()
@@ -1571,7 +1668,6 @@ export class GenomeBrowser {
     this.scheduleRender()
     try {
       const plotWidth = Math.max(1, this.cssWidth() - PLOT_LEFT)
-      const spec = this.document.tracks.find((item) => item.id === track.trackId)
       const options = spec?.kind === 'alignment' ? {
         bamViewMode: spec.bamViewMode,
         bamViewAsPairs: spec.bamViewAsPairs,
@@ -1579,12 +1675,16 @@ export class GenomeBrowser {
         bamIncludeDuplicates: spec.bamIncludeDuplicates,
         bamIncludeSecondary: spec.bamIncludeSecondary,
         bamIncludeSupplementary: spec.bamIncludeSupplementary,
+      } : spec?.kind === 'matrix' ? {
+        matrixResolution: spec.matrixResolution,
+        matrixNormalization: spec.matrixNormalization,
       } : undefined
-      const features = await source.getFeatures(queryRegion, plotWidth * 3, controller.signal, options)
+      const queryPixelWidth = plotWidth * (1 + overscanFactor * 2)
+      const features = await source.getFeatures(queryRegion, queryPixelWidth, controller.signal, options)
       if (version !== track.requestVersion) return
       track.features = features
       track.loadedRegion = queryRegion
-      track.loadedBasesPerPixel = (queryRegion.end - queryRegion.start) / Math.max(1, plotWidth * 3)
+      track.loadedBasesPerPixel = (queryRegion.end - queryRegion.start) / Math.max(1, queryPixelWidth)
       track.status = 'ready'
     } catch (error) {
       if (version !== track.requestVersion || isAbortError(error)) return
@@ -2006,6 +2106,11 @@ function alignmentQueryChanged(previous: TrackSpec, next: TrackSpec): boolean {
     || previous.bamIncludeDuplicates !== next.bamIncludeDuplicates
     || previous.bamIncludeSecondary !== next.bamIncludeSecondary
     || previous.bamIncludeSupplementary !== next.bamIncludeSupplementary
+}
+
+function matrixQueryChanged(previous: TrackSpec, next: TrackSpec): boolean {
+  return previous.matrixResolution !== next.matrixResolution
+    || previous.matrixNormalization !== next.matrixNormalization
 }
 
 function canvasPalette(): CanvasPalette {
