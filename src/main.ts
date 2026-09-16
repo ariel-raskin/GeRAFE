@@ -2,6 +2,7 @@ import './style.css'
 import { ungzip } from 'pako-esm2'
 import { GenomeBrowser, heightScoreForPixels, trackPixelHeight } from './browser.ts'
 import { BedGraphSource } from './data/bedgraph.ts'
+import { gzipText } from './data/gzip.ts'
 import { BedSource } from './data/bed.ts'
 import { BigWigSource } from './data/bigwig.ts'
 import { TdfSource } from './data/tdf.ts'
@@ -605,8 +606,8 @@ async function sourceFromFile(file: File, selected: readonly File[]): Promise<Op
     sourceSpec: makeSourceSpec(file, 'bigwig'),
     kind: 'signal',
   }
-  if (name.endsWith('.bedgraph')) return {
-    source: await BedGraphSource.fromFile(file),
+  if (name.endsWith('.bedgraph') || name.endsWith('.bedgraph.gz')) return {
+    source: await BedGraphSource.fromFile(name.endsWith('.gz') ? gzipTextInput(file, () => file.arrayBuffer()) : file),
     sourceSpec: makeSourceSpec(file, 'bedgraph'),
     kind: 'signal',
   }
@@ -629,7 +630,7 @@ async function sourceFromFile(file: File, selected: readonly File[]): Promise<Op
       kind: 'alignment',
     }
   }
-  throw new Error(`${file.name}: supported data files are .bw/.bigWig, .bedGraph, .tdf, indexed .bam, and .bed.`)
+  throw new Error(`${file.name}: supported data files are .bw/.bigWig, .bedGraph/.bedGraph.gz, .tdf, indexed .bam, and .bed.`)
 }
 
 function makeSourceSpec(file: File | LocalFileDescriptor, format: SourceFormat, index?: File | LocalFileDescriptor): TrackSourceSpec {
@@ -696,8 +697,8 @@ async function sourceFromNativeFile(file: LocalFileDescriptor, selected: readonl
     sourceSpec: makeSourceSpec(file, 'bigwig'),
     kind: 'signal',
   }
-  if (name.endsWith('.bedgraph')) return {
-    source: await BedGraphSource.fromFile(nativeTextInput(file, handle)),
+  if (name.endsWith('.bedgraph') || name.endsWith('.bedgraph.gz')) return {
+    source: await BedGraphSource.fromFile(name.endsWith('.gz') ? gzipTextInput(file, () => handle.readFile()) : nativeTextInput(file, handle)),
     sourceSpec: makeSourceSpec(file, 'bedgraph'),
     kind: 'signal',
   }
@@ -720,7 +721,7 @@ async function sourceFromNativeFile(file: LocalFileDescriptor, selected: readonl
       kind: 'alignment',
     }
   }
-  throw new Error(`${file.name}: supported data files are .bw/.bigWig, .bedGraph, .tdf, indexed .bam, and .bed.`)
+  throw new Error(`${file.name}: supported data files are .bw/.bigWig, .bedGraph/.bedGraph.gz, .tdf, indexed .bam, and .bed.`)
 }
 
 function nativeTextInput(file: LocalFileDescriptor, handle: NativeFileHandle): { name: string; size: number; text(): Promise<string> } {
@@ -729,6 +730,10 @@ function nativeTextInput(file: LocalFileDescriptor, handle: NativeFileHandle): {
     size: file.size,
     async text() { return new TextDecoder().decode(await handle.readFile()) },
   }
+}
+
+function gzipTextInput(file: File | LocalFileDescriptor, read: () => Promise<ArrayBuffer | Uint8Array>): { name: string; size: number; text(): Promise<string> } {
+  return { name: file.name, size: file.size, text: () => gzipText(read) }
 }
 
 function findNativeBamIndex(bam: LocalFileDescriptor, files: readonly LocalFileDescriptor[]): LocalFileDescriptor | undefined {
