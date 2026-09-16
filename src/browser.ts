@@ -1312,18 +1312,6 @@ export class GenomeBrowser {
     const matrixPalette = spec.matrixPalette ?? 'monochrome'
     ctx.save()
     ctx.beginPath(); ctx.rect(PLOT_LEFT, top + 1, plotWidth, height - 2); ctx.clip()
-    const footprintDepth = Math.max(0, Math.min(height - 6, plotWidth / 2))
-    const farY = baseline + direction * footprintDepth
-    ctx.fillStyle = matrixPalette === 'warm-dark' ? matrixDarkWarmPaletteColor(0)
-      : matrixPalette === 'warm' ? matrixWarmPaletteColor(0) : spec.color
-    ctx.globalAlpha = matrixPalette === 'monochrome' ? 0.045 : 1
-    ctx.beginPath()
-    ctx.moveTo(PLOT_LEFT, baseline)
-    ctx.lineTo(width, baseline)
-    ctx.lineTo(width - footprintDepth, farY)
-    ctx.lineTo(PLOT_LEFT + footprintDepth, farY)
-    ctx.closePath()
-    ctx.fill()
     for (const cell of matrix.cells) {
       if (!(cell.value > 0) || cell.bin2 + matrix.resolution <= this.region.start || cell.bin1 >= this.region.end) continue
       const firstCenter = cell.bin1 + matrix.resolution / 2
