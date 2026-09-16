@@ -153,8 +153,8 @@ The interactive browser can continue using Canvas for speed. Publication export 
 2. **Implemented for signal and gene tracks:** add direct label-gutter selection and context menus, animated drag ordering across two independently scrollable panes, within-group ordering, grouping, labels, colors, duplication/relinking, fixed or viewport-auto domains, independent scale linking, editable 1–100 relative heights, fit-to-pane layout, persistence, JSON workspace interchange, and undo/redo. Group blocks cannot be split, and dynamic centered label wrapping follows track height.
 3. **Core implemented:** explicit plus/minus source roles, filename inference, automatic and manually correctable pairing, sign normalization, one-track diverging presentation, separate strand colors, and independent strand scale channels. Add stacked/separate presentations, input-sign overrides, and optional symmetric magnitudes next.
 4. **Core implemented:** signal domain calculation now lives in a renderer-independent scale engine; stranded channels remain separate during selected-track and group autoscaling. Extend it with drag-stable domains, auto-region, and percentiles.
-5. Upgrade gene annotations to exon-aware models and add BED/BEDPE tracks.
+5. **Implemented:** upgrade gene annotations to exon-aware models and add BED/BEDPE tracks.
 6. Add figure composition as another view of the same document, then SVG/PNG/PDF export and render provenance.
-7. Add matrix tracks and their distinct 2D scaling/layout system.
+7. **Core implemented ahead of figure composition:** add indexed `.hic`, `.cool`, and `.mcool` cis matrix tracks, zoom-aware/manual resolutions, source normalizations, and a persisted triangular heatmap presentation. Extend this to interchromosomal two-axis views, expected/observed transforms, and richer matrix-derived annotations later.
 
 This ordering keeps Goal A moving while preventing browser-only decisions from becoming migration problems for Goal B.
