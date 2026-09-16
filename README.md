@@ -35,7 +35,7 @@ GeRAFE is currently developed and tested as a Windows desktop application.
 - Import custom reference assemblies from `.fai`, `.genome`, `.chrom.sizes`, and other two-column chromosome-size files.
 - Two independently scrollable and resizable track panes with a fixed coordinate header.
 - Reorder tracks by dragging and organize related tracks into visual groups.
-- Select one or multiple tracks and edit their colors, heights, grouping, and shared type-specific display settings.
+- Select one or multiple tracks and edit their colors, heights, height locks, grouping, and shared type-specific display settings.
 - Automatic visible-window scaling, fixed scales, linked scales, and optional zero-flooring for quantitative tracks.
 - Automatic positive/negative signal pairing from common filename markers such as `plus`/`minus` and `pos`/`neg`, with one shared zero axis, red/blue strand colors, and independently scaled strand magnitudes.
 - Stranded pairs remain compatible with visual groups; grouped autoscaling and color controls keep ordinary, positive, and negative channels separate.
@@ -159,10 +159,10 @@ GeRAFE** to see the installed version.
 - Use `Ctrl`-click to toggle selection, `Shift`-click to select a range, or `Ctrl+A` outside a text field to select all visible tracks.
 - Right-click a track label for display, color, height, scale, grouping, duplication, relinking, and removal options. Ordinary signal tracks can also suppress negative values when those values are not meaningful.
 - Recognizable complementary BigWig, bedGraph, and TDF signal files link automatically. Right-click the combined track to set strand colors, relink either source, or separate the sources again. Under **Settings → Track options**, choose whether to show TSS elbows, auto-link strands, apply red/blue strand colors, and autoscale new visual groups.
-- Drag selected tracks to reorder them or move them between the upper and lower panes. Hover either outer boundary of a selected track—or of a consecutive selected run—and drag vertically to resize every selected track by the same pixel amount.
+- Drag selected tracks to reorder them or move them between the upper and lower panes. Hold the primary mouse button over a track body to select it without returning to its label. Hover either outer boundary of a selected track—or of a consecutive selected run—and drag vertically to resize every selected track by the same pixel amount.
 - Click a group card to select the entire group; right-click it for group-wide options.
-- Use **Fit tracks** to fit the visible upper tracks exactly into the available pane height. Long names retain enough height for two centered lines. The separate indicator on the right side of the button enables persistent automatic fitting as tracks or pane dimensions change. Each channel of a linked positive/negative pair receives the same height as a regular signal track.
-- The lower gene track sizes itself to the visible collapsed, expanded, or squished transcript layout; its small reference provenance label is informational and does not reserve additional layout space.
+- Use **Fit tracks** to fit the visible upper tracks exactly into the available pane height. Long names retain enough height for two centered lines. **Lock track height** in a track's context menu reserves its current height and excludes it from manual and automatic fitting. The separate indicator on the right side of the button enables persistent automatic fitting as tracks or pane dimensions change. Each channel of a linked positive/negative pair receives the same height as a regular signal track.
+- The lower gene track sizes itself to the visible layout; its small reference provenance label is informational and does not reserve additional layout space. Collapsed mode overlays representative gene structures on one baseline and uses two collision-aware name lanes, keeping its height bounded at wide genomic spans. Expanded and squished modes retain transcript stacking.
 
 ### BAM display controls
 
@@ -176,9 +176,9 @@ BAM track menus provide:
 
 ### Contact-matrix display controls
 
-Right-click one or several selected `.hic`, `.cool`, or `.mcool` tracks to open hover fly-out menus for their shared resolution, normalization, intensity, and color-scale controls. Resolution can follow the visible span automatically or use a value supported by every selected source. New tracks start with unnormalized values (`NONE` for `.hic`, raw counts for Cooler) and a publication-oriented yellow → red → black scale. Intensity can use an off-diagonal automatic z-maximum or a fixed z-max with either log or linear transformation; a single-color scale remains available. The triangular matrix can also be flipped above or below its baseline.
+Right-click one or several selected `.hic`, `.cool`, or `.mcool` tracks to open hover fly-out menus for their shared resolution, normalization, intensity, and color-scale controls. Resolution can follow the visible span automatically or use a value supported by every selected source. New tracks start with unnormalized values (`NONE` for `.hic`, raw counts for Cooler) and a publication-oriented yellow → red → black scale. A dark-canvas warm → red → white adaptation and a single-color scale are also available. Intensity can use an off-diagonal automatic z-maximum or a fixed z-max with either log or linear transformation. The triangular matrix can be flipped above or below its baseline and re-queries its visible contact distance when its height changes.
 
-GeRAFE reads genomic coordinates from each Cooler's stored bin table and canonicalizes the triangle orientation of both Cooler and `.hic` cells before drawing. Matrix readers and their indexes are reused across queries, pans use an overscanned window, and contacts too distant to be visible within the track height are omitted from the render payload to keep navigation responsive.
+GeRAFE reads genomic coordinates from each Cooler's stored bin table and canonicalizes the triangle orientation of both Cooler and `.hic` cells before drawing. Matrix readers and their indexes are reused across queries, pans use an overscanned window, and contacts too distant to be visible within the track height are omitted from the render payload to keep navigation responsive. Sparse bins without a returned contact are painted with the selected scale's zero-value color rather than interpolated; the current sparse payload does not distinguish a true zero from a masked or unavailable bin.
 
 ### Workspaces and persistence
 
