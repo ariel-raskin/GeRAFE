@@ -1065,21 +1065,6 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const pairable = selected.length === 2 && selected.every((track) => track.kind === 'signal') && canPairSelectedStrands(selected as TrackSpec[])
   const matrixTracks = selected.filter((track) => track.kind === 'matrix')
   const matricesOnly = matrixTracks.length > 0 && matrixTracks.length === selected.length
-  const matrixMetadata = matrixTracks.map((track) => {
-    const source = runtimeSources.get(track.sourceIds[0])
-    return isNativeMatrixSource(source) ? source.matrixMetadata : undefined
-  })
-  const commonMatrixResolutions = commonValues(matrixMetadata.map((metadata) => metadata?.resolutions ?? []))
-  const commonMatrixNormalizations = commonValues(matrixMetadata.map((metadata) => metadata?.normalizations ?? []))
-  const matrixResolutionLabel = sameValue(matrixTracks.map((track) => track.matrixResolution))
-    ? matrixTracks[0]?.matrixResolution ? formatBases(matrixTracks[0].matrixResolution!) : 'Automatic'
-    : 'Mixed'
-  const matrixNormalizationLabel = sameValue(matrixTracks.map((track) => track.matrixNormalization))
-    ? matrixTracks[0]?.matrixNormalization ?? matrixMetadata[0]?.defaultNormalization ?? 'raw'
-    : 'Mixed'
-  const matrixScaleLabel = sameValue(matrixTracks.map((track) => track.matrixScaleMax))
-    ? matrixTracks[0]?.matrixScaleMax ? `z-max ${matrixTracks[0].matrixScaleMax}` : 'Automatic z-max'
-    : 'Mixed'
   const interactionGeneDetail = interactionTracks.length && interactionTracks.every((track) => track.interactionFilterMode === 'genes')
     && sameValue(interactionTracks.map((track) => (track.interactionFilterGenes ?? []).join(', ')))
     ? escapeHtml((interactionTracks[0].interactionFilterGenes ?? []).join(', '))
@@ -1131,11 +1116,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     ${one && target.kind === 'interaction' ? action('duplicate', 'Duplicate track') : ''}
     ${one && target.kind === 'interaction' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
     ${matricesOnly ? '<span class="context-separator"></span>' : ''}
-    ${matricesOnly ? action('matrix-flip', 'Flip matrix upside down', matrixTracks.every((track) => track.matrixDirection === 'down') ? 'current' : '') : ''}
-    ${matricesOnly ? submenu('matrix-resolution', 'Resolution', matrixResolutionLabel, action('matrix-resolution-auto', 'Automatic', matrixTracks.every((track) => track.matrixResolution === undefined) ? 'current' : '') + commonMatrixResolutions.map((resolution) => action(`matrix-resolution-value-${resolution}`, formatBases(resolution), matrixTracks.every((track) => track.matrixResolution === resolution) ? 'current' : '')).join('')) : ''}
-    ${matricesOnly && commonMatrixNormalizations.length ? submenu('matrix-normalization', 'Normalization', escapeHtml(matrixNormalizationLabel), commonMatrixNormalizations.map((normalization) => action(`matrix-normalization-value-${encodeURIComponent(normalization)}`, escapeHtml(normalization), matrixTracks.every((track) => track.matrixNormalization === normalization) ? 'current' : '')).join('')) : ''}
-    ${matricesOnly ? submenu('matrix-intensity', 'Intensity scale', matrixScaleLabel, action('matrix-scale-auto', 'Automatic z-max', matrixTracks.every((track) => track.matrixScaleMax === undefined) ? 'current' : '') + action('matrix-scale-fixed', 'Set z-max…', sameValue(matrixTracks.map((track) => track.matrixScaleMax)) && matrixTracks[0]?.matrixScaleMax ? String(matrixTracks[0].matrixScaleMax) : '') + '<span class="context-separator"></span>' + action('matrix-transform-log', 'Log intensity', matrixTracks.every((track) => track.matrixTransform !== 'linear') ? 'current' : '') + action('matrix-transform-linear', 'Linear intensity', matrixTracks.every((track) => track.matrixTransform === 'linear') ? 'current' : '')) : ''}
-    ${matricesOnly ? submenu('matrix-palette', 'Color scale', sameValue(matrixTracks.map((track) => track.matrixPalette)) ? matrixTracks[0]?.matrixPalette === 'monochrome' ? 'Track color' : matrixTracks[0]?.matrixPalette === 'warm-dark' ? 'Dark warm' : 'Yellow–red–black' : 'Mixed', action('matrix-palette-monochrome', 'Single track color', matrixTracks.every((track) => track.matrixPalette === 'monochrome') ? 'current' : '') + action('matrix-palette-warm', 'Yellow → red → black', matrixTracks.every((track) => track.matrixPalette === 'warm') ? 'current' : '') + action('matrix-palette-warm-dark', 'Dark warm → red → white', matrixTracks.every((track) => track.matrixPalette === 'warm-dark') ? 'current' : '')) : ''}
+    ${matricesOnly ? matrixContextMenuMarkup(matrixTracks, action, submenu) : ''}
     ${matricesOnly ? '<span class="context-separator"></span>' : ''}
     ${one && target.kind === 'matrix' ? action('duplicate', 'Duplicate track') : ''}
     ${one && target.kind === 'matrix' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
@@ -1188,11 +1169,63 @@ function commonValues<T>(sets: readonly (readonly T[])[]): T[] {
   return sets[0].filter((value, index) => sets[0].indexOf(value) === index && sets.slice(1).every((items) => items.includes(value)))
 }
 
+type ContextActionRenderer = (id: string, label: string, detail?: string, disabled?: boolean, danger?: boolean) => string
+type ContextSubmenuRenderer = (id: string, label: string, detail: string, items: string) => string
+
+function matrixContextMenuMarkup(
+  matrixTracks: readonly TrackSpec[],
+  action: ContextActionRenderer,
+  submenu: ContextSubmenuRenderer,
+): string {
+  if (!matrixTracks.length) return ''
+  const metadata = matrixTracks.map((track) => {
+    const source = runtimeSources.get(track.sourceIds[0])
+    return isNativeMatrixSource(source) ? source.matrixMetadata : undefined
+  })
+  const commonResolutions = commonValues(metadata.map((item) => item?.resolutions ?? []))
+  const commonNormalizations = commonValues(metadata.map((item) => item?.normalizations ?? []))
+  const resolutionLabel = sameValue(matrixTracks.map((track) => track.matrixResolution))
+    ? matrixTracks[0].matrixResolution ? formatBases(matrixTracks[0].matrixResolution) : 'Automatic'
+    : 'Mixed'
+  const normalizationLabel = sameValue(matrixTracks.map((track) => track.matrixNormalization))
+    ? matrixTracks[0].matrixNormalization ?? metadata[0]?.defaultNormalization ?? 'raw'
+    : 'Mixed'
+  const scaleLabel = sameValue(matrixTracks.map((track) => track.matrixScaleMax))
+    ? matrixTracks[0].matrixScaleMax ? `z-max ${matrixTracks[0].matrixScaleMax}` : 'Automatic z-max'
+    : 'Mixed'
+  const palettes = matrixTracks.map((track) => track.matrixPalette ?? 'monochrome')
+  const paletteLabel = sameValue(palettes)
+    ? palettes[0] === 'monochrome' ? 'Track color' : palettes[0] === 'blue-black' ? 'Blue → black' : 'Yellow → red → black'
+    : 'Mixed'
+
+  return [
+    action('matrix-flip', 'Flip matrix upside down', matrixTracks.every((track) => track.matrixDirection === 'down') ? 'current' : ''),
+    submenu('matrix-resolution', 'Resolution', resolutionLabel,
+      action('matrix-resolution-auto', 'Automatic', matrixTracks.every((track) => track.matrixResolution === undefined) ? 'current' : '')
+      + commonResolutions.map((resolution) => action(`matrix-resolution-value-${resolution}`, formatBases(resolution), matrixTracks.every((track) => track.matrixResolution === resolution) ? 'current' : '')).join('')),
+    commonNormalizations.length ? submenu('matrix-normalization', 'Normalization', escapeHtml(normalizationLabel),
+      commonNormalizations.map((normalization) => action(`matrix-normalization-value-${encodeURIComponent(normalization)}`, escapeHtml(normalization), matrixTracks.every((track) => track.matrixNormalization === normalization) ? 'current' : '')).join('')) : '',
+    submenu('matrix-intensity', 'Intensity scale', scaleLabel,
+      action('matrix-scale-auto', 'Automatic z-max', matrixTracks.every((track) => track.matrixScaleMax === undefined) ? 'current' : '')
+      + action('matrix-scale-fixed', 'Set z-max…', sameValue(matrixTracks.map((track) => track.matrixScaleMax)) && matrixTracks[0].matrixScaleMax ? String(matrixTracks[0].matrixScaleMax) : '')
+      + '<span class="context-separator"></span>'
+      + action('matrix-transform-log', 'Log intensity', matrixTracks.every((track) => track.matrixTransform !== 'linear') ? 'current' : '')
+      + action('matrix-transform-linear', 'Linear intensity', matrixTracks.every((track) => track.matrixTransform === 'linear') ? 'current' : '')),
+    submenu('matrix-palette', 'Color scale', paletteLabel,
+      action('matrix-palette-monochrome', 'Single track color', matrixTracks.every((track) => (track.matrixPalette ?? 'monochrome') === 'monochrome') ? 'current' : '')
+      + action('matrix-palette-warm', 'Yellow → red → black', matrixTracks.every((track) => track.matrixPalette === 'warm') ? 'current' : '')
+      + action('matrix-palette-blue-black', 'Light blue → dark blue → black', matrixTracks.every((track) => track.matrixPalette === 'blue-black') ? 'current' : '')),
+    action('matrix-palette-reverse', 'Reverse score colors', matrixTracks.every((track) => track.matrixPaletteReversed) ? 'current' : ''),
+  ].join('')
+}
+
 function openGroupContextMenu(groupId: string, x: number, y: number): void {
   const group = store.current.groups.find((item) => item.id === groupId)
   if (!group) return
   const members = store.current.tracks.filter((track) => track.displayGroupId === groupId)
   const signalIds = members.filter((track) => track.kind === 'signal' || track.kind === 'stranded').map((track) => track.id)
+  const matrixTracks = members.filter((track) => track.kind === 'matrix')
+  const matricesOnly = matrixTracks.length > 0 && matrixTracks.length === members.length
   const hasOrdinaryColor = members.some((track) => track.kind !== 'stranded' && !(track.kind === 'signal' && track.signalStrand))
   const hasLinkedStranded = members.some((track) => track.kind === 'stranded')
   const hasPlusColor = members.some((track) => track.kind === 'stranded' || (track.kind === 'signal' && track.signalStrand === 'plus'))
@@ -1205,6 +1238,10 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
     return `<button class="context-item${current ? ' is-current' : ''}${danger ? ' danger' : ''}" data-context-action="${id}" type="button" role="menuitem" ${current ? 'aria-current="true"' : ''} ${disabled ? 'disabled' : ''}><span>${label}</span>${visibleDetail ? `<small>${visibleDetail}</small>` : ''}</button>`
   }
   contextSubmenuItems.clear()
+  const submenu = (id: string, label: string, detail: string, items: string) => {
+    contextSubmenuItems.set(id, items)
+    return `<button class="context-item context-submenu-trigger" data-context-submenu="${id}" type="button" role="menuitem" aria-haspopup="menu" aria-expanded="false"><span>${label}</span><small>${detail}</small></button>`
+  }
   trackContextMenu.innerHTML = `
     <div class="context-heading"><strong>${escapeHtml(group.label)}</strong><span>${members.length} track${members.length === 1 ? '' : 's'} · group options</span></div>
     ${action('group-select', 'Select tracks in group')}
@@ -1218,6 +1255,7 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
     ${signalIds.length ? action('group-auto-linked', 'Autoscale group together', group.scaleBehavior === 'linked' ? 'current' : '') : ''}
     ${signalIds.length ? action('group-auto-independent', 'Use independent autoscaling', group.scaleBehavior === 'independent' ? 'current' : '') : ''}
     ${signalIds.length ? action('group-fixed', 'Set fixed group scale…') : ''}
+    ${matricesOnly ? '<span class="context-separator"></span>' + matrixContextMenuMarkup(matrixTracks, action, submenu) : ''}
     <span class="context-separator"></span>
     ${action('group-rename', 'Rename group…')}
     ${action('group-remove', 'Ungroup tracks')}
@@ -1395,46 +1433,7 @@ function handleTrackContextAction(event: MouseEvent): void {
       if (unresolved.length) showToast(`${unresolved.join(', ')} ${unresolved.length === 1 ? 'was' : 'were'} not found in the active annotation; matching BEDPE names instead.`)
     }
   }
-  if (command === 'matrix-flip') store.edit((draft) => {
-    const tracks = draft.tracks.filter((item) => matrixIds.includes(item.id) && item.kind === 'matrix')
-    const direction = tracks.length && tracks.every((track) => track.matrixDirection === 'down') ? 'up' : 'down'
-    for (const track of tracks) track.matrixDirection = direction
-  })
-  if (command === 'matrix-resolution-auto') store.edit((draft) => {
-    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixResolution = undefined
-  })
-  if (command?.startsWith('matrix-resolution-value-')) {
-    const resolution = Number(command.slice('matrix-resolution-value-'.length))
-    if (resolution) store.edit((draft) => {
-      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixResolution = resolution
-    })
-  }
-  if (command?.startsWith('matrix-normalization-value-')) {
-    const normalization = decodeURIComponent(command.slice('matrix-normalization-value-'.length))
-    if (normalization) store.edit((draft) => {
-      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixNormalization = normalization
-    })
-  }
-  if (command === 'matrix-transform-log' || command === 'matrix-transform-linear') store.edit((draft) => {
-    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixTransform = command === 'matrix-transform-linear' ? 'linear' : 'log1p'
-  })
-  if (command === 'matrix-scale-auto') store.edit((draft) => {
-    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixScaleMax = undefined
-  })
-  if (command === 'matrix-scale-fixed') {
-    const tracks = store.current.tracks.filter((item) => matrixIds.includes(item.id) && item.kind === 'matrix')
-    const initial = sameValue(tracks.map((track) => track.matrixScaleMax)) ? tracks[0]?.matrixScaleMax : undefined
-    const entered = window.prompt('Maximum contact intensity:', initial ? String(initial) : '')
-    const maximum = Number(entered)
-    if (entered !== null && Number.isFinite(maximum) && maximum > 0) store.edit((draft) => {
-      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixScaleMax = maximum
-    })
-  }
-  if (command === 'matrix-palette-monochrome' || command === 'matrix-palette-warm' || command === 'matrix-palette-warm-dark') store.edit((draft) => {
-    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') {
-      track.matrixPalette = command === 'matrix-palette-warm' ? 'warm' : command === 'matrix-palette-warm-dark' ? 'warm-dark' : 'monochrome'
-    }
-  })
+  applyMatrixContextAction(command, matrixIds)
   if (command?.startsWith('bam-view-')) {
     const mode = command.slice(9) as 'coverage' | 'alignments' | 'both'
     store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamViewMode = mode })
@@ -1501,10 +1500,62 @@ function handleTrackContextAction(event: MouseEvent): void {
   }
 }
 
+function applyMatrixContextAction(command: string | undefined, matrixIds: readonly string[]): void {
+  if (!command?.startsWith('matrix-') || !matrixIds.length) return
+  if (command === 'matrix-flip') store.edit((draft) => {
+    const tracks = draft.tracks.filter((item) => matrixIds.includes(item.id) && item.kind === 'matrix')
+    const direction = tracks.length && tracks.every((track) => track.matrixDirection === 'down') ? 'up' : 'down'
+    for (const track of tracks) track.matrixDirection = direction
+  })
+  if (command === 'matrix-resolution-auto') store.edit((draft) => {
+    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixResolution = undefined
+  })
+  if (command.startsWith('matrix-resolution-value-')) {
+    const resolution = Number(command.slice('matrix-resolution-value-'.length))
+    if (resolution) store.edit((draft) => {
+      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixResolution = resolution
+    })
+  }
+  if (command.startsWith('matrix-normalization-value-')) {
+    const normalization = decodeURIComponent(command.slice('matrix-normalization-value-'.length))
+    if (normalization) store.edit((draft) => {
+      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixNormalization = normalization
+    })
+  }
+  if (command === 'matrix-transform-log' || command === 'matrix-transform-linear') store.edit((draft) => {
+    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixTransform = command === 'matrix-transform-linear' ? 'linear' : 'log1p'
+  })
+  if (command === 'matrix-scale-auto') store.edit((draft) => {
+    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixScaleMax = undefined
+  })
+  if (command === 'matrix-scale-fixed') {
+    const tracks = store.current.tracks.filter((item) => matrixIds.includes(item.id) && item.kind === 'matrix')
+    const initial = sameValue(tracks.map((track) => track.matrixScaleMax)) ? tracks[0]?.matrixScaleMax : undefined
+    const entered = window.prompt('Maximum contact intensity:', initial ? String(initial) : '')
+    const maximum = Number(entered)
+    if (entered !== null && Number.isFinite(maximum) && maximum > 0) store.edit((draft) => {
+      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixScaleMax = maximum
+    })
+  }
+  if (command === 'matrix-palette-monochrome' || command === 'matrix-palette-warm' || command === 'matrix-palette-blue-black') store.edit((draft) => {
+    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') {
+      track.matrixPalette = command === 'matrix-palette-warm' ? 'warm' : command === 'matrix-palette-blue-black' ? 'blue-black' : 'monochrome'
+    }
+  })
+  if (command === 'matrix-palette-reverse') store.edit((draft) => {
+    const tracks = draft.tracks.filter((track) => matrixIds.includes(track.id) && track.kind === 'matrix')
+    const reversed = !tracks.every((track) => track.matrixPaletteReversed)
+    for (const track of tracks) track.matrixPaletteReversed = reversed || undefined
+  })
+}
+
 function handleGroupContextAction(command: string | undefined, groupId: string): void {
   const group = store.current.groups.find((item) => item.id === groupId)
   if (!group) return
-  const memberIds = store.current.tracks.filter((track) => track.displayGroupId === groupId).map((track) => track.id)
+  const members = store.current.tracks.filter((track) => track.displayGroupId === groupId)
+  const memberIds = members.map((track) => track.id)
+  const matrixIds = members.filter((track) => track.kind === 'matrix').map((track) => track.id)
+  const matricesOnly = matrixIds.length > 0 && matrixIds.length === memberIds.length
   const hasLinkedStranded = store.current.tracks.some((track) => track.displayGroupId === groupId && track.kind === 'stranded')
   const signalIds = store.current.tracks.filter((track) => (track.kind === 'signal' || track.kind === 'stranded') && track.displayGroupId === groupId).map((track) => track.id)
   if (command === 'group-select') {
@@ -1533,6 +1584,7 @@ function handleGroupContextAction(command: string | undefined, groupId: string):
     openColorDialog(title, initial ?? '#6d55e0')
   }
   if (command === 'group-height') setTrackHeights(memberIds)
+  if (matricesOnly) applyMatrixContextAction(command, matrixIds)
   if (command === 'group-auto-linked') store.edit((draft) => {
     const draftGroup = draft.groups.find((item) => item.id === groupId)
     if (draftGroup) draftGroup.scaleBehavior = 'linked'

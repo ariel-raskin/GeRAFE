@@ -255,6 +255,7 @@ software license may be selected later.
 ## Documentation
 
 - [Contributing workflow](CONTRIBUTING.md)
+- [Contact-matrix rendering and performance notes](docs/CONTACT_MATRIX_RENDERING.md)
 - [Prerelease beta-testing terms](BETA_TESTING.md)
 - [Development history before Git](docs/DEVELOPMENT_HISTORY.md)
 - [Feasibility and performance notes](docs/FEASIBILITY.md)

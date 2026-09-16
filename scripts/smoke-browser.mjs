@@ -292,9 +292,46 @@ await page.waitForFunction(() => document.querySelector('#reference-label')?.tex
 const customReferenceBeforeReload = await page.locator('#reference-label').textContent()
 await page.reload({ waitUntil: 'networkidle' })
 const customReferenceAfterReload = await page.locator('#reference-label').textContent()
+
+await page.evaluate(() => {
+  const existing = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+  localStorage.setItem('gerafe-track-document', JSON.stringify({
+  schemaVersion: 14,
+  referenceId: existing.referenceId,
+  region: { chr: existing.region?.chr ?? 'contigA', start: 10_000, end: 30_000 },
+  sources: [
+    { id: 'matrix-source-a', name: 'first.cool', format: 'cool', files: [{ name: 'first.cool', size: 1, lastModified: 1, role: 'signal' }] },
+    { id: 'matrix-source-b', name: 'second.cool', format: 'cool', files: [{ name: 'second.cool', size: 1, lastModified: 1, role: 'signal' }] },
+  ],
+  tracks: [
+    { id: 'matrix-a', kind: 'matrix', sourceIds: ['matrix-source-a'], label: 'First matrix', color: '#6d55e0', enabled: true, height: 50, pane: 'main', displayGroupId: 'matrix-group', matrixDirection: 'up', matrixNormalization: 'raw', matrixTransform: 'log1p', matrixPalette: 'warm' },
+    { id: 'matrix-b', kind: 'matrix', sourceIds: ['matrix-source-b'], label: 'Second matrix', color: '#6d55e0', enabled: true, height: 50, pane: 'main', displayGroupId: 'matrix-group', matrixDirection: 'up', matrixNormalization: 'raw', matrixTransform: 'log1p', matrixPalette: 'warm' },
+  ],
+  groups: [{ id: 'matrix-group', label: 'Matrix group' }],
+  scales: [],
+  }))
+})
+await page.reload({ waitUntil: 'networkidle' })
+await page.waitForTimeout(250)
+const matrixCanvasBox = await page.locator('#genome-canvas').boundingBox()
+if (!matrixCanvasBox) throw new Error('Matrix smoke canvas was not visible.')
+await page.mouse.click(matrixCanvasBox.x + 8, matrixCanvasBox.y + 60, { button: 'right' })
+const matrixGroupMenuText = await page.locator('#track-context-menu').textContent()
+await page.locator('[data-context-action="matrix-palette-reverse"]').click()
+await page.waitForTimeout(250)
+const matrixGroupReverseApplied = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').tracks?.every((track) => track.kind !== 'matrix' || track.matrixPaletteReversed === true))
+await page.mouse.click(matrixCanvasBox.x + 8, matrixCanvasBox.y + 60, { button: 'right' })
+await page.locator('[data-context-submenu="matrix-palette"]').hover()
+await page.locator('#track-context-flyout [data-context-action="matrix-palette-blue-black"]').click()
+await page.waitForTimeout(250)
+const matrixGroupPaletteApplied = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').tracks?.every((track) => track.kind !== 'matrix' || track.matrixPalette === 'blue-black'))
+await page.mouse.click(matrixCanvasBox.x + 8, matrixCanvasBox.y + 60, { button: 'right' })
+await page.locator('[data-context-action="group-select"]').click()
+await page.mouse.click(matrixCanvasBox.x + 60, matrixCanvasBox.y + 60, { button: 'right' })
+const selectedMatrixMenuText = await page.locator('#track-context-menu').textContent()
 await browser.close()
 
-console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, customReferenceBeforeReload, customReferenceAfterReload, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixGroupReverseApplied, matrixGroupPaletteApplied, selectedMatrixMenuText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
 if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button' || helpMenuActiveElement !== 'help-menu-button') process.exitCode = 1
@@ -329,4 +366,6 @@ if (hasStrandedTrack && (!initialTrackContextText?.includes('Linked stranded sig
 if (hasStrandedTrack && !strandedRoundTrip) process.exitCode = 1
 if (dataPaths.length && (!offlineTrackStatus?.includes('reopening or attention') || offlineLeftPixel.slice(0, 3).join(',') === '150,144,135')) process.exitCode = 1
 if (customReferenceBeforeReload !== customReferenceAfterReload) process.exitCode = 1
+if (!matrixGroupMenuText?.includes('Intensity scale') || !matrixGroupMenuText?.includes('Reverse score colors') || !matrixGroupMenuText?.includes('Set group track color') || !matrixGroupMenuText?.includes('Set group track height')) process.exitCode = 1
+if (!matrixGroupReverseApplied || !matrixGroupPaletteApplied || !selectedMatrixMenuText?.includes('2 tracks selected') || !selectedMatrixMenuText?.includes('Reverse score colors')) process.exitCode = 1
 if (consoleErrors.length > 0) process.exitCode = 1

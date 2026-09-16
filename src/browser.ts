@@ -2,7 +2,7 @@ import { clampRegion, formatBases, formatLocus } from './genome.ts'
 import type { Cytoband } from './cytoband.ts'
 import type { GeneFeature, GeneSource, TranscriptFeature } from './reference.ts'
 import { computeScaleDomains, createTrackDocument, signalFeatureKey } from './track-document.ts'
-import type { TrackDocument, TrackSpec } from './track-document.ts'
+import type { MatrixPalette, TrackDocument, TrackSpec } from './track-document.ts'
 import type { AlignmentCoverageFeature, AlignmentFeature, InteractionFeature, IntervalFeature, MatrixFeature, Region, SignalFeature, TrackSource, TrackRuntime } from './types.ts'
 import { SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
 
@@ -1267,18 +1267,34 @@ export class GenomeBrowser {
     ctx.beginPath(); ctx.moveTo(0, bottom - 0.5); ctx.lineTo(width, bottom - 0.5); ctx.stroke()
 
     const matrix = track.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
+    const offDiagonalValues = matrix?.cells
+      .filter((cell) => cell.bin2 - cell.bin1 > matrix.resolution * 2)
+      .map((cell) => cell.value)
+      .filter((value) => Number.isFinite(value) && value > 0) ?? []
+    const values = matrix?.cells.length
+      ? (offDiagonalValues.length >= 20 ? offDiagonalValues : matrix.cells.map((cell) => cell.value).filter((value) => Number.isFinite(value) && value > 0)).sort((a, b) => a - b)
+      : []
+    const automaticMaximum = values[Math.min(values.length - 1, Math.floor(values.length * 0.99))] ?? 1
+    const maximum = Math.max(Number.EPSILON, spec.matrixScaleMax ?? automaticMaximum)
+    const legendValues = matrix?.cells.length ? matrixLegendValues(maximum, spec.matrixTransform ?? 'log1p') : []
+    ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
+    const legendLabels = legendValues.map(formatScore)
+    const scaleLaneWidth = legendLabels.length
+      ? Math.max(58, Math.ceil(Math.max(...legendLabels.map((label) => ctx.measureText(label).width))) + 27)
+      : 0
     ctx.fillStyle = palette.ink
     ctx.font = '600 12px Inter, system-ui, sans-serif'
-    const labelBounds = trackLabelBounds()
+    const labelBounds = trackLabelBounds(scaleLaneWidth)
     const labelLines = wrappedLines(ctx, spec.label, labelBounds.width, Math.max(1, Math.floor((height - 30) / 15)))
-    drawCenteredTextLines(ctx, labelLines, labelBounds.center, top + Math.max(15, (height - labelLines.length * 15) / 2), 15)
+    const labelTop = verticallyCenteredBaseline(top, height, labelLines.length, 15)
+    drawCenteredTextLines(ctx, labelLines, labelBounds.center, labelTop, 15)
     ctx.fillStyle = palette.muted
     ctx.font = '9px Inter, system-ui, sans-serif'
     ctx.textAlign = 'center'
     const resolution = matrix?.resolution ?? spec.matrixResolution
     const normalization = spec.matrixNormalization ?? 'raw'
     const scaleLabel = spec.matrixScaleMax ? `z≤${formatScore(spec.matrixScaleMax)}` : 'auto z'
-    ctx.fillText(`${resolution ? formatBases(resolution) : 'auto'} · ${normalization} · ${spec.matrixTransform === 'linear' ? 'linear' : 'log'} · ${scaleLabel}`, labelBounds.center, bottom - 8)
+    ctx.fillText(`${resolution ? formatBases(resolution) : 'auto'} · ${normalization} · ${spec.matrixTransform === 'linear' ? 'linear' : 'log'} · ${scaleLabel}`, labelBounds.center, Math.min(bottom - 7, labelTop + labelLines.length * 15 + 3))
     ctx.textAlign = 'start'
     if (track.status === 'error' || track.status === 'offline') {
       ctx.fillStyle = palette.error
@@ -1295,13 +1311,6 @@ export class GenomeBrowser {
       return 0
     }
 
-    const offDiagonalValues = matrix.cells
-      .filter((cell) => cell.bin2 - cell.bin1 > matrix.resolution * 2)
-      .map((cell) => cell.value)
-      .filter((value) => Number.isFinite(value) && value > 0)
-    const values = (offDiagonalValues.length >= 20 ? offDiagonalValues : matrix.cells.map((cell) => cell.value).filter((value) => Number.isFinite(value) && value > 0)).sort((a, b) => a - b)
-    const automaticMaximum = values[Math.min(values.length - 1, Math.floor(values.length * 0.99))] ?? 1
-    const maximum = Math.max(Number.EPSILON, spec.matrixScaleMax ?? automaticMaximum)
     const transform = spec.matrixTransform === 'linear'
       ? (value: number) => value / maximum
       : (value: number) => Math.log1p(value) / Math.log1p(maximum)
@@ -1310,6 +1319,7 @@ export class GenomeBrowser {
     const baseline = direction > 0 ? top + 3 : bottom - 3
     const halfCell = Math.max(0.55, matrix.resolution * scale / 2)
     const matrixPalette = spec.matrixPalette ?? 'monochrome'
+    drawMatrixLegend(ctx, spec, matrixPalette, maximum, top, bottom, scaleLaneWidth, palette)
     ctx.save()
     ctx.beginPath(); ctx.rect(PLOT_LEFT, top + 1, plotWidth, height - 2); ctx.clip()
     for (const cell of matrix.cells) {
@@ -1319,12 +1329,12 @@ export class GenomeBrowser {
       const x = PLOT_LEFT + (((firstCenter + secondCenter) / 2) - this.region.start) * scale
       const y = baseline + direction * ((secondCenter - firstCenter) / 2) * scale
       if (x + halfCell < PLOT_LEFT || x - halfCell > width || y + halfCell < top || y - halfCell > bottom) continue
-      const intensity = Math.max(0, Math.min(1, transform(cell.value)))
-      if (!Number.isFinite(intensity) || intensity <= 0) continue
-      const warmPalette = matrixPalette !== 'monochrome'
-      ctx.fillStyle = matrixPalette === 'warm-dark' ? matrixDarkWarmPaletteColor(intensity)
-        : warmPalette ? matrixWarmPaletteColor(intensity) : spec.color
-      ctx.globalAlpha = warmPalette ? 1 : 0.08 + Math.pow(intensity, 0.72) * 0.92
+      const scoreIntensity = Math.max(0, Math.min(1, transform(cell.value)))
+      if (!Number.isFinite(scoreIntensity) || scoreIntensity <= 0) continue
+      const intensity = matrixPaletteIntensity(scoreIntensity, spec.matrixPaletteReversed === true)
+      const style = matrixPaletteStyle(matrixPalette, spec.color, intensity)
+      ctx.fillStyle = style.color
+      ctx.globalAlpha = style.alpha
       ctx.beginPath()
       ctx.moveTo(x - halfCell, y)
       ctx.lineTo(x, y + halfCell)
@@ -2169,14 +2179,14 @@ export function matrixWarmPaletteColor(intensity: number): string {
   return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
 }
 
-/** Dark-canvas adaptation that preserves the warm progression without losing the maximum into black. */
-export function matrixDarkWarmPaletteColor(intensity: number): string {
+/** Dark-mode contact palette: low scores are light blue and high scores approach black. */
+export function matrixBlueBlackPaletteColor(intensity: number): string {
   const value = Math.max(0, Math.min(1, intensity))
   const stops = [
-    { at: 0, color: [31, 27, 22] },
-    { at: 0.42, color: [255, 211, 82] },
-    { at: 0.8, color: [232, 48, 43] },
-    { at: 1, color: [255, 248, 231] },
+    { at: 0, color: [218, 240, 255] },
+    { at: 0.5, color: [77, 151, 207] },
+    { at: 0.82, color: [20, 67, 122] },
+    { at: 1, color: [4, 6, 9] },
   ] as const
   const upperIndex = Math.max(1, stops.findIndex((stop) => value <= stop.at))
   const lower = stops[upperIndex - 1]
@@ -2184,6 +2194,75 @@ export function matrixDarkWarmPaletteColor(intensity: number): string {
   const mix = (value - lower.at) / Math.max(Number.EPSILON, upper.at - lower.at)
   const channels = lower.color.map((channel, index) => Math.round(channel + (upper.color[index] - channel) * mix))
   return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
+}
+
+/** Legend values at the high, visual midpoint, and low ends of a matrix scale. */
+export function matrixLegendValues(maximum: number, transform: 'linear' | 'log1p'): [number, number, number] {
+  const max = Math.max(Number.EPSILON, maximum)
+  return [max, transform === 'linear' ? max / 2 : Math.expm1(Math.log1p(max) / 2), 0]
+}
+
+export function matrixPaletteIntensity(scoreIntensity: number, reversed: boolean): number {
+  const value = Math.max(0, Math.min(1, scoreIntensity))
+  return reversed ? 1 - value : value
+}
+
+function matrixPaletteStyle(palette: MatrixPalette, trackColor: string, intensity: number): { color: string; alpha: number } {
+  const value = Math.max(0, Math.min(1, intensity))
+  if (palette === 'warm') return { color: matrixWarmPaletteColor(value), alpha: 1 }
+  if (palette === 'blue-black') return { color: matrixBlueBlackPaletteColor(value), alpha: 1 }
+  return { color: trackColor, alpha: 0.08 + Math.pow(value, 0.72) * 0.92 }
+}
+
+function colorWithAlpha(color: string, alpha: number): string {
+  const hex = /^#([0-9a-f]{6})$/i.exec(color)?.[1]
+  if (!hex) return color
+  const red = Number.parseInt(hex.slice(0, 2), 16)
+  const green = Number.parseInt(hex.slice(2, 4), 16)
+  const blue = Number.parseInt(hex.slice(4, 6), 16)
+  return `rgba(${red}, ${green}, ${blue}, ${Math.max(0, Math.min(1, alpha))})`
+}
+
+function drawMatrixLegend(
+  ctx: CanvasRenderingContext2D,
+  spec: TrackSpec,
+  matrixPalette: MatrixPalette,
+  maximum: number,
+  top: number,
+  bottom: number,
+  laneWidth: number,
+  palette: CanvasPalette,
+): void {
+  if (!laneWidth || bottom - top < 44) return
+  const dividerX = LABEL_WIDTH - laneWidth
+  const legendTop = top + 14
+  const legendBottom = bottom - 12
+  const gradientX = dividerX + 6
+  const gradientWidth = 7
+  const gradient = ctx.createLinearGradient(0, legendTop, 0, legendBottom)
+  for (const scoreIntensity of [1, 0.75, 0.5, 0.25, 0]) {
+    const intensity = matrixPaletteIntensity(scoreIntensity, spec.matrixPaletteReversed === true)
+    const style = matrixPaletteStyle(matrixPalette, spec.color, intensity)
+    gradient.addColorStop(1 - scoreIntensity, style.alpha === 1 ? style.color : colorWithAlpha(style.color, style.alpha))
+  }
+  ctx.strokeStyle = palette.axisLine
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(dividerX + 0.5, top + 7)
+  ctx.lineTo(dividerX + 0.5, bottom - 7)
+  ctx.stroke()
+  ctx.fillStyle = gradient
+  ctx.fillRect(gradientX, legendTop, gradientWidth, Math.max(1, legendBottom - legendTop))
+  ctx.strokeRect(gradientX + 0.5, legendTop + 0.5, gradientWidth - 1, Math.max(1, legendBottom - legendTop - 1))
+
+  const labels = matrixLegendValues(maximum, spec.matrixTransform ?? 'log1p').map(formatScore)
+  ctx.fillStyle = palette.axisInk
+  ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
+  ctx.textAlign = 'right'
+  ctx.fillText(labels[0], LABEL_WIDTH - 5, legendTop + 3)
+  ctx.fillText(labels[1], LABEL_WIDTH - 5, (legendTop + legendBottom) / 2 + 3)
+  ctx.fillText(labels[2], LABEL_WIDTH - 5, legendBottom + 3)
+  ctx.textAlign = 'start'
 }
 
 function interactionEmphasis(score: number | undefined, minimum: number, maximum: number): number {
