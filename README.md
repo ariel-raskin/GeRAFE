@@ -199,7 +199,7 @@ Useful commands:
 | Command | Purpose |
 | --- | --- |
 | `npm run dev` | Run the frontend in a browser |
-| `npm run desktop:dev` | Run the Tauri desktop application in development mode |
+| `npm run desktop:dev` | Run the Tauri desktop application in development mode using a machine-local Cargo target outside synced folders |
 | `npm run desktop:build` | Build the production desktop executable |
 | `npm run desktop:bundle` | Build the signed-update-compatible Windows NSIS installer (requires the private signing environment) |
 | `npm run desktop:check-setup` | Check Windows desktop build prerequisites without installing |
