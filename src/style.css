@@ -388,6 +388,9 @@ html[data-theme='dark'] .corner-brand img {
 #genome-canvas.is-dragging, #bottom-canvas.is-dragging { cursor: grabbing; }
 #genome-canvas.is-track-dragging, #bottom-canvas.is-track-dragging { cursor: grabbing; }
 body.is-track-dragging, body.is-track-dragging * { cursor: grabbing !important; }
+#genome-canvas.is-track-resize-hover, #bottom-canvas.is-track-resize-hover,
+#genome-canvas.is-track-resizing, #bottom-canvas.is-track-resizing,
+body.is-track-resizing, body.is-track-resizing * { cursor: ns-resize !important; }
 
 .bottom-pane {
   position: absolute;
@@ -464,6 +467,7 @@ body.is-track-dragging, body.is-track-dragging * { cursor: grabbing !important; 
   overflow-y: auto;
 }
 .track-context-menu[hidden] { display: none; }
+.track-context-flyout { z-index: 61; width: 218px; }
 
 .track-drag-ghost {
   position: fixed;
@@ -655,21 +659,16 @@ body.is-track-dragging, body.is-track-dragging * { cursor: grabbing !important; 
 .context-item.danger { color: #b14455; }
 .context-item.danger:hover, .context-item.danger:focus-visible { color: white; background: #a64253; }
 .context-separator { display: block; height: 1px; margin: 5px 4px; background: var(--line); }
-.context-submenu > summary { list-style: none; padding-right: 25px; }
-.context-submenu > summary::-webkit-details-marker { display: none; }
-.context-submenu > summary::after {
+.context-submenu-trigger { padding-right: 25px; }
+.context-submenu-trigger::after {
   content: '›';
   position: absolute;
   right: 9px;
   color: var(--muted);
   font-size: 15px;
   line-height: 1;
-  transition: transform .14s ease;
 }
-.context-submenu[open] > summary::after { transform: rotate(90deg); }
-.context-submenu > summary:hover::after, .context-submenu > summary:focus-visible::after { color: white; }
-.context-submenu-items { margin: 1px 0 4px 8px; padding-left: 5px; border-left: 1px solid var(--line); }
-.context-submenu-items .context-item { min-height: 29px; }
+.context-submenu-trigger:hover::after, .context-submenu-trigger:focus-visible::after { color: white; }
 
 .browser-footer {
   min-height: 36px;

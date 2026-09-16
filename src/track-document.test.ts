@@ -82,14 +82,16 @@ describe('track document', () => {
     expect(store.current.tracks[0].label).toBe('renamed')
   })
 
-  it('persists exact fitted pixel heights and upgrades version 8 workspaces', () => {
+  it('persists exact fitted and manually resized pixel heights and upgrades version 8 workspaces', () => {
     const document = documentWithTwoTracks()
     document.tracks[0].fittedHeight = 317
+    document.tracks[1].manualPixelHeight = 143
     const legacy = JSON.parse(JSON.stringify(document))
     legacy.schemaVersion = 8
     const restored = normalizeTrackDocument(legacy)
     expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
     expect(restored.tracks[0].fittedHeight).toBe(317)
+    expect(restored.tracks[1].manualPixelHeight).toBe(143)
   })
 
   it('preserves native paths and BED interval display settings', () => {
@@ -175,6 +177,14 @@ describe('track document', () => {
       kind: 'matrix', matrixDirection: 'down', matrixResolution: 10_000,
       matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42, matrixPalette: 'warm',
     })
+  })
+
+  it('starts contact matrices with raw values and the warm publication palette', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 1_000_000 })
+    const cooler = addMatrixTrack(document, { id: 'cool', name: 'contacts.cool', format: 'cool', files: [] })
+    const hic = addMatrixTrack(document, { id: 'hic', name: 'contacts.hic', format: 'hic', files: [] }, { defaultNormalization: 'NONE' })
+    expect(cooler).toMatchObject({ matrixNormalization: 'raw', matrixPalette: 'warm' })
+    expect(hic).toMatchObject({ matrixNormalization: 'NONE', matrixPalette: 'warm' })
   })
 
   it('migrates version 10 matrix tracks to the monochrome palette', () => {

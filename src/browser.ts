@@ -29,6 +29,7 @@ export interface BrowserCallbacks {
   onTrackContextMenu(trackId: string, x: number, y: number): void
   onGroupContextMenu(groupId: string, x: number, y: number): void
   onTracksReorder(trackIds: readonly string[], pane: 'main' | 'bottom', insertionIndex: number, withinGroupId?: string): void
+  onTrackHeightsResize(updates: readonly { id: string; pixels: number }[]): void
 }
 
 interface GeneRenderBlock {
@@ -73,6 +74,19 @@ export class GenomeBrowser {
     targetPane?: 'main' | 'bottom'
     insertionIndex?: number
   }
+  private trackResize?: {
+    canvas: HTMLCanvasElement
+    pane: 'main' | 'bottom'
+    edge: 'top' | 'bottom'
+    trackIds: string[]
+    startClientY: number
+    boundaryY: number
+    guideY: number
+    initialPixels: Map<string, number>
+    minimumPixels: Map<string, number>
+  }
+  private trackResizeHover?: { canvas: HTMLCanvasElement; pane: 'main' | 'bottom'; y: number }
+  private readonly resizePreviewPixels = new Map<string, number>()
   private readonly trackDragGhost: HTMLDivElement
   private mainResizeObserver: ResizeObserver
   private bottomResizeObserver: ResizeObserver
@@ -124,6 +138,7 @@ export class GenomeBrowser {
     if (this.frame) cancelAnimationFrame(this.frame)
     for (const controller of this.abortControllers.values()) controller.abort()
     document.body.classList.remove('is-track-dragging')
+    document.body.classList.remove('is-track-resizing')
     this.trackDragGhost.remove()
   }
 
@@ -271,6 +286,25 @@ export class GenomeBrowser {
   private bindEvents(canvas: HTMLCanvasElement, pane: 'main' | 'bottom'): void {
     canvas.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return
+      const resizeHit = this.resizeBoundaryAt(pane, event.offsetY)
+      if (resizeHit) {
+        const tracks = this.document.tracks.filter((track) => resizeHit.trackIds.includes(track.id))
+        canvas.setPointerCapture(event.pointerId)
+        this.trackResize = {
+          canvas,
+          pane,
+          edge: resizeHit.edge,
+          trackIds: resizeHit.trackIds,
+          startClientY: event.clientY,
+          boundaryY: resizeHit.y,
+          guideY: resizeHit.y,
+          initialPixels: new Map(tracks.map((track) => [track.id, this.trackHeight(track)])),
+          minimumPixels: new Map(tracks.map((track) => [track.id, this.getFittedMinimumHeight(track)])),
+        }
+        canvas.classList.add('is-track-resizing')
+        document.body.classList.add('is-track-resizing')
+        return
+      }
       if (event.offsetX < LABEL_WIDTH) {
         const hit = this.itemAt(canvas, pane, event.offsetX, event.offsetY)
         if (!hit) {
@@ -303,6 +337,17 @@ export class GenomeBrowser {
       canvas.classList.add('is-dragging')
     })
     canvas.addEventListener('pointermove', (event) => {
+      if (this.trackResize?.canvas === canvas) {
+        const dragPixels = event.clientY - this.trackResize.startClientY
+        const requestedDelta = this.trackResize.edge === 'bottom' ? dragPixels : -dragPixels
+        const resized = resizedTrackPixels(this.trackResize.initialPixels, this.trackResize.minimumPixels, requestedDelta)
+        this.resizePreviewPixels.clear()
+        for (const [id, pixels] of resized) this.resizePreviewPixels.set(id, pixels)
+        this.trackResize.guideY = this.trackResize.boundaryY + dragPixels
+        this.resizeCanvas(canvas, pane === 'main' ? this.mainContext : this.bottomContext, pane)
+        this.scheduleRender()
+        return
+      }
       if (this.trackDrag?.sourceCanvas === canvas) {
         this.trackDrag.clientX = event.clientX
         this.trackDrag.clientY = event.clientY
@@ -321,7 +366,16 @@ export class GenomeBrowser {
         }
         return
       }
-      if (!this.dragging || this.dragging.canvas !== canvas) return
+      if (!this.dragging || this.dragging.canvas !== canvas) {
+        const hit = this.resizeBoundaryAt(pane, event.offsetY)
+        const next = hit ? { canvas, pane, y: hit.y } : undefined
+        if (this.trackResizeHover?.canvas !== next?.canvas || this.trackResizeHover?.y !== next?.y) {
+          this.trackResizeHover = next
+          canvas.classList.toggle('is-track-resize-hover', Boolean(hit))
+          this.scheduleRender()
+        }
+        return
+      }
       const plotWidth = Math.max(1, this.cssWidth(canvas) - PLOT_LEFT)
       const bpPerPixel = (this.dragging.region.end - this.dragging.region.start) / plotWidth
       const shift = (this.dragging.x - event.clientX) * bpPerPixel
@@ -336,7 +390,21 @@ export class GenomeBrowser {
       this.scheduleRender()
       if (!this.hasOverscanCoverage()) void this.ensureData()
     })
-    const finishPointer = () => {
+    const finishPointer = (event: PointerEvent) => {
+      if (this.trackResize?.canvas === canvas) {
+        const resize = this.trackResize
+        const updates = resize.trackIds.map((id) => ({ id, pixels: this.resizePreviewPixels.get(id) ?? resize.initialPixels.get(id)! }))
+        this.trackResize = undefined
+        this.resizePreviewPixels.clear()
+        canvas.classList.remove('is-track-resizing')
+        document.body.classList.remove('is-track-resizing')
+        if (event.type === 'pointerup') this.callbacks.onTrackHeightsResize(updates)
+        else {
+          this.resizeCanvas(canvas, pane === 'main' ? this.mainContext : this.bottomContext, pane)
+          this.scheduleRender()
+        }
+        return
+      }
       if (this.trackDrag?.sourceCanvas === canvas) {
         const drag = this.trackDrag
         this.trackDrag = undefined
@@ -354,6 +422,12 @@ export class GenomeBrowser {
     }
     canvas.addEventListener('pointerup', finishPointer)
     canvas.addEventListener('pointercancel', finishPointer)
+    canvas.addEventListener('pointerleave', () => {
+      if (this.trackResize?.canvas === canvas) return
+      this.trackResizeHover = undefined
+      canvas.classList.remove('is-track-resize-hover')
+      this.scheduleRender()
+    })
     canvas.addEventListener('wheel', (event) => {
       if (!event.ctrlKey && !event.metaKey) {
         if (event.deltaX !== 0) {
@@ -581,6 +655,13 @@ export class GenomeBrowser {
       ctx.closePath()
       ctx.fill()
       ctx.lineWidth = 1
+    }
+    const resizeLine = this.trackResize?.pane === pane
+      ? this.trackResize.guideY
+      : this.trackResizeHover?.pane === pane ? this.trackResizeHover.y : undefined
+    if (resizeLine !== undefined) {
+      ctx.fillStyle = palette.selection
+      ctx.fillRect(0, Math.max(0, Math.round(resizeLine) - 1), width, 2)
     }
     return visibleFeatures
   }
@@ -1717,10 +1798,41 @@ export class GenomeBrowser {
   }
 
   private trackHeight(track: TrackSpec): number {
+    const preview = this.resizePreviewPixels.get(track.id)
+    if (preview !== undefined) return preview
     if (track.kind !== 'genes' || track.pane !== 'bottom') return trackSpecHeight(track)
     const width = this.bottomCanvas.parentElement?.clientWidth || this.cssWidth(this.bottomCanvas)
     const layoutHeight = this.geneSource ? this.buildGeneLayout(track, width, this.bottomContext).contentHeight : 0
     return Math.max(MIN_BOTTOM_GENE_HEIGHT, Math.ceil(layoutHeight))
+  }
+
+  private resizeBoundaryAt(pane: 'main' | 'bottom', pointerY: number): { trackIds: string[]; edge: 'top' | 'bottom'; y: number } | undefined {
+    const specs = this.visibleSpecs(pane)
+    let top = 0
+    const candidates: Array<{ trackIds: string[]; edge: 'top' | 'bottom'; y: number }> = []
+    for (let index = 0; index < specs.length;) {
+      const track = specs[index]
+      const height = this.trackHeight(track)
+      if (!this.selectedTrackIds.has(track.id) || (track.kind === 'genes' && track.pane === 'bottom')) {
+        top += height
+        index += 1
+        continue
+      }
+      const runTop = top
+      const trackIds: string[] = []
+      while (index < specs.length) {
+        const candidate = specs[index]
+        if (!this.selectedTrackIds.has(candidate.id) || (candidate.kind === 'genes' && candidate.pane === 'bottom')) break
+        trackIds.push(candidate.id)
+        top += this.trackHeight(candidate)
+        index += 1
+      }
+      candidates.push({ trackIds, edge: 'top', y: runTop }, { trackIds, edge: 'bottom', y: top })
+    }
+    return candidates
+      .map((candidate) => ({ candidate, distance: Math.abs(candidate.y - pointerY) }))
+      .filter(({ distance }) => distance <= 5)
+      .sort((a, b) => a.distance - b.distance)[0]?.candidate
   }
 
   private itemAt(_canvas: HTMLCanvasElement, pane: 'main' | 'bottom', x: number, y: number): { kind: 'track' | 'group'; id: string } | undefined {
@@ -2268,7 +2380,19 @@ function cytobandColor(stain: string, palette: CanvasPalette): string {
 
 function trackSpecHeight(track: TrackSpec): number {
   if (Number.isFinite(track.fittedHeight)) return Math.max(20, Math.round(track.fittedHeight!))
+  if (Number.isFinite(track.manualPixelHeight)) return Math.max(20, Math.round(track.manualPixelHeight!))
   return trackPixelHeight(track.kind, track.height)
+}
+
+export function resizedTrackPixels(
+  initialPixels: ReadonlyMap<string, number>,
+  minimumPixels: ReadonlyMap<string, number>,
+  requestedDelta: number,
+): Map<string, number> {
+  const lowerDelta = Math.max(...[...initialPixels].map(([id, pixels]) => (minimumPixels.get(id) ?? 20) - pixels))
+  const upperDelta = Math.min(...[...initialPixels.values()].map((pixels) => 4_000 - pixels))
+  const delta = Math.max(lowerDelta, Math.min(upperDelta, Math.round(requestedDelta)))
+  return new Map([...initialPixels].map(([id, pixels]) => [id, pixels + delta]))
 }
 
 export function trackPixelHeight(kind: TrackSpec['kind'], score: number): number {

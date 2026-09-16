@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixWarmPaletteColor, phasedArrowPositions, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixWarmPaletteColor, phasedArrowPositions, resizedTrackPixels, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { InteractionFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 
@@ -43,6 +43,13 @@ describe('track layout and ruler formatting', () => {
   it('distributes every fit pixel while honoring label-height minimums', () => {
     expect(distributeFittedPixels([50, 20, 100], [1, 1, 2], 403)).toEqual([108, 78, 217])
     expect(distributeFittedPixels([50, 50], [1, 1], 80)).toEqual([50, 50])
+  })
+
+  it('applies one clamped pixel delta to every selected track', () => {
+    const initial = new Map([['a', 100], ['b', 70]])
+    const minimums = new Map([['a', 40], ['b', 50]])
+    expect([...resizedTrackPixels(initial, minimums, 18)]).toEqual([['a', 118], ['b', 88]])
+    expect([...resizedTrackPixels(initial, minimums, -80)]).toEqual([['a', 80], ['b', 50]])
   })
 })
 

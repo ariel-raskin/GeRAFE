@@ -178,6 +178,7 @@ app.innerHTML = `
     </footer>
   </main>
   <div class="track-context-menu" id="track-context-menu" role="menu" hidden></div>
+  <div class="track-context-menu track-context-flyout" id="track-context-flyout" role="menu" hidden></div>
   <div class="color-dialog" id="color-dialog" role="dialog" aria-modal="true" aria-labelledby="color-dialog-title" hidden>
     <form class="color-dialog-card" id="color-dialog-form">
       <strong id="color-dialog-title">Set track color</strong>
@@ -249,6 +250,7 @@ const dropZone = document.querySelector<HTMLElement>('#drop-zone')!
 const toast = document.querySelector<HTMLElement>('#toast')!
 const trackStatus = document.querySelector<HTMLElement>('#track-status')!
 const trackContextMenu = document.querySelector<HTMLElement>('#track-context-menu')!
+const trackContextFlyout = document.querySelector<HTMLElement>('#track-context-flyout')!
 const trackColorInput = document.querySelector<HTMLInputElement>('#track-color-input')!
 const trackColorField = document.querySelector<HTMLCanvasElement>('#track-color-field')!
 const trackColorHue = document.querySelector<HTMLInputElement>('#track-color-hue')!
@@ -277,7 +279,9 @@ const fitTracksAuto = document.querySelector<HTMLButtonElement>('#fit-tracks-aut
 
 const runtimeSources = new Map<string, TrackSource>()
 const selectedTrackIds = new Set<string>()
+const contextSubmenuItems = new Map<string, string>()
 let lastSelectedTrackId: string | undefined
+let contextSubmenuCloseTimer: number | undefined
 let pendingRelinkTrackId: string | undefined
 let pendingRelinkChannel: 'plus' | 'minus' | undefined
 let pendingOpenGroupId: string | undefined
@@ -345,6 +349,24 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
   onTracksReorder(trackIds, pane, insertionIndex, withinGroupId) {
     bottomPaneAutoFit = false
     store.edit((draft) => reorderTracks(draft, trackIds, pane, insertionIndex, withinGroupId))
+  },
+  onTrackHeightsResize(updates) {
+    const resizedIds = new Set(updates.map((update) => update.id))
+    if (store.current.tracks.some((track) => resizedIds.has(track.id) && track.pane === 'main')) {
+      upperPaneAutoFit = false
+      localStorage.setItem(UPPER_PANE_AUTO_FIT_KEY, 'false')
+      updateUpperAutoFitControl()
+    }
+    if (store.current.tracks.some((track) => resizedIds.has(track.id) && track.pane === 'bottom')) bottomPaneAutoFit = false
+    store.edit((draft) => {
+      for (const update of updates) {
+        const track = draft.tracks.find((candidate) => candidate.id === update.id)
+        if (!track) continue
+        track.height = heightScoreForPixels(track.kind, update.pixels)
+        track.manualPixelHeight = update.pixels
+        delete track.fittedHeight
+      }
+    })
   },
 })
 browser.setShowTssIndicators(savedTssIndicators())
@@ -531,6 +553,39 @@ fileInput.addEventListener('cancel', () => { pendingOpenGroupId = undefined })
 workspaceFileInput.addEventListener('change', () => void openWorkspace(workspaceFileInput.files?.[0]))
 relinkFileInput.addEventListener('change', () => void relinkTrack(relinkFileInput.files))
 trackContextMenu.addEventListener('click', handleTrackContextAction)
+trackContextFlyout.addEventListener('click', handleTrackContextAction)
+trackContextMenu.addEventListener('click', (event) => {
+  const trigger = (event.target as Element).closest<HTMLButtonElement>('[data-context-submenu]')
+  if (!trigger) return
+  openContextSubmenu(trigger)
+  trackContextFlyout.querySelector<HTMLButtonElement>('.context-item')?.focus()
+})
+trackContextMenu.addEventListener('pointerover', (event) => {
+  const trigger = (event.target as Element).closest<HTMLButtonElement>('[data-context-submenu]')
+  if (trigger) openContextSubmenu(trigger)
+})
+trackContextMenu.addEventListener('focusin', (event) => {
+  const trigger = (event.target as Element).closest<HTMLButtonElement>('[data-context-submenu]')
+  if (trigger) openContextSubmenu(trigger)
+})
+trackContextMenu.addEventListener('pointerleave', scheduleContextSubmenuClose)
+trackContextFlyout.addEventListener('pointerleave', scheduleContextSubmenuClose)
+trackContextMenu.addEventListener('pointerenter', cancelContextSubmenuClose)
+trackContextFlyout.addEventListener('pointerenter', cancelContextSubmenuClose)
+trackContextMenu.addEventListener('keydown', (event) => {
+  const trigger = (event.target as Element).closest<HTMLButtonElement>('[data-context-submenu]')
+  if (!trigger || !['ArrowRight', 'Enter', ' '].includes(event.key)) return
+  event.preventDefault()
+  openContextSubmenu(trigger)
+  trackContextFlyout.querySelector<HTMLButtonElement>('.context-item')?.focus()
+})
+trackContextFlyout.addEventListener('keydown', (event) => {
+  if (event.key !== 'ArrowLeft') return
+  event.preventDefault()
+  const trigger = trackContextMenu.querySelector<HTMLButtonElement>('[data-context-submenu][aria-expanded="true"]')
+  closeContextSubmenu()
+  trigger?.focus()
+})
 bindColorPicker()
 colorDialogForm.addEventListener('submit', (event) => {
   event.preventDefault()
@@ -1001,20 +1056,43 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const dataTracks = selected.filter((track) => track.kind !== 'genes')
   const resizableTracks = selected.filter((track) => track.kind !== 'genes' || track.pane !== 'bottom')
   const one = selected.length === 1
+  const sameKind = selected.every((track) => track.kind === target.kind)
+  const intervalTracks = sameKind && target.kind === 'interval' ? selected : []
+  const interactionTracks = sameKind && target.kind === 'interaction' ? selected : []
+  const alignmentTracks = sameKind && target.kind === 'alignment' ? selected : []
+  const geneTracks = sameKind && target.kind === 'genes' ? selected : []
   const pairable = selected.length === 2 && selected.every((track) => track.kind === 'signal') && canPairSelectedStrands(selected as TrackSpec[])
-  const matrixSource = target.kind === 'matrix' ? runtimeSources.get(target.sourceIds[0]) : undefined
-  const matrixMetadata = isNativeMatrixSource(matrixSource) ? matrixSource.matrixMetadata : undefined
-  const matrixResolutionLabel = target.kind === 'matrix' && target.matrixResolution ? formatBases(target.matrixResolution) : 'Automatic'
-  const matrixScaleLabel = target.kind === 'matrix' && target.matrixScaleMax ? `z-max ${target.matrixScaleMax}` : 'Automatic z-max'
-  const interactionGeneDetail = target.kind === 'interaction' && target.interactionFilterMode === 'genes'
-    ? escapeHtml((target.interactionFilterGenes ?? []).join(', '))
-    : ''
+  const matrixTracks = selected.filter((track) => track.kind === 'matrix')
+  const matricesOnly = matrixTracks.length > 0 && matrixTracks.length === selected.length
+  const matrixMetadata = matrixTracks.map((track) => {
+    const source = runtimeSources.get(track.sourceIds[0])
+    return isNativeMatrixSource(source) ? source.matrixMetadata : undefined
+  })
+  const commonMatrixResolutions = commonValues(matrixMetadata.map((metadata) => metadata?.resolutions ?? []))
+  const commonMatrixNormalizations = commonValues(matrixMetadata.map((metadata) => metadata?.normalizations ?? []))
+  const matrixResolutionLabel = sameValue(matrixTracks.map((track) => track.matrixResolution))
+    ? matrixTracks[0]?.matrixResolution ? formatBases(matrixTracks[0].matrixResolution!) : 'Automatic'
+    : 'Mixed'
+  const matrixNormalizationLabel = sameValue(matrixTracks.map((track) => track.matrixNormalization))
+    ? matrixTracks[0]?.matrixNormalization ?? matrixMetadata[0]?.defaultNormalization ?? 'raw'
+    : 'Mixed'
+  const matrixScaleLabel = sameValue(matrixTracks.map((track) => track.matrixScaleMax))
+    ? matrixTracks[0]?.matrixScaleMax ? `z-max ${matrixTracks[0].matrixScaleMax}` : 'Automatic z-max'
+    : 'Mixed'
+  const interactionGeneDetail = interactionTracks.length && interactionTracks.every((track) => track.interactionFilterMode === 'genes')
+    && sameValue(interactionTracks.map((track) => (track.interactionFilterGenes ?? []).join(', ')))
+    ? escapeHtml((interactionTracks[0].interactionFilterGenes ?? []).join(', '))
+    : interactionTracks.some((track) => track.interactionFilterMode === 'genes') ? 'Mixed' : ''
   const action = (id: string, label: string, detail = '', disabled = false, danger = false) => {
     const current = detail === 'current' || detail === 'on'
     const visibleDetail = current || detail === 'off' ? '' : detail
     return `<button class="context-item${current ? ' is-current' : ''}${danger ? ' danger' : ''}" data-context-action="${id}" type="button" role="menuitem" ${current ? 'aria-current="true"' : ''} ${disabled ? 'disabled' : ''}><span>${label}</span>${visibleDetail ? `<small>${visibleDetail}</small>` : ''}</button>`
   }
-  const submenu = (label: string, detail: string, items: string) => `<details class="context-submenu"><summary class="context-item"><span>${label}</span><small>${detail}</small></summary><div class="context-submenu-items">${items}</div></details>`
+  contextSubmenuItems.clear()
+  const submenu = (id: string, label: string, detail: string, items: string) => {
+    contextSubmenuItems.set(id, items)
+    return `<button class="context-item context-submenu-trigger" data-context-submenu="${id}" type="button" role="menuitem" aria-haspopup="menu" aria-expanded="false"><span>${label}</span><small>${detail}</small></button>`
+  }
   trackContextMenu.innerHTML = `
     <div class="context-heading"><strong>${one ? escapeHtml(target.label) : `${selected.length} tracks selected`}</strong><span>${one ? (target.kind === 'genes' ? 'Gene annotation' : target.kind === 'interval' ? 'Interval track' : target.kind === 'interaction' ? 'BEDPE interactions' : target.kind === 'matrix' ? 'Contact matrix' : target.kind === 'alignment' ? 'BAM alignments' : target.kind === 'stranded' ? 'Linked stranded signal' : target.signalStrand ? `${target.signalStrand === 'plus' ? 'Positive' : 'Negative'}-strand signal` : 'Signal track') : 'Shared actions'}</span></div>
     ${one ? action('rename', 'Rename…') : ''}
@@ -1035,56 +1113,56 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     ${one && target.kind === 'signal' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
     ${one && target.kind === 'stranded' ? action('relink-plus', runtimeSources.has(target.sourceIds[0]) ? 'Replace positive source…' : 'Relink positive source…') : ''}
     ${one && target.kind === 'stranded' ? action('relink-minus', runtimeSources.has(target.sourceIds[1]) ? 'Replace negative source…' : 'Relink negative source…') : ''}
-    ${one && target.kind === 'interval' ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'interval' ? action('interval-collapsed', 'Collapsed interval view', target.intervalDisplayMode === 'collapsed' || !target.intervalDisplayMode ? 'current' : '') : ''}
-    ${one && target.kind === 'interval' ? action('interval-expanded', 'Expanded interval view', target.intervalDisplayMode === 'expanded' ? 'current' : '') : ''}
-    ${one && target.kind === 'interval' ? action('interval-squished', 'Squished interval view', target.intervalDisplayMode === 'squished' ? 'current' : '') : ''}
+    ${intervalTracks.length ? '<span class="context-separator"></span>' : ''}
+    ${intervalTracks.length ? action('interval-collapsed', 'Collapsed interval view', intervalTracks.every((track) => track.intervalDisplayMode === 'collapsed' || !track.intervalDisplayMode) ? 'current' : '') : ''}
+    ${intervalTracks.length ? action('interval-expanded', 'Expanded interval view', intervalTracks.every((track) => track.intervalDisplayMode === 'expanded') ? 'current' : '') : ''}
+    ${intervalTracks.length ? action('interval-squished', 'Squished interval view', intervalTracks.every((track) => track.intervalDisplayMode === 'squished') ? 'current' : '') : ''}
     ${one && target.kind === 'interval' ? action('duplicate', 'Duplicate track') : ''}
     ${one && target.kind === 'interval' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
-    ${one && target.kind === 'interaction' ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'interaction' ? action('interaction-flip', 'Flip arcs upside down', target.interactionDirection === 'down' ? 'current' : '') : ''}
-    ${one && target.kind === 'interaction' ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'interaction' ? action('interaction-filter-all', 'Show all interactions', !target.interactionFilterMode || target.interactionFilterMode === 'all' ? 'current' : '') : ''}
-    ${one && target.kind === 'interaction' ? action('interaction-filter-genes', 'Filter by gene symbols…', interactionGeneDetail) : ''}
-    ${one && target.kind === 'interaction' ? action('interaction-filter-visible', 'Show interactions involving visible genes', target.interactionFilterMode === 'visible-genes' ? 'current' : '') : ''}
-    ${one && target.kind === 'interaction' ? '<span class="context-separator"></span>' : ''}
+    ${interactionTracks.length ? '<span class="context-separator"></span>' : ''}
+    ${interactionTracks.length ? action('interaction-flip', 'Flip arcs upside down', interactionTracks.every((track) => track.interactionDirection === 'down') ? 'current' : '') : ''}
+    ${interactionTracks.length ? '<span class="context-separator"></span>' : ''}
+    ${interactionTracks.length ? action('interaction-filter-all', 'Show all interactions', interactionTracks.every((track) => !track.interactionFilterMode || track.interactionFilterMode === 'all') ? 'current' : '') : ''}
+    ${interactionTracks.length ? action('interaction-filter-genes', 'Filter by gene symbols…', interactionGeneDetail) : ''}
+    ${interactionTracks.length ? action('interaction-filter-visible', 'Show interactions involving visible genes', interactionTracks.every((track) => track.interactionFilterMode === 'visible-genes') ? 'current' : '') : ''}
+    ${interactionTracks.length ? '<span class="context-separator"></span>' : ''}
     ${one && target.kind === 'interaction' ? action('duplicate', 'Duplicate track') : ''}
     ${one && target.kind === 'interaction' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
-    ${one && target.kind === 'matrix' ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'matrix' ? action('matrix-flip', 'Flip matrix upside down', target.matrixDirection === 'down' ? 'current' : '') : ''}
-    ${one && target.kind === 'matrix' ? submenu('Resolution', matrixResolutionLabel, action('matrix-resolution-auto', 'Automatic', target.matrixResolution === undefined ? 'current' : '') + (matrixMetadata?.resolutions ?? []).map((resolution, index) => action(`matrix-resolution-${index}`, formatBases(resolution), target.matrixResolution === resolution ? 'current' : '')).join('')) : ''}
-    ${one && target.kind === 'matrix' ? submenu('Normalization', escapeHtml(target.matrixNormalization ?? matrixMetadata?.defaultNormalization ?? 'raw'), (matrixMetadata?.normalizations ?? []).map((normalization, index) => action(`matrix-normalization-${index}`, escapeHtml(normalization), target.matrixNormalization === normalization ? 'current' : '')).join('')) : ''}
-    ${one && target.kind === 'matrix' ? submenu('Intensity scale', matrixScaleLabel, action('matrix-scale-auto', 'Automatic z-max', target.matrixScaleMax === undefined ? 'current' : '') + action('matrix-scale-fixed', 'Set z-max…', target.matrixScaleMax ? String(target.matrixScaleMax) : '') + '<span class="context-separator"></span>' + action('matrix-transform-log', 'Log intensity', target.matrixTransform !== 'linear' ? 'current' : '') + action('matrix-transform-linear', 'Linear intensity', target.matrixTransform === 'linear' ? 'current' : '')) : ''}
-    ${one && target.kind === 'matrix' ? submenu('Color scale', target.matrixPalette === 'warm' ? 'Yellow–red–black' : 'Track color', action('matrix-palette-monochrome', 'Single track color', target.matrixPalette !== 'warm' ? 'current' : '') + action('matrix-palette-warm', 'Yellow → red → black', target.matrixPalette === 'warm' ? 'current' : '')) : ''}
-    ${one && target.kind === 'matrix' ? '<span class="context-separator"></span>' : ''}
+    ${matricesOnly ? '<span class="context-separator"></span>' : ''}
+    ${matricesOnly ? action('matrix-flip', 'Flip matrix upside down', matrixTracks.every((track) => track.matrixDirection === 'down') ? 'current' : '') : ''}
+    ${matricesOnly ? submenu('matrix-resolution', 'Resolution', matrixResolutionLabel, action('matrix-resolution-auto', 'Automatic', matrixTracks.every((track) => track.matrixResolution === undefined) ? 'current' : '') + commonMatrixResolutions.map((resolution) => action(`matrix-resolution-value-${resolution}`, formatBases(resolution), matrixTracks.every((track) => track.matrixResolution === resolution) ? 'current' : '')).join('')) : ''}
+    ${matricesOnly && commonMatrixNormalizations.length ? submenu('matrix-normalization', 'Normalization', escapeHtml(matrixNormalizationLabel), commonMatrixNormalizations.map((normalization) => action(`matrix-normalization-value-${encodeURIComponent(normalization)}`, escapeHtml(normalization), matrixTracks.every((track) => track.matrixNormalization === normalization) ? 'current' : '')).join('')) : ''}
+    ${matricesOnly ? submenu('matrix-intensity', 'Intensity scale', matrixScaleLabel, action('matrix-scale-auto', 'Automatic z-max', matrixTracks.every((track) => track.matrixScaleMax === undefined) ? 'current' : '') + action('matrix-scale-fixed', 'Set z-max…', sameValue(matrixTracks.map((track) => track.matrixScaleMax)) && matrixTracks[0]?.matrixScaleMax ? String(matrixTracks[0].matrixScaleMax) : '') + '<span class="context-separator"></span>' + action('matrix-transform-log', 'Log intensity', matrixTracks.every((track) => track.matrixTransform !== 'linear') ? 'current' : '') + action('matrix-transform-linear', 'Linear intensity', matrixTracks.every((track) => track.matrixTransform === 'linear') ? 'current' : '')) : ''}
+    ${matricesOnly ? submenu('matrix-palette', 'Color scale', sameValue(matrixTracks.map((track) => track.matrixPalette)) ? matrixTracks[0]?.matrixPalette === 'monochrome' ? 'Track color' : 'Yellow–red–black' : 'Mixed', action('matrix-palette-monochrome', 'Single track color', matrixTracks.every((track) => track.matrixPalette === 'monochrome') ? 'current' : '') + action('matrix-palette-warm', 'Yellow → red → black', matrixTracks.every((track) => track.matrixPalette !== 'monochrome') ? 'current' : '')) : ''}
+    ${matricesOnly ? '<span class="context-separator"></span>' : ''}
     ${one && target.kind === 'matrix' ? action('duplicate', 'Duplicate track') : ''}
     ${one && target.kind === 'matrix' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
-    ${one && target.kind === 'alignment' ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'alignment' ? action('bam-view-both', 'Coverage and alignments', target.bamViewMode === 'both' || !target.bamViewMode ? 'current' : '') : ''}
-    ${one && target.kind === 'alignment' ? action('bam-view-coverage', 'Coverage only', target.bamViewMode === 'coverage' ? 'current' : '') : ''}
-    ${one && target.kind === 'alignment' ? action('bam-view-alignments', 'Alignments only', target.bamViewMode === 'alignments' ? 'current' : '') : ''}
-    ${one && target.kind === 'alignment' ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'alignment' ? action('bam-display-expanded', 'Expanded reads', target.alignmentDisplayMode === 'expanded' || !target.alignmentDisplayMode ? 'current' : '') : ''}
-    ${one && target.kind === 'alignment' ? action('bam-display-collapsed', 'Collapsed reads', target.alignmentDisplayMode === 'collapsed' ? 'current' : '') : ''}
-    ${one && target.kind === 'alignment' ? action('bam-display-squished', 'Squished reads', target.alignmentDisplayMode === 'squished' ? 'current' : '') : ''}
-    ${one && target.kind === 'alignment' ? action('bam-pairs', 'View as pairs', target.bamViewAsPairs ? 'on' : 'off') : ''}
-    ${one && target.kind === 'alignment' ? action('bam-mismatches', 'Show mismatches', target.bamShowMismatches === false ? 'off' : 'on') : ''}
-    ${one && target.kind === 'alignment' ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'alignment' ? action('bam-color-track', 'Color by track', target.bamColorMode === 'track' || !target.bamColorMode ? 'current' : '') : ''}
-    ${one && target.kind === 'alignment' ? action('bam-color-strand', 'Color by strand', target.bamColorMode === 'strand' ? 'current' : '') : ''}
-    ${one && target.kind === 'alignment' ? action('bam-color-pair-orientation', 'Color by pair orientation', target.bamColorMode === 'pair-orientation' ? 'current' : '') : ''}
-    ${one && target.kind === 'alignment' ? action('bam-color-mapping-quality', 'Color by mapping quality', target.bamColorMode === 'mapping-quality' ? 'current' : '') : ''}
-    ${one && target.kind === 'alignment' ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'alignment' ? action('bam-mapq', 'Minimum mapping quality…', String(target.bamMinMapq ?? 0)) : ''}
-    ${one && target.kind === 'alignment' ? action('bam-duplicates', 'Include duplicate reads', target.bamIncludeDuplicates ? 'on' : 'off') : ''}
-    ${one && target.kind === 'alignment' ? action('bam-secondary', 'Include secondary alignments', target.bamIncludeSecondary ? 'on' : 'off') : ''}
-    ${one && target.kind === 'alignment' ? action('bam-supplementary', 'Include supplementary alignments', target.bamIncludeSupplementary ? 'on' : 'off') : ''}
+    ${alignmentTracks.length ? '<span class="context-separator"></span>' : ''}
+    ${alignmentTracks.length ? action('bam-view-both', 'Coverage and alignments', alignmentTracks.every((track) => track.bamViewMode === 'both' || !track.bamViewMode) ? 'current' : '') : ''}
+    ${alignmentTracks.length ? action('bam-view-coverage', 'Coverage only', alignmentTracks.every((track) => track.bamViewMode === 'coverage') ? 'current' : '') : ''}
+    ${alignmentTracks.length ? action('bam-view-alignments', 'Alignments only', alignmentTracks.every((track) => track.bamViewMode === 'alignments') ? 'current' : '') : ''}
+    ${alignmentTracks.length ? '<span class="context-separator"></span>' : ''}
+    ${alignmentTracks.length ? action('bam-display-expanded', 'Expanded reads', alignmentTracks.every((track) => track.alignmentDisplayMode === 'expanded' || !track.alignmentDisplayMode) ? 'current' : '') : ''}
+    ${alignmentTracks.length ? action('bam-display-collapsed', 'Collapsed reads', alignmentTracks.every((track) => track.alignmentDisplayMode === 'collapsed') ? 'current' : '') : ''}
+    ${alignmentTracks.length ? action('bam-display-squished', 'Squished reads', alignmentTracks.every((track) => track.alignmentDisplayMode === 'squished') ? 'current' : '') : ''}
+    ${alignmentTracks.length ? action('bam-pairs', 'View as pairs', alignmentTracks.every((track) => track.bamViewAsPairs) ? 'on' : '') : ''}
+    ${alignmentTracks.length ? action('bam-mismatches', 'Show mismatches', alignmentTracks.every((track) => track.bamShowMismatches !== false) ? 'on' : '') : ''}
+    ${alignmentTracks.length ? '<span class="context-separator"></span>' : ''}
+    ${alignmentTracks.length ? action('bam-color-track', 'Color by track', alignmentTracks.every((track) => track.bamColorMode === 'track' || !track.bamColorMode) ? 'current' : '') : ''}
+    ${alignmentTracks.length ? action('bam-color-strand', 'Color by strand', alignmentTracks.every((track) => track.bamColorMode === 'strand') ? 'current' : '') : ''}
+    ${alignmentTracks.length ? action('bam-color-pair-orientation', 'Color by pair orientation', alignmentTracks.every((track) => track.bamColorMode === 'pair-orientation') ? 'current' : '') : ''}
+    ${alignmentTracks.length ? action('bam-color-mapping-quality', 'Color by mapping quality', alignmentTracks.every((track) => track.bamColorMode === 'mapping-quality') ? 'current' : '') : ''}
+    ${alignmentTracks.length ? '<span class="context-separator"></span>' : ''}
+    ${alignmentTracks.length ? action('bam-mapq', 'Minimum mapping quality…', sameValue(alignmentTracks.map((track) => track.bamMinMapq ?? 0)) ? String(alignmentTracks[0].bamMinMapq ?? 0) : 'Mixed') : ''}
+    ${alignmentTracks.length ? action('bam-duplicates', 'Include duplicate reads', alignmentTracks.every((track) => track.bamIncludeDuplicates) ? 'on' : '') : ''}
+    ${alignmentTracks.length ? action('bam-secondary', 'Include secondary alignments', alignmentTracks.every((track) => track.bamIncludeSecondary) ? 'on' : '') : ''}
+    ${alignmentTracks.length ? action('bam-supplementary', 'Include supplementary alignments', alignmentTracks.every((track) => track.bamIncludeSupplementary) ? 'on' : '') : ''}
     ${one && target.kind === 'alignment' ? action('duplicate', 'Duplicate track') : ''}
     ${one && target.kind === 'alignment' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace BAM and index…' : 'Relink BAM and index…') : ''}
-    ${one && target.kind === 'genes' ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'genes' ? action('genes-collapsed', 'Collapsed gene view', target.geneDisplayMode === 'collapsed' || !target.geneDisplayMode ? 'current' : '') : ''}
-    ${one && target.kind === 'genes' ? action('genes-expanded', 'Expanded transcript view', target.geneDisplayMode === 'expanded' ? 'current' : '') : ''}
-    ${one && target.kind === 'genes' ? action('genes-squished', 'Squished transcript view', target.geneDisplayMode === 'squished' ? 'current' : '') : ''}
+    ${geneTracks.length ? '<span class="context-separator"></span>' : ''}
+    ${geneTracks.length ? action('genes-collapsed', 'Collapsed gene view', geneTracks.every((track) => track.geneDisplayMode === 'collapsed' || !track.geneDisplayMode) ? 'current' : '') : ''}
+    ${geneTracks.length ? action('genes-expanded', 'Expanded transcript view', geneTracks.every((track) => track.geneDisplayMode === 'expanded') ? 'current' : '') : ''}
+    ${geneTracks.length ? action('genes-squished', 'Squished transcript view', geneTracks.every((track) => track.geneDisplayMode === 'squished') ? 'current' : '') : ''}
     ${dataTracks.length ? '<span class="context-separator"></span>' + action('remove', dataTracks.length > 1 ? `Remove ${dataTracks.length} selected tracks` : 'Remove track', '', false, true) : ''}
   `
   trackContextMenu.dataset.trackId = trackId
@@ -1097,6 +1175,15 @@ function canPairSelectedStrands(tracks: readonly TrackSpec[]): boolean {
   const roles = tracks.map((track) => track.signalStrand ?? inferSignalStrand(track.label)?.strand)
   const bases = tracks.map((track) => (track.strandBaseLabel ?? inferSignalStrand(track.label)?.baseLabel ?? '').toLocaleLowerCase().replace(/[^a-z0-9]+/g, ''))
   return Boolean(roles[0] && roles[1] && roles[0] !== roles[1] && bases[0] && bases[0] === bases[1])
+}
+
+function sameValue<T>(values: readonly T[]): boolean {
+  return values.length > 0 && values.every((value) => Object.is(value, values[0]))
+}
+
+function commonValues<T>(sets: readonly (readonly T[])[]): T[] {
+  if (!sets.length) return []
+  return sets[0].filter((value, index) => sets[0].indexOf(value) === index && sets.slice(1).every((items) => items.includes(value)))
 }
 
 function openGroupContextMenu(groupId: string, x: number, y: number): void {
@@ -1115,6 +1202,7 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
     const visibleDetail = current || detail === 'off' ? '' : detail
     return `<button class="context-item${current ? ' is-current' : ''}${danger ? ' danger' : ''}" data-context-action="${id}" type="button" role="menuitem" ${current ? 'aria-current="true"' : ''} ${disabled ? 'disabled' : ''}><span>${label}</span>${visibleDetail ? `<small>${visibleDetail}</small>` : ''}</button>`
   }
+  contextSubmenuItems.clear()
   trackContextMenu.innerHTML = `
     <div class="context-heading"><strong>${escapeHtml(group.label)}</strong><span>${members.length} track${members.length === 1 ? '' : 's'} · group options</span></div>
     ${action('group-select', 'Select tracks in group')}
@@ -1139,6 +1227,7 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
 }
 
 function positionContextMenu(x: number, y: number): void {
+  closeContextSubmenu()
   trackContextMenu.hidden = false
   const menuWidth = trackContextMenu.offsetWidth
   const menuHeight = trackContextMenu.offsetHeight
@@ -1146,8 +1235,41 @@ function positionContextMenu(x: number, y: number): void {
   trackContextMenu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8))}px`
 }
 
+function openContextSubmenu(trigger: HTMLButtonElement): void {
+  cancelContextSubmenuClose()
+  const items = contextSubmenuItems.get(trigger.dataset.contextSubmenu ?? '')
+  if (!items) return
+  for (const candidate of trackContextMenu.querySelectorAll<HTMLElement>('[data-context-submenu]')) candidate.setAttribute('aria-expanded', String(candidate === trigger))
+  trackContextFlyout.innerHTML = items
+  trackContextFlyout.hidden = false
+  const rect = trigger.getBoundingClientRect()
+  const flyoutWidth = trackContextFlyout.offsetWidth
+  const flyoutHeight = trackContextFlyout.offsetHeight
+  const right = rect.right + 4
+  const left = rect.left - flyoutWidth - 4
+  trackContextFlyout.style.left = `${right + flyoutWidth <= window.innerWidth - 8 ? right : Math.max(8, left)}px`
+  trackContextFlyout.style.top = `${Math.max(8, Math.min(rect.top - 6, window.innerHeight - flyoutHeight - 8))}px`
+}
+
+function scheduleContextSubmenuClose(): void {
+  cancelContextSubmenuClose()
+  contextSubmenuCloseTimer = window.setTimeout(closeContextSubmenu, 100)
+}
+
+function cancelContextSubmenuClose(): void {
+  if (contextSubmenuCloseTimer !== undefined) window.clearTimeout(contextSubmenuCloseTimer)
+  contextSubmenuCloseTimer = undefined
+}
+
+function closeContextSubmenu(): void {
+  cancelContextSubmenuClose()
+  trackContextFlyout.hidden = true
+  for (const trigger of trackContextMenu.querySelectorAll<HTMLElement>('[data-context-submenu]')) trigger.setAttribute('aria-expanded', 'false')
+}
+
 function closeTrackContextMenu(): void {
   trackContextMenu.hidden = true
+  closeContextSubmenu()
 }
 
 function handleTrackContextAction(event: MouseEvent): void {
@@ -1165,6 +1287,11 @@ function handleTrackContextAction(event: MouseEvent): void {
   const ids = [...selectedTrackIds]
   const signalIds = store.current.tracks.filter((track) => (track.kind === 'signal' || track.kind === 'stranded') && ids.includes(track.id)).map((track) => track.id)
   const dataIds = store.current.tracks.filter((track) => track.kind !== 'genes' && ids.includes(track.id)).map((track) => track.id)
+  const intervalIds = store.current.tracks.filter((track) => track.kind === 'interval' && ids.includes(track.id)).map((track) => track.id)
+  const interactionIds = store.current.tracks.filter((track) => track.kind === 'interaction' && ids.includes(track.id)).map((track) => track.id)
+  const matrixIds = store.current.tracks.filter((track) => track.kind === 'matrix' && ids.includes(track.id)).map((track) => track.id)
+  const alignmentIds = store.current.tracks.filter((track) => track.kind === 'alignment' && ids.includes(track.id)).map((track) => track.id)
+  const geneIds = store.current.tracks.filter((track) => track.kind === 'genes' && ids.includes(track.id)).map((track) => track.id)
   closeTrackContextMenu()
   if (command === 'rename') {
     const track = store.current.tracks.find((item) => item.id === targetId)
@@ -1229,118 +1356,117 @@ function handleTrackContextAction(event: MouseEvent): void {
   }
   if (command?.startsWith('genes-')) {
     const mode = command.slice(6) as 'collapsed' | 'expanded' | 'squished'
-    store.edit((draft) => { const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'genes'); if (track) track.geneDisplayMode = mode })
+    store.edit((draft) => { for (const track of draft.tracks) if (geneIds.includes(track.id) && track.kind === 'genes') track.geneDisplayMode = mode })
   }
   if (command?.startsWith('interval-')) {
     const mode = command.slice(9) as 'collapsed' | 'expanded' | 'squished'
-    store.edit((draft) => { const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'interval'); if (track) track.intervalDisplayMode = mode })
+    store.edit((draft) => { for (const track of draft.tracks) if (intervalIds.includes(track.id) && track.kind === 'interval') track.intervalDisplayMode = mode })
   }
   if (command === 'interaction-flip') store.edit((draft) => {
-    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'interaction')
-    if (track) track.interactionDirection = track.interactionDirection === 'down' ? 'up' : 'down'
+    const tracks = draft.tracks.filter((track) => interactionIds.includes(track.id) && track.kind === 'interaction')
+    const direction = tracks.length && tracks.every((track) => track.interactionDirection === 'down') ? 'up' : 'down'
+    for (const track of tracks) track.interactionDirection = direction
   })
   if (command === 'interaction-filter-all' || command === 'interaction-filter-visible') store.edit((draft) => {
-    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'interaction')
-    if (!track) return
-    track.interactionFilterMode = command === 'interaction-filter-visible' ? 'visible-genes' : 'all'
+    for (const track of draft.tracks) if (interactionIds.includes(track.id) && track.kind === 'interaction') {
+      track.interactionFilterMode = command === 'interaction-filter-visible' ? 'visible-genes' : 'all'
+    }
   })
   if (command === 'interaction-filter-genes') {
-    const track = store.current.tracks.find((item) => item.id === targetId && item.kind === 'interaction')
-    const entered = window.prompt('Gene symbols, separated by commas or spaces:', (track?.interactionFilterGenes ?? []).join(', '))
+    const tracks = store.current.tracks.filter((item) => interactionIds.includes(item.id) && item.kind === 'interaction')
+    const initial = sameValue(tracks.map((track) => (track.interactionFilterGenes ?? []).join(', '))) ? (tracks[0]?.interactionFilterGenes ?? []).join(', ') : ''
+    const entered = window.prompt('Gene symbols, separated by commas or spaces:', initial)
     if (entered !== null) {
       const genes = [...new Set(entered.split(/[\s,;]+/).map((gene) => gene.trim().toLocaleUpperCase()).filter(Boolean))].slice(0, 100)
       store.edit((draft) => {
-        const item = draft.tracks.find((candidate) => candidate.id === targetId && candidate.kind === 'interaction')
-        if (!item) return
-        item.interactionFilterGenes = genes
-        item.interactionFilterMode = genes.length ? 'genes' : 'all'
+        for (const track of draft.tracks) if (interactionIds.includes(track.id) && track.kind === 'interaction') {
+          track.interactionFilterGenes = genes
+          track.interactionFilterMode = genes.length ? 'genes' : 'all'
+        }
       })
       const unresolved = activeGeneSource ? genes.filter((gene) => !activeGeneSource?.find(gene)) : genes
       if (unresolved.length) showToast(`${unresolved.join(', ')} ${unresolved.length === 1 ? 'was' : 'were'} not found in the active annotation; matching BEDPE names instead.`)
     }
   }
   if (command === 'matrix-flip') store.edit((draft) => {
-    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
-    if (track) track.matrixDirection = track.matrixDirection === 'down' ? 'up' : 'down'
+    const tracks = draft.tracks.filter((item) => matrixIds.includes(item.id) && item.kind === 'matrix')
+    const direction = tracks.length && tracks.every((track) => track.matrixDirection === 'down') ? 'up' : 'down'
+    for (const track of tracks) track.matrixDirection = direction
   })
   if (command === 'matrix-resolution-auto') store.edit((draft) => {
-    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
-    if (track) track.matrixResolution = undefined
+    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixResolution = undefined
   })
-  if (command?.startsWith('matrix-resolution-') && command !== 'matrix-resolution-auto') {
-    const track = store.current.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
-    const source = track ? runtimeSources.get(track.sourceIds[0]) : undefined
-    const resolution = isNativeMatrixSource(source) ? source.matrixMetadata.resolutions[Number(command.slice('matrix-resolution-'.length))] : undefined
+  if (command?.startsWith('matrix-resolution-value-')) {
+    const resolution = Number(command.slice('matrix-resolution-value-'.length))
     if (resolution) store.edit((draft) => {
-      const item = draft.tracks.find((candidate) => candidate.id === targetId && candidate.kind === 'matrix')
-      if (item) item.matrixResolution = resolution
+      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixResolution = resolution
     })
   }
-  if (command?.startsWith('matrix-normalization-')) {
-    const track = store.current.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
-    const source = track ? runtimeSources.get(track.sourceIds[0]) : undefined
-    const normalization = isNativeMatrixSource(source) ? source.matrixMetadata.normalizations[Number(command.slice('matrix-normalization-'.length))] : undefined
+  if (command?.startsWith('matrix-normalization-value-')) {
+    const normalization = decodeURIComponent(command.slice('matrix-normalization-value-'.length))
     if (normalization) store.edit((draft) => {
-      const item = draft.tracks.find((candidate) => candidate.id === targetId && candidate.kind === 'matrix')
-      if (item) item.matrixNormalization = normalization
+      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixNormalization = normalization
     })
   }
   if (command === 'matrix-transform-log' || command === 'matrix-transform-linear') store.edit((draft) => {
-    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
-    if (track) track.matrixTransform = command === 'matrix-transform-linear' ? 'linear' : 'log1p'
+    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixTransform = command === 'matrix-transform-linear' ? 'linear' : 'log1p'
   })
   if (command === 'matrix-scale-auto') store.edit((draft) => {
-    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
-    if (track) track.matrixScaleMax = undefined
+    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixScaleMax = undefined
   })
   if (command === 'matrix-scale-fixed') {
-    const track = store.current.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
-    const entered = window.prompt('Maximum contact intensity:', track?.matrixScaleMax ? String(track.matrixScaleMax) : '')
+    const tracks = store.current.tracks.filter((item) => matrixIds.includes(item.id) && item.kind === 'matrix')
+    const initial = sameValue(tracks.map((track) => track.matrixScaleMax)) ? tracks[0]?.matrixScaleMax : undefined
+    const entered = window.prompt('Maximum contact intensity:', initial ? String(initial) : '')
     const maximum = Number(entered)
     if (entered !== null && Number.isFinite(maximum) && maximum > 0) store.edit((draft) => {
-      const item = draft.tracks.find((candidate) => candidate.id === targetId && candidate.kind === 'matrix')
-      if (item) item.matrixScaleMax = maximum
+      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixScaleMax = maximum
     })
   }
   if (command === 'matrix-palette-monochrome' || command === 'matrix-palette-warm') store.edit((draft) => {
-    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
-    if (track) track.matrixPalette = command === 'matrix-palette-warm' ? 'warm' : 'monochrome'
+    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixPalette = command === 'matrix-palette-warm' ? 'warm' : 'monochrome'
   })
   if (command?.startsWith('bam-view-')) {
     const mode = command.slice(9) as 'coverage' | 'alignments' | 'both'
-    store.edit((draft) => { const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'alignment'); if (track) track.bamViewMode = mode })
+    store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamViewMode = mode })
   }
   if (command?.startsWith('bam-display-')) {
     const mode = command.slice(12) as 'collapsed' | 'expanded' | 'squished'
-    store.edit((draft) => { const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'alignment'); if (track) track.alignmentDisplayMode = mode })
+    store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.alignmentDisplayMode = mode })
   }
   if (command?.startsWith('bam-color-')) {
     const mode = command.slice(10) as 'track' | 'strand' | 'pair-orientation' | 'mapping-quality'
-    store.edit((draft) => { const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'alignment'); if (track) track.bamColorMode = mode })
+    store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamColorMode = mode })
   }
   if (command === 'bam-pairs') store.edit((draft) => {
-    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'alignment')
-    if (track) track.bamViewAsPairs = !track.bamViewAsPairs
+    const tracks = draft.tracks.filter((track) => alignmentIds.includes(track.id) && track.kind === 'alignment')
+    const enabled = !tracks.every((track) => track.bamViewAsPairs)
+    for (const track of tracks) track.bamViewAsPairs = enabled
   })
   if (command === 'bam-mismatches') store.edit((draft) => {
-    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'alignment')
-    if (track) track.bamShowMismatches = track.bamShowMismatches === false
+    const tracks = draft.tracks.filter((track) => alignmentIds.includes(track.id) && track.kind === 'alignment')
+    const enabled = !tracks.every((track) => track.bamShowMismatches !== false)
+    for (const track of tracks) track.bamShowMismatches = enabled
   })
   if (command === 'bam-mapq') {
-    const track = store.current.tracks.find((item) => item.id === targetId && item.kind === 'alignment')
-    const entered = window.prompt('Minimum mapping quality (0–255):', String(track?.bamMinMapq ?? 0))
+    const tracks = store.current.tracks.filter((item) => alignmentIds.includes(item.id) && item.kind === 'alignment')
+    const initial = sameValue(tracks.map((track) => track.bamMinMapq ?? 0)) ? tracks[0]?.bamMinMapq ?? 0 : 0
+    const entered = window.prompt('Minimum mapping quality (0–255):', String(initial))
     const minimum = Number(entered)
     if (entered !== null && Number.isFinite(minimum) && minimum >= 0 && minimum <= 255) store.edit((draft) => {
-      const item = draft.tracks.find((candidate) => candidate.id === targetId && candidate.kind === 'alignment')
-      if (item) item.bamMinMapq = Math.round(minimum)
+      for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamMinMapq = Math.round(minimum)
     })
   }
   if (command === 'bam-duplicates' || command === 'bam-secondary' || command === 'bam-supplementary') store.edit((draft) => {
-    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'alignment')
-    if (!track) return
-    if (command === 'bam-duplicates') track.bamIncludeDuplicates = !track.bamIncludeDuplicates
-    if (command === 'bam-secondary') track.bamIncludeSecondary = !track.bamIncludeSecondary
-    if (command === 'bam-supplementary') track.bamIncludeSupplementary = !track.bamIncludeSupplementary
+    const tracks = draft.tracks.filter((track) => alignmentIds.includes(track.id) && track.kind === 'alignment')
+    const enabled = command === 'bam-duplicates' ? !tracks.every((track) => track.bamIncludeDuplicates)
+      : command === 'bam-secondary' ? !tracks.every((track) => track.bamIncludeSecondary)
+        : !tracks.every((track) => track.bamIncludeSupplementary)
+    for (const track of tracks) {
+      if (command === 'bam-duplicates') track.bamIncludeDuplicates = enabled
+      if (command === 'bam-secondary') track.bamIncludeSecondary = enabled
+      if (command === 'bam-supplementary') track.bamIncludeSupplementary = enabled
+    }
   })
   if (command === 'duplicate') {
     let copyId: string | undefined
@@ -1454,6 +1580,7 @@ function setTrackHeights(trackIds: readonly string[]): void {
     for (const track of draft.tracks) if (resizableIds.includes(track.id)) {
       track.height = Math.round(height)
       delete track.fittedHeight
+      delete track.manualPixelHeight
     }
   })
 }
@@ -1478,7 +1605,12 @@ function fitUpperTracks(announce = true): void {
   )
   const fittedById = new Map(flexibleTracks.map((track, index) => [track.id, fittedPixels[index]]))
   store.edit((draft) => {
-    for (const track of draft.tracks) if (track.enabled && track.pane === 'main' && track.kind !== 'interval') {
+    for (const track of draft.tracks) if (track.enabled && track.pane === 'main') {
+      delete track.manualPixelHeight
+      if (track.kind === 'interval') {
+        delete track.fittedHeight
+        continue
+      }
       const pixels = fittedById.get(track.id)
       if (!pixels) continue
       track.height = heightScoreForPixels(track.kind, pixels)
