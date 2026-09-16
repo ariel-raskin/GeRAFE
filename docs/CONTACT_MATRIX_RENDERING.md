@@ -1,0 +1,35 @@
+# Contact-matrix rendering and performance notes
+
+This document records the September 2026 `.hic`/`.cool`/`.mcool` rendering regression so future matrix work does not repeat it.
+
+## What happened
+
+The original contact-matrix implementation queried a bounded genomic window and drew the returned cells directly as canvas diamonds. Its responsiveness was acceptable for the initial files and views.
+
+Later work attempted to make a resized matrix fill more vertical space and then to optimize the resulting renderer. The height-aware query expansion increased the off-diagonal genomic span when a track became taller. That increased the number of returned cells substantially even though the horizontal locus had not changed. Panning remained smooth below roughly 30,000 visible matrix features, slowed above that range, and stuttered badly around 100,000 features on the files used for testing.
+
+Several follow-up experiments treated drawing as the primary bottleneck:
+
+- Removing a sparse-background fill did not materially improve responsiveness.
+- Caching the geometry in `Path2D` objects did not help enough because the canvas still had to traverse and paint the large geometry on every pan frame.
+- Raster caching and downsampling did not resolve the reported lag and made the matrix look lower-resolution.
+
+PR #61 restored the known-good renderer from before the height-aware query expansion and removed those unsuccessful optimizations. That restored the expected panning speed and visual resolution.
+
+## Root cause
+
+The dominant variable was the number of matrix cells fetched and painted, not the canvas background. A height-only UI change had been allowed to expand the data query, so ordinary resizing could multiply the per-frame feature load.
+
+## Guardrails for future work
+
+- Do not expand the matrix genomic query merely because track height changes.
+- Preserve the direct, full-resolution cell renderer until a replacement is demonstrably faster at equal visual fidelity.
+- Record visible feature count, render time, and pan frame rate when evaluating matrix changes.
+- Test representative views below 30,000 cells and dense views near or above 100,000 cells.
+- Treat lower apparent resolution as a regression unless an explicit user-selected level of detail requests it.
+- Keep presentation-only features such as legends, label layout, and palettes independent of matrix fetching.
+- For a future large performance improvement, prefer a deliberate tiled/level-of-detail or GPU-backed architecture with cache invalidation and fidelity tests. Avoid adding another full-frame cache without profiling it against real `.hic` and `.mcool` files.
+
+## Current baseline
+
+The current baseline uses the source-selected matrix resolution, a bounded overscan window, and direct per-cell canvas drawing. Changes to this path should be compared against the post-PR-#61 behavior before merging.
