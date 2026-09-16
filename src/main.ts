@@ -1237,15 +1237,21 @@ function fitUpperTracks(): void {
   const upperTracks = store.current.tracks.filter((track) => track.enabled && track.pane === 'main')
   if (!upperTracks.length) return showToast('There are no upper tracks to fit.')
   const visibleHeight = Math.max(40, mainTrackScroll.clientHeight - bottomPane.getBoundingClientRect().height - headerCanvas.getBoundingClientRect().height)
-  const totalHeightUnits = upperTracks.reduce((sum, track) => sum + (track.kind === 'stranded' ? 2 : 1), 0)
-  const pixelsPerUnit = visibleHeight / totalHeightUnits
+  // BED tracks deliberately keep their compact label-fitting height. Fit the
+  // quantitative, alignment, and gene tracks into the remaining space.
+  const fixedIntervals = upperTracks.filter((track) => track.kind === 'interval')
+  const flexibleTracks = upperTracks.filter((track) => track.kind !== 'interval')
+  const fixedHeight = fixedIntervals.reduce((sum, track) => sum + trackPixelHeight(track.kind, track.height), 0)
+  const availableHeight = Math.max(0, visibleHeight - fixedHeight)
+  const totalHeightUnits = flexibleTracks.reduce((sum, track) => sum + (track.kind === 'stranded' ? 2 : 1), 0)
+  const pixelsPerUnit = totalHeightUnits ? availableHeight / totalHeightUnits : 0
   store.edit((draft) => {
-    for (const track of draft.tracks) if (track.enabled && track.pane === 'main') {
+    for (const track of draft.tracks) if (track.enabled && track.pane === 'main' && track.kind !== 'interval') {
       const units = track.kind === 'stranded' ? 2 : 1
       track.height = heightScoreForPixels(track.kind, pixelsPerUnit * units)
     }
-    const fitted = draft.tracks.filter((track) => track.enabled && track.pane === 'main')
-    while (fitted.reduce((sum, track) => sum + trackPixelHeight(track.kind, track.height), 0) > visibleHeight) {
+    const fitted = draft.tracks.filter((track) => track.enabled && track.pane === 'main' && track.kind !== 'interval')
+    while (fixedHeight + fitted.reduce((sum, track) => sum + trackPixelHeight(track.kind, track.height), 0) > visibleHeight) {
       const largest = fitted.filter((track) => track.height > 1).sort((a, b) => trackPixelHeight(b.kind, b.height) - trackPixelHeight(a.kind, a.height))[0]
       if (!largest) break
       largest.height -= 1
