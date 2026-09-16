@@ -3,7 +3,7 @@ import type { Cytoband } from './cytoband.ts'
 import type { GeneFeature, GeneSource, TranscriptFeature } from './reference.ts'
 import { computeScaleDomains, createTrackDocument, signalFeatureKey } from './track-document.ts'
 import type { TrackDocument, TrackSpec } from './track-document.ts'
-import type { AlignmentCoverageFeature, AlignmentFeature, IntervalFeature, Region, SignalFeature, TrackSource, TrackRuntime } from './types.ts'
+import type { AlignmentCoverageFeature, AlignmentFeature, InteractionFeature, IntervalFeature, Region, SignalFeature, TrackSource, TrackRuntime } from './types.ts'
 import { SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
 
 const RULER_HEIGHT = 108
@@ -517,6 +517,8 @@ export class GenomeBrowser {
         visibleFeatures += this.drawStrandedTrack(spec, plus, minus, index, top, rowHeight, width, palette, plusDomain, minusDomain)
       } else if (spec.kind === 'interval') {
         visibleFeatures += this.drawIntervalTrack(spec, this.runtimes.get(spec.id)!, index, top, rowHeight, width, palette)
+      } else if (spec.kind === 'interaction') {
+        visibleFeatures += this.drawInteractionTrack(spec, this.runtimes.get(spec.id)!, index, top, rowHeight, width, palette)
       } else if (spec.kind === 'alignment') {
         visibleFeatures += this.drawAlignmentTrack(spec, this.runtimes.get(spec.id)!, index, top, rowHeight, width, palette)
       } else visibleFeatures += this.drawGeneTrack(spec, width, top, rowHeight, palette)
@@ -1002,6 +1004,95 @@ export class GenomeBrowser {
     }
     ctx.restore()
     return visible.length
+  }
+
+  private drawInteractionTrack(
+    spec: TrackSpec,
+    track: TrackRuntime,
+    index: number,
+    top: number,
+    height: number,
+    width: number,
+    palette: CanvasPalette,
+  ): number {
+    const ctx = this.context
+    const bottom = top + height
+    const plotWidth = width - PLOT_LEFT
+    ctx.fillStyle = index % 2 === 0 ? palette.track : palette.trackAlternate
+    ctx.fillRect(LABEL_WIDTH, top, plotWidth, height)
+    ctx.fillStyle = palette.gutter
+    ctx.fillRect(0, top, LABEL_WIDTH, height)
+    if (this.selectedTrackIds.has(spec.id)) { ctx.fillStyle = palette.selectionFill; ctx.fillRect(0, top, LABEL_WIDTH, height) }
+    ctx.strokeStyle = palette.line
+    ctx.beginPath(); ctx.moveTo(0, bottom - 0.5); ctx.lineTo(width, bottom - 0.5); ctx.stroke()
+    ctx.fillStyle = palette.ink
+    ctx.font = '600 12px Inter, system-ui, sans-serif'
+    const labelBounds = trackLabelBounds()
+    const labelLines = wrappedLines(ctx, spec.label, labelBounds.width, Math.max(1, Math.floor((height - 16) / 15)))
+    drawCenteredTextLines(ctx, labelLines, labelBounds.center, verticallyCenteredBaseline(top, height, labelLines.length, 15), 15)
+    if (track.status === 'error' || track.status === 'offline') {
+      ctx.fillStyle = palette.error
+      ctx.font = '11px Inter, system-ui, sans-serif'
+      wrapText(ctx, track.error ?? 'Could not load interactions', 24, bottom - 25, 136, 15, 2)
+      return 0
+    }
+    const visible = track.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) as InteractionFeature[]
+    if (!visible.length) {
+      ctx.fillStyle = palette.muted
+      ctx.font = '12px Inter, system-ui, sans-serif'
+      ctx.fillText(track.status === 'loading' ? 'Loading interactions…' : 'No interactions in this window', PLOT_LEFT + 22, top + height / 2)
+      return 0
+    }
+
+    const shown = selectInteractionFeatures(visible)
+    const scored = shown.map((feature) => feature.score).filter((score): score is number => Number.isFinite(score))
+    const scoreMin = scored.length ? Math.min(...scored) : 0
+    const scoreMax = scored.length ? Math.max(...scored) : 0
+    const scale = plotWidth / (this.region.end - this.region.start)
+    const baseline = bottom - 7
+    ctx.save()
+    ctx.beginPath(); ctx.rect(PLOT_LEFT, top + 2, plotWidth, height - 3); ctx.clip()
+    for (const feature of shown) {
+      const emphasis = interactionEmphasis(feature.score, scoreMin, scoreMax)
+      const color = feature.itemRgb ?? spec.color
+      ctx.strokeStyle = color
+      ctx.fillStyle = color
+      ctx.lineWidth = 0.8 + emphasis * 2.2
+      ctx.globalAlpha = 0.3 + emphasis * 0.62
+      if (feature.chrom1 === this.region.chr && feature.chrom2 === this.region.chr) {
+        const x1 = PLOT_LEFT + (((feature.start1 + feature.end1) / 2) - this.region.start) * scale
+        const x2 = PLOT_LEFT + (((feature.start2 + feature.end2) / 2) - this.region.start) * scale
+        const arcHeight = interactionArcHeight(Math.abs(x2 - x1), height)
+        ctx.beginPath()
+        ctx.moveTo(x1, baseline)
+        ctx.bezierCurveTo(x1, baseline - arcHeight * 1.35, x2, baseline - arcHeight * 1.35, x2, baseline)
+        ctx.stroke()
+        drawInteractionAnchor(ctx, feature.start1, feature.end1, this.region, scale, baseline, width)
+        drawInteractionAnchor(ctx, feature.start2, feature.end2, this.region, scale, baseline, width)
+      } else {
+        const firstIsVisible = feature.chrom1 === this.region.chr
+        const anchorStart = firstIsVisible ? feature.start1 : feature.start2
+        const anchorEnd = firstIsVisible ? feature.end1 : feature.end2
+        const otherChromosome = firstIsVisible ? feature.chrom2 : feature.chrom1
+        const x = PLOT_LEFT + (((anchorStart + anchorEnd) / 2) - this.region.start) * scale
+        drawInteractionAnchor(ctx, anchorStart, anchorEnd, this.region, scale, baseline, width)
+        ctx.setLineDash([3, 3])
+        ctx.beginPath(); ctx.moveTo(x, baseline - 3); ctx.lineTo(x, top + 16); ctx.stroke()
+        ctx.setLineDash([])
+        ctx.globalAlpha = Math.max(ctx.globalAlpha, 0.75)
+        ctx.font = '9px Inter, system-ui, sans-serif'
+        ctx.fillText(otherChromosome, x + 3, top + 12)
+      }
+    }
+    ctx.restore()
+    ctx.globalAlpha = 1
+    ctx.lineWidth = 1
+    if (shown.length < visible.length) {
+      ctx.fillStyle = palette.muted
+      ctx.font = '10px Inter, system-ui, sans-serif'
+      ctx.fillText(`Showing ${shown.length.toLocaleString()} of ${visible.length.toLocaleString()} interactions`, PLOT_LEFT + 8, top + 13)
+    }
+    return shown.length
   }
 
   private drawAlignmentTrack(
@@ -1626,6 +1717,40 @@ function maximumMagnitude(features: readonly SignalFeature[]): number {
   let maximum = 0
   for (const feature of features) maximum = Math.max(maximum, Math.abs(feature.score))
   return maximum
+}
+
+const MAX_VISIBLE_INTERACTIONS = 2_000
+
+export function selectInteractionFeatures(features: readonly InteractionFeature[], limit = MAX_VISIBLE_INTERACTIONS): InteractionFeature[] {
+  if (features.length <= limit) return [...features]
+  return features.map((feature, order) => ({ feature, order }))
+    .sort((a, b) => (b.feature.score ?? Number.NEGATIVE_INFINITY) - (a.feature.score ?? Number.NEGATIVE_INFINITY) || a.order - b.order)
+    .slice(0, Math.max(0, limit))
+    .sort((a, b) => a.order - b.order)
+    .map(({ feature }) => feature)
+}
+
+export function interactionArcHeight(pixelSpan: number, trackHeight: number): number {
+  return Math.min(Math.max(8, trackHeight - 14), Math.max(8, Math.sqrt(Math.max(0, pixelSpan)) * 4.2))
+}
+
+function interactionEmphasis(score: number | undefined, minimum: number, maximum: number): number {
+  if (!Number.isFinite(score) || maximum <= minimum) return 0.55
+  return Math.max(0, Math.min(1, (score! - minimum) / (maximum - minimum)))
+}
+
+function drawInteractionAnchor(
+  ctx: CanvasRenderingContext2D,
+  start: number,
+  end: number,
+  region: Region,
+  scale: number,
+  baseline: number,
+  width: number,
+): void {
+  const x1 = Math.max(PLOT_LEFT, PLOT_LEFT + (start - region.start) * scale)
+  const x2 = Math.min(width, PLOT_LEFT + (end - region.start) * scale)
+  if (x2 > x1) ctx.fillRect(x1, baseline - 3, Math.max(1, x2 - x1), 6)
 }
 
 function drawMagnitudeBins(

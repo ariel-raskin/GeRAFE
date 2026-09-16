@@ -22,6 +22,24 @@ export interface IntervalFeature {
   blocks?: Array<{ start: number; end: number }>
 }
 
+/** A paired genomic interaction. start/end are the query envelope on the active chromosome. */
+export interface InteractionFeature {
+  featureType: 'interaction'
+  start: number
+  end: number
+  chrom1: string
+  start1: number
+  end1: number
+  chrom2: string
+  start2: number
+  end2: number
+  name?: string
+  score?: number
+  strand1?: '+' | '-'
+  strand2?: '+' | '-'
+  itemRgb?: string
+}
+
 export interface AlignmentDifference {
   kind: 'substitution' | 'insertion' | 'deletion' | 'skip' | 'soft-clip' | 'hard-clip'
   position: number
@@ -55,7 +73,7 @@ export interface AlignmentCoverageFeature extends SignalFeature {
   featureType: 'coverage'
 }
 
-export type TrackFeature = SignalFeature | IntervalFeature | AlignmentFeature | AlignmentCoverageFeature
+export type TrackFeature = SignalFeature | IntervalFeature | InteractionFeature | AlignmentFeature | AlignmentCoverageFeature
 
 export interface TrackQueryOptions {
   bamViewMode?: 'coverage' | 'alignments' | 'both'
