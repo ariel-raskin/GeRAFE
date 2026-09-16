@@ -1,9 +1,9 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 5 as const
+export const TRACK_DOCUMENT_VERSION = 6 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
-export const STRANDED_POSITIVE_COLOR = '#d95d74'
-export const STRANDED_NEGATIVE_COLOR = '#3478c9'
+export const STRANDED_POSITIVE_COLOR = '#e3342f'
+export const STRANDED_NEGATIVE_COLOR = '#2878d4'
 
 export type SourceFormat = 'bigwig' | 'bedgraph' | 'tdf' | 'bam' | 'bed'
 export type ScaleMode = 'auto-visible' | 'fixed'
@@ -72,6 +72,8 @@ export interface TrackSpec {
   negativeColor?: string
   negativeScaleBindingId?: string
   strandAutoLinkDisabled?: boolean
+  /** False clamps ordinary signal values to the zero baseline for display and autoscaling. */
+  allowNegativeValues?: boolean
 }
 
 export interface TrackDocument {
@@ -530,7 +532,9 @@ export function computeScaleDomains(
       for (const ref of scaleChannelRefs(track)) {
         if (ref.scaleBindingId !== binding.id) continue
         for (const feature of featuresByTrack.get(signalFeatureKey(track.id, ref.channel === 'ordinary' ? undefined : ref.channel)) ?? []) {
-          const score = ref.channel === 'ordinary' ? feature.score : Math.abs(feature.score)
+          const score = ref.channel === 'ordinary'
+            ? (track.allowNegativeValues === false ? Math.max(0, feature.score) : feature.score)
+            : Math.abs(feature.score)
           min = Math.min(min, score)
           max = Math.max(max, score)
         }
@@ -543,7 +547,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -568,6 +572,7 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     negativeColor: track.kind === 'stranded' && typeof track.negativeColor === 'string' ? track.negativeColor : undefined,
     negativeScaleBindingId: track.kind === 'stranded' && track.negativeScaleBindingId && scaleIds.has(track.negativeScaleBindingId) ? track.negativeScaleBindingId : undefined,
     strandAutoLinkDisabled: track.kind === 'signal' && track.strandAutoLinkDisabled === true ? true : undefined,
+    allowNegativeValues: track.kind === 'signal' ? track.allowNegativeValues !== false : undefined,
     geneDisplayMode: track.kind === 'genes' && (track.geneDisplayMode === 'collapsed' || track.geneDisplayMode === 'expanded' || track.geneDisplayMode === 'squished')
       ? track.geneDisplayMode
       : track.kind === 'genes' ? 'collapsed' : undefined,

@@ -702,7 +702,11 @@ export class GenomeBrowser {
     ctx.stroke()
 
     const rawVisible = track.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) as SignalFeature[]
-    const visible = spec.signalStrand ? rawVisible.map((feature) => ({ ...feature, score: Math.abs(feature.score) })) : rawVisible
+    const visible = spec.signalStrand
+      ? rawVisible.map((feature) => ({ ...feature, score: Math.abs(feature.score) }))
+      : spec.allowNegativeValues === false
+        ? rawVisible.map((feature) => ({ ...feature, score: Math.max(0, feature.score) }))
+        : rawVisible
     let previewMin = domain?.min ?? 0
     let previewMax = domain?.max ?? 0
     if (!domain) for (const feature of visible) { previewMin = Math.min(previewMin, feature.score); previewMax = Math.max(previewMax, feature.score) }
@@ -1127,10 +1131,13 @@ export class GenomeBrowser {
     const group = this.document.groups.find((item) => item.id === groupId)
     if (!group) return
     const ctx = this.context
-    const memberColor = this.document.tracks.find((track) => track.displayGroupId === groupId)?.color
-    const memberIds = this.document.tracks.filter((track) => track.displayGroupId === groupId).map((track) => track.id)
+    const members = this.document.tracks.filter((track) => track.displayGroupId === groupId)
+    const memberIds = members.map((track) => track.id)
     const selected = memberIds.length > 0 && memberIds.every((id) => this.selectedTrackIds.has(id))
-    const color = group.color ?? memberColor ?? palette.selection
+    const memberColors = members.flatMap((track) => track.kind === 'stranded' ? [track.color, track.negativeColor ?? track.color] : [track.color])
+    const color = memberColors.length > 0 && memberColors.every((memberColor) => memberColor === memberColors[0])
+      ? memberColors[0]
+      : palette.axisLine
     const cardTop = top + 3.5
     const cardHeight = Math.max(5, bottom - top - 7)
     ctx.save()
@@ -1277,9 +1284,10 @@ export class GenomeBrowser {
         }
         const arrowHalfHeight = mode === 'squished' ? 0.8 : 1.7
         ctx.lineWidth = mode === 'squished' ? 0.75 : 1
-        for (const arrowX of phasedArrowPositions(rawTxX1, PLOT_LEFT + 3, Math.min(width, rawTxX2) - 4, 36, 14)) {
-          const overlapsExon = exonPixels.some((exon) => arrowX + 3 >= exon.start && arrowX - 3 <= exon.end)
-          ctx.strokeStyle = overlapsExon ? palette.geneTrack : color
+        for (const phasedX of phasedArrowPositions(rawTxX1, PLOT_LEFT + 3, Math.min(width, rawTxX2) - 4, 36, 14)) {
+          const arrowX = placeChevronOnExon(phasedX, exonPixels, 3)
+          if (arrowX === undefined) continue
+          ctx.strokeStyle = palette.geneTrack
           ctx.beginPath()
           ctx.moveTo(arrowX - direction * 3, centerY - arrowHalfHeight)
           ctx.lineTo(arrowX + direction * 2, centerY)
@@ -1814,6 +1822,20 @@ export function phasedArrowPositions(rawFeatureStart: number, visibleStart: numb
   const positions: number[] = []
   for (let position = origin + first * spacing; position < visibleEnd; position += spacing) positions.push(position)
   return positions
+}
+
+/** Keeps directional chevrons fully inside a visible exon, or omits them when none can hold one. */
+export function placeChevronOnExon(position: number, exons: readonly { start: number; end: number }[], halfWidth: number): number | undefined {
+  const eligible = exons.filter((exon) => exon.end - exon.start >= halfWidth * 2)
+  if (!eligible.length) return undefined
+  const containing = eligible.find((exon) => position - halfWidth >= exon.start && position + halfWidth <= exon.end)
+  if (containing) return position
+  const nearest = eligible.reduce((best, exon) => {
+    const candidate = Math.max(exon.start + halfWidth, Math.min(exon.end - halfWidth, position))
+    const bestCandidate = Math.max(best.start + halfWidth, Math.min(best.end - halfWidth, position))
+    return Math.abs(candidate - position) < Math.abs(bestCandidate - position) ? exon : best
+  })
+  return Math.max(nearest.start + halfWidth, Math.min(nearest.end - halfWidth, position))
 }
 
 function cytobandColor(stain: string, palette: CanvasPalette): string {

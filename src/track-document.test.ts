@@ -119,7 +119,7 @@ describe('track document', () => {
     legacy.schemaVersion = 1
     for (const track of legacy.tracks) track.height = 1
     const restored = normalizeTrackDocument(legacy)
-    expect(restored.schemaVersion).toBe(5)
+    expect(restored.schemaVersion).toBe(6)
     expect(restored.tracks.every((track) => track.height >= 30 && track.height <= 33)).toBe(true)
   })
 
@@ -208,10 +208,10 @@ describe('track document', () => {
     const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
     addSignalTrack(document, { id: 'plus-source', name: 'PRO.plus.tdf', format: 'tdf', files: [] }, { id: 'plus-track', color: '#112233' })
     const paired = addSignalTrack(document, { id: 'minus-source', name: 'PRO.minus.tdf', format: 'tdf', files: [] }, { id: 'minus-track', color: '#445566', autoStrandColors: true })
-    expect(paired).toMatchObject({ color: '#d95d74', negativeColor: '#3478c9' })
+    expect(paired).toMatchObject({ color: '#e3342f', negativeColor: '#2878d4' })
     paired.color = '#ffffff'
     applyAutomaticStrandedColors(document)
-    expect(paired).toMatchObject({ color: '#d95d74', negativeColor: '#3478c9' })
+    expect(paired).toMatchObject({ color: '#e3342f', negativeColor: '#2878d4' })
   })
 
   it('links positive and negative group scales independently and normalizes magnitudes', () => {
@@ -260,5 +260,13 @@ describe('track document', () => {
     scale.mode = 'fixed'
     scale.limits = { min: -20, max: 0 }
     expect(computeScaleDomains(document, new Map()).get(track.scaleBindingId!)).toEqual({ min: 0, max: 20 })
+  })
+
+  it('can clamp an ordinary signal track to zero for display-scale calculations', () => {
+    const document = documentWithTwoTracks()
+    const track = document.tracks.find((item) => item.id === 't1')!
+    track.allowNegativeValues = false
+    const domain = computeScaleDomains(document, new Map([[track.id, [{ start: 0, end: 10, score: -7 }, { start: 10, end: 20, score: 3 }]]]))
+    expect(domain.get(track.scaleBindingId!)).toEqual({ min: 0, max: 3 })
   })
 })

@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { formatCoordinate, formatScore, heightScoreForPixels, phasedArrowPositions, trackPixelHeight } from './browser.ts'
+import { formatCoordinate, formatScore, heightScoreForPixels, phasedArrowPositions, placeChevronOnExon, trackPixelHeight } from './browser.ts'
 
 describe('gene direction arrow geometry', () => {
   it('keeps arrow phase attached to the transcript while panning', () => {
     const before = phasedArrowPositions(170, 176, 400, 36, 14)
     const afterFivePixelPan = phasedArrowPositions(165, 176, 400, 36, 14)
     expect(afterFivePixelPan.slice(0, before.length)).toEqual(before.map((position) => position - 5))
+  })
+
+  it('keeps chevrons fully inside exons and moves nearby chevrons onto an exon', () => {
+    expect(placeChevronOnExon(112, [{ start: 100, end: 120 }], 3)).toBe(112)
+    expect(placeChevronOnExon(128, [{ start: 100, end: 120 }], 3)).toBe(117)
+    expect(placeChevronOnExon(50, [{ start: 100, end: 104 }], 3)).toBeUndefined()
   })
 })
 

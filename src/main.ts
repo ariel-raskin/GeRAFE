@@ -104,6 +104,7 @@ app.innerHTML = `
             <button class="menu-item" id="about-menu-item" type="button" role="menuitem"><span>About GeRAFE</span><small>v${__GERAFE_VERSION__}</small></button>
           </div>
         </div>
+        <span class="app-version" title="Installed GeRAFE version">v${__GERAFE_VERSION__}</span>
       </nav>
       <span class="toolbar-divider"></span>
       <div class="reference-control">
@@ -130,7 +131,6 @@ app.innerHTML = `
         <span id="zoom-level" aria-live="polite">100%</span>
         <button id="zoom-in" type="button" aria-label="Zoom in">＋</button>
       </div>
-      <span class="app-version" title="Installed GeRAFE version">v${__GERAFE_VERSION__}</span>
       <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch color theme"></button>
     </header>
 
@@ -888,6 +888,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const target = store.current.tracks.find((track) => track.id === trackId)
   if (!target || !selected.length) return
   const signals = selected.filter((track) => track.kind === 'signal' || track.kind === 'stranded')
+  const ordinarySignals = selected.filter((track) => track.kind === 'signal' && !track.signalStrand)
   const dataTracks = selected.filter((track) => track.kind !== 'genes')
   const one = selected.length === 1
   const pairable = selected.length === 2 && selected.every((track) => track.kind === 'signal') && canPairSelectedStrands(selected as TrackSpec[])
@@ -901,6 +902,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     ${action('group', selected.length > 1 ? 'Group selected…' : 'Set visual group…')}
     <span class="context-separator"></span>
     ${signals.length ? action('scale-auto', 'Scale automatically', 'visible window') : ''}
+    ${ordinarySignals.length ? action('prevent-negative', 'Prevent negative values', ordinarySignals.every((track) => track.allowNegativeValues === false) ? 'current' : '') : ''}
     ${signals.length ? action('scale-fixed', 'Set fixed scale…') : ''}
     ${signals.length >= 2 ? action('link-scales', 'Link selected scales') : ''}
     ${signals.length ? action('unlink-scales', 'Unlink selected scales') : ''}
@@ -975,7 +977,7 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
     ${action('group-open', 'Open tracks into group…')}
     ${action('group-add-selected', 'Add selected tracks', selectedOutside.length ? `${selectedOutside.length} selected` : '', selectedOutside.length === 0)}
     <span class="context-separator"></span>
-    ${hasOrdinaryColor ? action('group-color-ordinary', 'Set ordinary track color…') : ''}
+    ${hasOrdinaryColor ? action('group-color-ordinary', 'Set unstranded track color…') : ''}
     ${hasPlusColor ? action('group-color-plus', 'Set positive-strand color…') : ''}
     ${hasMinusColor ? action('group-color-minus', 'Set negative-strand color…') : ''}
     ${action('group-height', 'Set group track height…')}
@@ -1042,6 +1044,11 @@ function handleTrackContextAction(event: MouseEvent): void {
   if (command === 'scale-auto') store.edit((draft) => {
     const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
     for (const scale of draft.scales) if (scaleIds.has(scale.id)) scale.mode = 'auto-visible'
+  })
+  if (command === 'prevent-negative') store.edit((draft) => {
+    const targets = draft.tracks.filter((track) => ids.includes(track.id) && track.kind === 'signal' && !track.signalStrand)
+    const preventing = targets.length > 0 && targets.every((track) => track.allowNegativeValues === false)
+    for (const track of targets) track.allowNegativeValues = preventing
   })
   if (command === 'scale-fixed') {
     const suggested = visibleLimits(targetId)
@@ -1164,7 +1171,7 @@ function handleGroupContextAction(command: string | undefined, groupId: string):
     pendingColorGroupId = groupId
     pendingColorChannel = channel
     const initial = channel === 'plus' ? group.positiveColor : channel === 'minus' ? group.negativeColor : group.color
-    openColorDialog(`Set ${channel === 'ordinary' ? 'ordinary track' : `${channel}-strand`} group color`, initial ?? '#6d55e0')
+    openColorDialog(`Set ${channel === 'ordinary' ? 'unstranded track' : `${channel}-strand`} group color`, initial ?? '#6d55e0')
   }
   if (command === 'group-height') setTrackHeights(memberIds)
   if (command === 'group-auto-linked') store.edit((draft) => {
@@ -1224,17 +1231,25 @@ function setTrackHeights(trackIds: readonly string[]): void {
 function fitUpperTracks(): void {
   const upperTracks = store.current.tracks.filter((track) => track.enabled && track.pane === 'main')
   if (!upperTracks.length) return showToast('There are no upper tracks to fit.')
-  const bodyHeight = document.querySelector<HTMLElement>('.browser-body')?.clientHeight ?? window.innerHeight
-  const visibleHeight = Math.max(40, bodyHeight - bottomPane.getBoundingClientRect().height - headerCanvas.getBoundingClientRect().height)
+  const visibleHeight = Math.max(40, mainTrackScroll.clientHeight - bottomPane.getBoundingClientRect().height - headerCanvas.getBoundingClientRect().height)
   const totalHeightUnits = upperTracks.reduce((sum, track) => sum + (track.kind === 'stranded' ? 2 : 1), 0)
   const pixelsPerUnit = visibleHeight / totalHeightUnits
   store.edit((draft) => {
     for (const track of draft.tracks) if (track.enabled && track.pane === 'main') {
       const units = track.kind === 'stranded' ? 2 : 1
-      track.height = heightScoreForPixels(track.kind, pixelsPerUnit * units)
+      let score = heightScoreForPixels(track.kind, pixelsPerUnit * units)
+      while (score > 1 && trackPixelHeight(track.kind, score) > pixelsPerUnit * units) score -= 1
+      track.height = score
+    }
+    const fitted = draft.tracks.filter((track) => track.enabled && track.pane === 'main')
+    while (fitted.reduce((sum, track) => sum + trackPixelHeight(track.kind, track.height), 0) > visibleHeight) {
+      const largest = fitted.filter((track) => track.height > 1).sort((a, b) => trackPixelHeight(b.kind, b.height) - trackPixelHeight(a.kind, a.height))[0]
+      if (!largest) break
+      largest.height -= 1
     }
   })
   mainTrackScroll.scrollTop = 0
+  requestAnimationFrame(() => { mainTrackScroll.scrollTop = 0 })
   showToast(`Fit ${upperTracks.length} upper track${upperTracks.length === 1 ? '' : 's'} to the visible pane.`)
 }
 
