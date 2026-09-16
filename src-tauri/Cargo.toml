@@ -19,9 +19,19 @@ serde_json = "1"
 tauri-plugin-dialog = "2"
 dirs = "6"
 tauri-plugin-process = "2"
+bigtools = { version = "0.5.8", default-features = false, features = ["write"] }
+flate2 = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2

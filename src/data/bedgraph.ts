@@ -1,6 +1,6 @@
 import type { Region, SignalFeature, SignalSource } from '../types.ts'
 
-const MAX_BEDGRAPH_BYTES = 50 * 1024 * 1024
+export const MAX_BEDGRAPH_BYTES = 50 * 1024 * 1024
 
 export class BedGraphSource implements SignalSource {
   readonly name: string
