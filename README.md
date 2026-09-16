@@ -41,6 +41,7 @@ GeRAFE is currently developed and tested as a Windows desktop application.
 - Stranded pairs remain compatible with visual groups; grouped autoscaling and color controls keep ordinary, positive, and negative channels separate.
 - Collapsed, expanded, and squished layouts for interval and gene tracks.
 - Arc-style BEDPE interaction tracks with endpoint anchors, score-weighted emphasis, optional item colors, interchromosomal markers, top/bottom arc orientation, and annotation-aware gene filters.
+- Indexed cis contact-map tracks from `.hic`, `.cool`, and multiresolution `.mcool` files, with zoom-aware resolution selection and triangular heatmap rendering.
 - Persistent light and dark themes.
 - Automatic restoration of local desktop tracks between launches, with relinking when a source has moved or changed.
 - Versioned `.gerafe.json` workspace files with track layout, source provenance, and display settings, plus 100-step undo/redo while editing. Legacy `.locus.json` workspaces remain supported.
@@ -55,6 +56,9 @@ GeRAFE is currently developed and tested as a Windows desktop application.
 | BAM | `.bam` with `.bai` or `.csi` | Coverage and packed read alignments with CIGAR geometry, pairing, mismatches, indels, and splice gaps |
 | BED | `.bed` | BED3–BED12 intervals, blocks, thick regions, strand, labels, scores, and item colors |
 | BEDPE | `.bedpe` | Paired genomic interactions as arcs and anchor blocks; interchromosomal contacts use labeled markers |
+| Hi-C | `.hic` | Indexed sparse cis contact matrices with source resolutions and KR/VC-family normalizations when present |
+| Cooler | `.cool` | Indexed sparse cis contact matrices with raw counts and discovered balancing columns |
+| Multires Cooler | `.mcool` | Zoom-aware sparse cis contact matrices across the file's available resolutions |
 
 On desktop, GeRAFE automatically looks beside a BAM for conventional `sample.bam.bai`, `sample.bai`, `sample.bam.csi`, and `sample.csi` index names. When using the browser development build, select the BAM and its index together.
 
@@ -170,6 +174,10 @@ BAM track menus provide:
 - coloring by track, strand, pair orientation, or mapping quality;
 - minimum MAPQ and duplicate, secondary, or supplementary-alignment filters.
 
+### Contact-matrix display controls
+
+Right-click a `.hic`, `.cool`, or `.mcool` track to choose automatic or source-specific resolution, select an available normalization, switch between log and linear intensity, set an automatic or fixed maximum, and flip the triangular matrix above or below its baseline. Automatic resolution follows the current genomic span and avoids requesting cells much finer than the display can show.
+
 ### Workspaces and persistence
 
 Desktop-opened source paths are retained locally and reopened on the same computer when GeRAFE starts again. If a file is missing or has changed, its track remains in the workspace and can be relinked.
@@ -181,7 +189,8 @@ Use **File → Save workspace…** to export a `.gerafe.json` document and **Ope
 - The desktop application and release installer are currently built and tested on Windows x64 only.
 - Release updates have a required Tauri updater signature but not yet a Windows Authenticode certificate, so SmartScreen may warn on the first installer download.
 - The supported track formats are limited to those listed above.
-- BEDPE is currently an in-memory arc track for files up to 50 MB, with at most 2,000 highest-scoring interactions drawn per visible window. Dense `.hic` and `.cool`/`.mcool` matrix heatmaps are not yet supported.
+- BEDPE is currently an in-memory arc track for files up to 50 MB, with at most 2,000 highest-scoring interactions drawn per visible window.
+- Contact-matrix tracks currently show one-dimensional cis windows as triangular heatmaps. Interchromosomal maps, two-axis navigation, expected/observed transforms, and matrix-derived annotations are not yet available.
 - Custom references provide coordinate navigation but do not automatically include gene annotations or cytobands.
 - Individual BAM reads are drawn below a 250 kb visible span; BAM requests are limited to 2 Mb to avoid unbounded pileups.
 - Mismatches can be read from BAM MD tags. Reconstructing mismatches for BAMs without MD tags is unavailable because reference-sequence bases are not currently loaded.

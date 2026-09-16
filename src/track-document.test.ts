@@ -4,6 +4,7 @@ import {
   addAlignmentTrack,
   addInteractionTrack,
   addIntervalTrack,
+  addMatrixTrack,
   applyAutomaticStrandedColors,
   assignDisplayGroup,
   computeScaleDomains,
@@ -155,6 +156,24 @@ describe('track document', () => {
     expect(restored.sources[0]).toMatchObject({ format: 'bedpe', name: 'loops.bedpe' })
     expect(restored.tracks.find((track) => track.id === 'interaction-track')).toMatchObject({
       kind: 'interaction', height: 32, interactionDirection: 'down', interactionFilterMode: 'genes', interactionFilterGenes: ['RUNX1', 'MYC'],
+    })
+  })
+
+  it('persists contact-matrix display and query settings', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 1_000_000 })
+    const track = addMatrixTrack(document, {
+      id: 'matrix-source', name: 'contacts.mcool', format: 'mcool',
+      files: [{ name: 'contacts.mcool', size: 84, lastModified: 123, role: 'signal', path: 'C:\\data\\contacts.mcool' }],
+    }, { id: 'matrix-track', defaultNormalization: 'weight' })
+    Object.assign(track, {
+      matrixDirection: 'down', matrixResolution: 10_000, matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42,
+    })
+    const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
+    expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
+    expect(restored.sources[0]).toMatchObject({ format: 'mcool', name: 'contacts.mcool' })
+    expect(restored.tracks.find((item) => item.id === 'matrix-track')).toMatchObject({
+      kind: 'matrix', matrixDirection: 'down', matrixResolution: 10_000,
+      matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42,
     })
   })
 
