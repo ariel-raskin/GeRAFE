@@ -16,8 +16,6 @@ const LABEL_CONTENT_LEFT = GROUP_RAIL_WIDTH + 8
 const LABEL_CONTENT_RIGHT = LABEL_WIDTH - 8
 const OVERSCAN_FACTOR = 1
 const MATRIX_OVERSCAN_FACTOR = 0.5
-const MATRIX_INTENSITY_LEVELS = 64
-const MATRIX_RASTER_MAX_PIXELS = 4_000_000
 const GENE_CONTENT_PADDING = 6
 const MIN_BOTTOM_GENE_HEIGHT = 44
 
@@ -49,12 +47,6 @@ interface GeneRenderLayout {
   slotHeight: number
   contentHeight: number
   transcriptCount: number
-}
-
-interface MatrixRasterCache {
-  signature: string
-  canvas: HTMLCanvasElement
-  density: number
 }
 
 export class GenomeBrowser {
@@ -103,8 +95,6 @@ export class GenomeBrowser {
   private lastFrameTime = performance.now()
   private smoothedFps = 60
   private abortControllers = new Map<string, AbortController>()
-  private readonly matrixMaximumCache = new WeakMap<MatrixFeature, number>()
-  private readonly matrixRasterCache = new WeakMap<MatrixFeature, MatrixRasterCache>()
   private selectedTrackIds = new Set<string>()
   private geneScrollOffsets = new Map<string, number>()
   private showTssIndicators = true
@@ -228,7 +218,7 @@ export class GenomeBrowser {
       if (spec.kind === 'matrix' && previous?.kind === 'matrix' && matrixQueryChanged(previous, spec)) {
         for (const runtime of this.runtimesForTrack(spec.id)) {
           this.abortControllers.get(runtime.id)?.abort()
-          Object.assign(runtime, { features: [], loadedRegion: undefined, loadedMatrixMaxDistance: undefined, status: runtime.source ? 'idle' : 'offline' })
+          Object.assign(runtime, { features: [], loadedRegion: undefined, status: runtime.source ? 'idle' : 'offline' })
         }
       }
     }
@@ -1296,7 +1286,7 @@ export class GenomeBrowser {
       wrapText(ctx, track.error ?? 'Could not load contact matrix', 24, bottom - 38, 136, 15, 2)
       return 0
     }
-    if (!matrix) {
+    if (!matrix?.cells.length) {
       if (track.status === 'loading') {
         ctx.fillStyle = palette.muted
         ctx.font = '12px Inter, system-ui, sans-serif'
@@ -1305,80 +1295,48 @@ export class GenomeBrowser {
       return 0
     }
 
-    let automaticMaximum = this.matrixMaximumCache.get(matrix)
-    if (automaticMaximum === undefined) {
-      automaticMaximum = matrixAutomaticMaximum(matrix)
-      this.matrixMaximumCache.set(matrix, automaticMaximum)
-    }
+    const offDiagonalValues = matrix.cells
+      .filter((cell) => cell.bin2 - cell.bin1 > matrix.resolution * 2)
+      .map((cell) => cell.value)
+      .filter((value) => Number.isFinite(value) && value > 0)
+    const values = (offDiagonalValues.length >= 20 ? offDiagonalValues : matrix.cells.map((cell) => cell.value).filter((value) => Number.isFinite(value) && value > 0)).sort((a, b) => a - b)
+    const automaticMaximum = values[Math.min(values.length - 1, Math.floor(values.length * 0.99))] ?? 1
     const maximum = Math.max(Number.EPSILON, spec.matrixScaleMax ?? automaticMaximum)
+    const transform = spec.matrixTransform === 'linear'
+      ? (value: number) => value / maximum
+      : (value: number) => Math.log1p(value) / Math.log1p(maximum)
     const scale = plotWidth / Math.max(1, this.region.end - this.region.start)
     const direction = spec.matrixDirection === 'down' ? 1 : -1
     const baseline = direction > 0 ? top + 3 : bottom - 3
+    const halfCell = Math.max(0.55, matrix.resolution * scale / 2)
     const matrixPalette = spec.matrixPalette ?? 'monochrome'
-    const transformMode = spec.matrixTransform === 'linear' ? 'linear' : 'log'
-    const rasterWidth = Math.max(1, (matrix.end - matrix.start) * scale)
-    const density = matrixRasterDensity(rasterWidth, height)
-    const signature = `${maximum}:${transformMode}:${scale}:${height}:${direction}:${matrixPalette}:${spec.color}:${density}`
-    let raster = this.matrixRasterCache.get(matrix)
-    if (!raster || raster.signature !== signature) {
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.max(1, Math.ceil(rasterWidth * density))
-      canvas.height = Math.max(1, Math.ceil(height * density))
-      const rasterContext = canvas.getContext('2d')
-      if (!rasterContext) return 0
-      const transform = transformMode === 'linear'
-        ? (value: number) => value / maximum
-        : (value: number) => Math.log1p(value) / Math.log1p(maximum)
-      const paths: Array<Path2D | undefined> = new Array(MATRIX_INTENSITY_LEVELS)
-      const halfCellBases = Math.max(matrix.resolution / 2, 0.55 / (scale * density))
-      for (const cell of matrix.cells) {
-        if (!(cell.value > 0)) continue
-        const intensity = Math.max(0, Math.min(1, transform(cell.value)))
-        if (!Number.isFinite(intensity) || intensity <= 0) continue
-        const bucket = matrixIntensityBucket(intensity)
-        const path = paths[bucket] ??= new Path2D()
-        const firstCenter = cell.bin1 + matrix.resolution / 2
-        const secondCenter = cell.bin2 + matrix.resolution / 2
-        const x = (firstCenter + secondCenter) / 2
-        const y = (secondCenter - firstCenter) / 2
-        path.moveTo(x - halfCellBases, y)
-        path.lineTo(x, y + halfCellBases)
-        path.lineTo(x + halfCellBases, y)
-        path.lineTo(x, y - halfCellBases)
-        path.closePath()
-      }
-      const rasterBaseline = direction > 0 ? 3 : height - 3
-      rasterContext.translate(-matrix.start * scale * density, rasterBaseline * density)
-      rasterContext.scale(scale * density, direction * scale * density)
-      for (let bucket = 0; bucket < paths.length; bucket += 1) {
-        const path = paths[bucket]
-        if (!path) continue
-        const intensity = matrixBucketIntensity(bucket)
-        const warmPalette = matrixPalette !== 'monochrome'
-        rasterContext.fillStyle = matrixPalette === 'warm-dark' ? matrixDarkWarmPaletteColor(intensity)
-          : warmPalette ? matrixWarmPaletteColor(intensity) : spec.color
-        rasterContext.globalAlpha = warmPalette ? 1 : 0.08 + Math.pow(intensity, 0.72) * 0.92
-        rasterContext.fill(path)
-      }
-      raster = { signature, canvas, density }
-      this.matrixRasterCache.set(matrix, raster)
-    }
-    const sourceX = Math.max(0, (this.region.start - matrix.start) * scale * raster.density)
-    const sourceWidth = Math.min(plotWidth * raster.density, raster.canvas.width - sourceX)
     ctx.save()
     ctx.beginPath(); ctx.rect(PLOT_LEFT, top + 1, plotWidth, height - 2); ctx.clip()
-    ctx.imageSmoothingEnabled = false
-    if (sourceWidth > 0) {
-      ctx.drawImage(
-        raster.canvas,
-        sourceX, 0, sourceWidth, raster.canvas.height,
-        PLOT_LEFT, top, sourceWidth / raster.density, height,
-      )
+    for (const cell of matrix.cells) {
+      if (!(cell.value > 0) || cell.bin2 + matrix.resolution <= this.region.start || cell.bin1 >= this.region.end) continue
+      const firstCenter = cell.bin1 + matrix.resolution / 2
+      const secondCenter = cell.bin2 + matrix.resolution / 2
+      const x = PLOT_LEFT + (((firstCenter + secondCenter) / 2) - this.region.start) * scale
+      const y = baseline + direction * ((secondCenter - firstCenter) / 2) * scale
+      if (x + halfCell < PLOT_LEFT || x - halfCell > width || y + halfCell < top || y - halfCell > bottom) continue
+      const intensity = Math.max(0, Math.min(1, transform(cell.value)))
+      if (!Number.isFinite(intensity) || intensity <= 0) continue
+      const warmPalette = matrixPalette !== 'monochrome'
+      ctx.fillStyle = matrixPalette === 'warm-dark' ? matrixDarkWarmPaletteColor(intensity)
+        : warmPalette ? matrixWarmPaletteColor(intensity) : spec.color
+      ctx.globalAlpha = warmPalette ? 1 : 0.08 + Math.pow(intensity, 0.72) * 0.92
+      ctx.beginPath()
+      ctx.moveTo(x - halfCell, y)
+      ctx.lineTo(x, y + halfCell)
+      ctx.lineTo(x + halfCell, y)
+      ctx.lineTo(x, y - halfCell)
+      ctx.closePath()
+      ctx.fill()
     }
-    ctx.restore()
     ctx.globalAlpha = 1
     ctx.strokeStyle = palette.axisLine
     ctx.beginPath(); ctx.moveTo(PLOT_LEFT, baseline + 0.5); ctx.lineTo(width, baseline + 0.5); ctx.stroke()
+    ctx.restore()
     return matrix.cells.length
   }
 
@@ -1841,13 +1799,7 @@ export class GenomeBrowser {
     // The query requests three times as many pixels for a three-times-wider
     // overscan region, so its effective resolution is viewport span / width.
     const requestedBasesPerPixel = (this.region.end - this.region.start) / plotWidth
-    if (track.loadedBasesPerPixel > requestedBasesPerPixel * 1.25) return false
-    const spec = this.document.tracks.find((candidate) => candidate.id === track.trackId)
-    if (spec?.kind === 'matrix') {
-      const requiredDistance = matrixMaximumDistance(this.trackHeight(spec), this.region.end - this.region.start, plotWidth)
-      if ((track.loadedMatrixMaxDistance ?? 0) < requiredDistance) return false
-    }
-    return true
+    return track.loadedBasesPerPixel <= requestedBasesPerPixel * 1.25
   }
 
   private async ensureData(): Promise<void> {
@@ -1895,7 +1847,7 @@ export class GenomeBrowser {
       } : spec?.kind === 'matrix' ? {
         matrixResolution: spec.matrixResolution,
         matrixNormalization: spec.matrixNormalization,
-        matrixMaxDistance: matrixMaximumDistance(this.trackHeight(spec), queryRegion.end - queryRegion.start, plotWidth * (1 + overscanFactor * 2)),
+        matrixMaxDistance: Math.ceil(2 * (this.trackHeight(spec) + 6) * (queryRegion.end - queryRegion.start) / Math.max(1, plotWidth * (1 + overscanFactor * 2))),
       } : undefined
       const queryPixelWidth = plotWidth * (1 + overscanFactor * 2)
       const features = await source.getFeatures(queryRegion, queryPixelWidth, controller.signal, options)
@@ -1903,7 +1855,6 @@ export class GenomeBrowser {
       track.features = features
       track.loadedRegion = queryRegion
       track.loadedBasesPerPixel = (queryRegion.end - queryRegion.start) / Math.max(1, queryPixelWidth)
-      track.loadedMatrixMaxDistance = spec?.kind === 'matrix' ? options?.matrixMaxDistance : undefined
       track.status = 'ready'
     } catch (error) {
       if (version !== track.requestVersion || isAbortError(error)) return
@@ -2235,35 +2186,6 @@ export function matrixDarkWarmPaletteColor(intensity: number): string {
   return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
 }
 
-export function matrixAutomaticMaximum(matrix: MatrixFeature): number {
-  const offDiagonalValues = matrix.cells
-    .filter((cell) => cell.bin2 - cell.bin1 > matrix.resolution * 2)
-    .map((cell) => cell.value)
-    .filter((value) => Number.isFinite(value) && value > 0)
-  const values = (offDiagonalValues.length >= 20
-    ? offDiagonalValues
-    : matrix.cells.map((cell) => cell.value).filter((value) => Number.isFinite(value) && value > 0))
-    .sort((a, b) => a - b)
-  return values[Math.min(values.length - 1, Math.floor(values.length * 0.99))] ?? 1
-}
-
-export function matrixIntensityBucket(intensity: number): number {
-  return Math.round(Math.max(0, Math.min(1, intensity)) * (MATRIX_INTENSITY_LEVELS - 1))
-}
-
-export function matrixBucketIntensity(bucket: number): number {
-  return Math.max(0, Math.min(MATRIX_INTENSITY_LEVELS - 1, bucket)) / (MATRIX_INTENSITY_LEVELS - 1)
-}
-
-export function matrixRasterDensity(width: number, height: number, maximumPixels = MATRIX_RASTER_MAX_PIXELS): number {
-  const area = Math.max(1, width) * Math.max(1, height)
-  return Math.min(1, Math.sqrt(Math.max(1, maximumPixels) / area))
-}
-
-export function matrixMaximumDistance(trackHeight: number, genomicSpan: number, plotWidth: number): number {
-  return Math.ceil(2 * (Math.max(1, trackHeight) + 6) * Math.max(1, genomicSpan) / Math.max(1, plotWidth))
-}
-
 function interactionEmphasis(score: number | undefined, minimum: number, maximum: number): number {
   if (!Number.isFinite(score) || maximum <= minimum) return 0.55
   return Math.max(0, Math.min(1, (score! - minimum) / (maximum - minimum)))
@@ -2449,9 +2371,6 @@ function alignmentQueryChanged(previous: TrackSpec, next: TrackSpec): boolean {
 function matrixQueryChanged(previous: TrackSpec, next: TrackSpec): boolean {
   return previous.matrixResolution !== next.matrixResolution
     || previous.matrixNormalization !== next.matrixNormalization
-    || previous.height !== next.height
-    || previous.fittedHeight !== next.fittedHeight
-    || previous.manualPixelHeight !== next.manualPixelHeight
 }
 
 function canvasPalette(): CanvasPalette {
