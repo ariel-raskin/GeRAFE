@@ -38,6 +38,8 @@ interface GeneRenderBlock {
   firstSlot: number
   geneX1: number
   geneX2: number
+  labelX?: number
+  labelLane?: number
 }
 
 interface GeneRenderLayout {
@@ -96,6 +98,7 @@ export class GenomeBrowser {
   private selectedTrackIds = new Set<string>()
   private geneScrollOffsets = new Map<string, number>()
   private showTssIndicators = true
+  private trackBodyHold?: { canvas: HTMLCanvasElement; startX: number; startY: number; timer: number }
 
   constructor(
     private readonly headerCanvas: HTMLCanvasElement,
@@ -139,6 +142,7 @@ export class GenomeBrowser {
     for (const controller of this.abortControllers.values()) controller.abort()
     document.body.classList.remove('is-track-dragging')
     document.body.classList.remove('is-track-resizing')
+    this.cancelTrackBodyHold()
     this.trackDragGhost.remove()
   }
 
@@ -180,6 +184,10 @@ export class GenomeBrowser {
     return this.paneStackHeight(pane)
   }
 
+  getRenderedTrackHeight(spec: TrackSpec): number {
+    return this.trackHeight(spec)
+  }
+
   getFittedMinimumHeight(spec: TrackSpec): number {
     const ctx = spec.pane === 'bottom' ? this.bottomContext : this.mainContext
     ctx.save()
@@ -210,7 +218,7 @@ export class GenomeBrowser {
       if (spec.kind === 'matrix' && previous?.kind === 'matrix' && matrixQueryChanged(previous, spec)) {
         for (const runtime of this.runtimesForTrack(spec.id)) {
           this.abortControllers.get(runtime.id)?.abort()
-          Object.assign(runtime, { features: [], loadedRegion: undefined, status: runtime.source ? 'idle' : 'offline' })
+          Object.assign(runtime, { features: [], loadedRegion: undefined, loadedMatrixMaxDistance: undefined, status: runtime.source ? 'idle' : 'offline' })
         }
       }
     }
@@ -331,7 +339,21 @@ export class GenomeBrowser {
         return
       }
       if (event.offsetX < PLOT_LEFT) return
-      this.callbacks.onClearSelection()
+      const hit = this.itemAt(canvas, pane, event.offsetX, event.offsetY)
+      if (!event.ctrlKey && !event.metaKey && !event.shiftKey) this.callbacks.onClearSelection()
+      if (hit?.kind === 'track') {
+        const hold = {
+          canvas,
+          startX: event.clientX,
+          startY: event.clientY,
+          timer: window.setTimeout(() => {
+            if (this.trackBodyHold !== hold) return
+            this.callbacks.onTrackSelection(hit.id, event.ctrlKey || event.metaKey, event.shiftKey)
+            this.trackBodyHold = undefined
+          }, 320),
+        }
+        this.trackBodyHold = hold
+      }
       canvas.setPointerCapture(event.pointerId)
       this.dragging = { x: event.clientX, region: { ...this.region }, canvas }
       canvas.classList.add('is-dragging')
@@ -366,6 +388,7 @@ export class GenomeBrowser {
         }
         return
       }
+      if (this.trackBodyHold?.canvas === canvas && Math.hypot(event.clientX - this.trackBodyHold.startX, event.clientY - this.trackBodyHold.startY) >= 5) this.cancelTrackBodyHold()
       if (!this.dragging || this.dragging.canvas !== canvas) {
         const hit = this.resizeBoundaryAt(pane, event.offsetY)
         const next = hit ? { canvas, pane, y: hit.y } : undefined
@@ -391,6 +414,7 @@ export class GenomeBrowser {
       if (!this.hasOverscanCoverage()) void this.ensureData()
     })
     const finishPointer = (event: PointerEvent) => {
+      this.cancelTrackBodyHold()
       if (this.trackResize?.canvas === canvas) {
         const resize = this.trackResize
         const updates = resize.trackIds.map((id) => ({ id, pixels: this.resizePreviewPixels.get(id) ?? resize.initialPixels.get(id)! }))
@@ -512,6 +536,11 @@ export class GenomeBrowser {
     this.callbacks.onRegionChange(this.region)
     this.scheduleRender()
     if (!this.hasOverscanCoverage()) void this.ensureData()
+  }
+
+  private cancelTrackBodyHold(): void {
+    if (this.trackBodyHold) window.clearTimeout(this.trackBodyHold.timer)
+    this.trackBodyHold = undefined
   }
 
   private resize(): void {
@@ -1257,7 +1286,7 @@ export class GenomeBrowser {
       wrapText(ctx, track.error ?? 'Could not load contact matrix', 24, bottom - 38, 136, 15, 2)
       return 0
     }
-    if (!matrix?.cells.length) {
+    if (!matrix) {
       if (track.status === 'loading') {
         ctx.fillStyle = palette.muted
         ctx.font = '12px Inter, system-ui, sans-serif'
@@ -1280,8 +1309,21 @@ export class GenomeBrowser {
     const direction = spec.matrixDirection === 'down' ? 1 : -1
     const baseline = direction > 0 ? top + 3 : bottom - 3
     const halfCell = Math.max(0.55, matrix.resolution * scale / 2)
+    const matrixPalette = spec.matrixPalette ?? 'monochrome'
     ctx.save()
     ctx.beginPath(); ctx.rect(PLOT_LEFT, top + 1, plotWidth, height - 2); ctx.clip()
+    const footprintDepth = Math.max(0, Math.min(height - 6, plotWidth / 2))
+    const farY = baseline + direction * footprintDepth
+    ctx.fillStyle = matrixPalette === 'warm-dark' ? matrixDarkWarmPaletteColor(0)
+      : matrixPalette === 'warm' ? matrixWarmPaletteColor(0) : spec.color
+    ctx.globalAlpha = matrixPalette === 'monochrome' ? 0.045 : 1
+    ctx.beginPath()
+    ctx.moveTo(PLOT_LEFT, baseline)
+    ctx.lineTo(width, baseline)
+    ctx.lineTo(width - footprintDepth, farY)
+    ctx.lineTo(PLOT_LEFT + footprintDepth, farY)
+    ctx.closePath()
+    ctx.fill()
     for (const cell of matrix.cells) {
       if (!(cell.value > 0) || cell.bin2 + matrix.resolution <= this.region.start || cell.bin1 >= this.region.end) continue
       const firstCenter = cell.bin1 + matrix.resolution / 2
@@ -1291,8 +1333,9 @@ export class GenomeBrowser {
       if (x + halfCell < PLOT_LEFT || x - halfCell > width || y + halfCell < top || y - halfCell > bottom) continue
       const intensity = Math.max(0, Math.min(1, transform(cell.value)))
       if (!Number.isFinite(intensity) || intensity <= 0) continue
-      const warmPalette = spec.matrixPalette === 'warm'
-      ctx.fillStyle = warmPalette ? matrixWarmPaletteColor(intensity) : spec.color
+      const warmPalette = matrixPalette !== 'monochrome'
+      ctx.fillStyle = matrixPalette === 'warm-dark' ? matrixDarkWarmPaletteColor(intensity)
+        : warmPalette ? matrixWarmPaletteColor(intensity) : spec.color
       ctx.globalAlpha = warmPalette ? 1 : 0.08 + Math.pow(intensity, 0.72) * 0.92
       ctx.beginPath()
       ctx.moveTo(x - halfCell, y)
@@ -1550,7 +1593,7 @@ export class GenomeBrowser {
       return 0
     }
     const mode = spec.geneDisplayMode ?? 'collapsed'
-    if (layout.transcriptCount > 2_000) {
+    if (mode !== 'collapsed' && layout.transcriptCount > 2_000) {
       ctx.fillStyle = palette.muted
       ctx.font = '12px Inter, system-ui, sans-serif'
       ctx.fillText(`${layout.transcriptCount.toLocaleString()} transcripts · zoom in to see structures`, PLOT_LEFT + 22, top + height / 2)
@@ -1572,14 +1615,31 @@ export class GenomeBrowser {
     ctx.clip()
     for (const block of layout.blocks) {
       const { gene, transcripts, firstSlot, geneX1, geneX2 } = block
-      const labelWidth = ctx.measureText(gene.name).width
-      ctx.fillStyle = palette.ink
-      ctx.textAlign = 'center'
-      ctx.fillText(gene.name, Math.max(PLOT_LEFT + labelWidth / 2, Math.min(width - labelWidth / 2, (geneX1 + geneX2) / 2)), contentTop + firstSlot * layout.slotHeight + layout.slotHeight - 1)
-      ctx.textAlign = 'start'
+      const geneCenterX = (geneX1 + geneX2) / 2
+      if (block.labelX !== undefined) {
+        const labelY = mode === 'collapsed'
+          ? contentTop + 9 + (block.labelLane ?? 0) * 11
+          : contentTop + firstSlot * layout.slotHeight + layout.slotHeight - 1
+        ctx.fillStyle = palette.ink
+        ctx.textAlign = 'center'
+        ctx.fillText(gene.name, block.labelX, labelY)
+        if (mode === 'collapsed') {
+          ctx.strokeStyle = palette.axisLine
+          ctx.globalAlpha = 0.55
+          ctx.lineWidth = 0.75
+          ctx.beginPath()
+          ctx.moveTo(block.labelX, labelY + 2)
+          ctx.lineTo(geneCenterX, contentTop + 33)
+          ctx.stroke()
+          ctx.globalAlpha = 1
+        }
+        ctx.textAlign = 'start'
+      }
 
       transcripts.forEach((transcript, transcriptIndex) => {
-        const centerY = contentTop + (firstSlot + transcriptIndex + 1) * layout.slotHeight + layout.slotHeight / 2
+        const centerY = mode === 'collapsed'
+          ? contentTop + 39
+          : contentTop + (firstSlot + transcriptIndex + 1) * layout.slotHeight + layout.slotHeight / 2
         const rawTxX1 = PLOT_LEFT + (transcript.start - this.region.start) * scale
         const rawTxX2 = PLOT_LEFT + (transcript.end - this.region.start) * scale
         const txX1 = Math.max(PLOT_LEFT, rawTxX1)
@@ -1640,19 +1700,48 @@ export class GenomeBrowser {
     const slotHeight = mode === 'squished' ? 9 : mode === 'expanded' ? 15 : 15
     const genes = this.geneSource?.featuresFor(this.region) ?? []
     const transcriptCount = genes.reduce((sum, gene) => sum + gene.transcriptModels.length, 0)
-    if (transcriptCount > 2_000) return { blocks: genes.map((gene) => ({ gene, transcripts: [], firstSlot: 0, geneX1: PLOT_LEFT, geneX2: width })), slotHeight, contentHeight: slotHeight + GENE_CONTENT_PADDING * 2, transcriptCount }
     const plotWidth = width - PLOT_LEFT
     const scale = plotWidth / (this.region.end - this.region.start)
     const slotEnds: number[] = []
     const blocks: GeneRenderBlock[] = []
     ctx.save()
     ctx.font = mode === 'squished' ? '600 9px Inter, system-ui, sans-serif' : '600 10px Inter, system-ui, sans-serif'
+    if (mode === 'collapsed') {
+      const candidates = genes.flatMap((gene) => {
+        const transcript = preferredTranscript(gene)
+        if (!transcript) return []
+        const geneX1 = Math.max(PLOT_LEFT, PLOT_LEFT + (gene.start - this.region.start) * scale)
+        const geneX2 = Math.min(width, PLOT_LEFT + (gene.end - this.region.start) * scale)
+        return [{ gene, transcript, geneX1, geneX2, labelWidth: ctx.measureText(gene.name).width }]
+      }).sort((a, b) => a.geneX1 - b.geneX1 || a.geneX2 - b.geneX2)
+      const placements = placeCollapsedGeneLabels(candidates.map((candidate) => ({
+        preferredX: (candidate.geneX1 + candidate.geneX2) / 2,
+        width: candidate.labelWidth,
+      })), PLOT_LEFT, width)
+      ctx.restore()
+      return {
+        blocks: candidates.map((candidate, index) => ({
+          gene: candidate.gene,
+          transcripts: [candidate.transcript],
+          firstSlot: 0,
+          geneX1: candidate.geneX1,
+          geneX2: candidate.geneX2,
+          labelX: placements[index]?.x,
+          labelLane: placements[index]?.lane,
+        })),
+        slotHeight,
+        contentHeight: 64,
+        transcriptCount,
+      }
+    }
+    if (transcriptCount > 2_000) {
+      ctx.restore()
+      return { blocks: genes.map((gene) => ({ gene, transcripts: [], firstSlot: 0, geneX1: PLOT_LEFT, geneX2: width })), slotHeight, contentHeight: slotHeight + GENE_CONTENT_PADDING * 2, transcriptCount }
+    }
     for (const gene of genes) {
-      const candidates = mode === 'collapsed' ? [preferredTranscript(gene)] : gene.transcriptModels
-      const transcripts = candidates.filter((transcript): transcript is TranscriptFeature => Boolean(transcript))
+      const transcripts = gene.transcriptModels
       if (!transcripts.length) continue
-      const extraTssSlot = mode === 'collapsed' && this.showTssIndicators ? 1 : 0
-      const requiredSlots = transcripts.length + 1 + extraTssSlot
+      const requiredSlots = transcripts.length + 1
       const geneX1 = Math.max(PLOT_LEFT, PLOT_LEFT + (gene.start - this.region.start) * scale)
       const geneX2 = Math.min(width, PLOT_LEFT + (gene.end - this.region.start) * scale)
       const occupiedEnd = Math.max(geneX2, geneX1 + ctx.measureText(gene.name).width) + 8
@@ -1666,7 +1755,11 @@ export class GenomeBrowser {
         firstSlot += 1
       }
       for (let slot = firstSlot; slot < firstSlot + requiredSlots; slot += 1) slotEnds[slot] = occupiedEnd
-      blocks.push({ gene, transcripts, firstSlot, geneX1, geneX2 })
+      const labelWidth = ctx.measureText(gene.name).width
+      blocks.push({
+        gene, transcripts, firstSlot, geneX1, geneX2,
+        labelX: Math.max(PLOT_LEFT + labelWidth / 2, Math.min(width - labelWidth / 2, (geneX1 + geneX2) / 2)),
+      })
     }
     ctx.restore()
     return { blocks, slotHeight, contentHeight: Math.max(slotHeight, slotEnds.length * slotHeight) + GENE_CONTENT_PADDING * 2, transcriptCount }
@@ -1718,7 +1811,13 @@ export class GenomeBrowser {
     // The query requests three times as many pixels for a three-times-wider
     // overscan region, so its effective resolution is viewport span / width.
     const requestedBasesPerPixel = (this.region.end - this.region.start) / plotWidth
-    return track.loadedBasesPerPixel <= requestedBasesPerPixel * 1.25
+    if (track.loadedBasesPerPixel > requestedBasesPerPixel * 1.25) return false
+    const spec = this.document.tracks.find((candidate) => candidate.id === track.trackId)
+    if (spec?.kind === 'matrix') {
+      const requiredDistance = matrixMaximumDistance(this.trackHeight(spec), this.region.end - this.region.start, plotWidth)
+      if ((track.loadedMatrixMaxDistance ?? 0) < requiredDistance) return false
+    }
+    return true
   }
 
   private async ensureData(): Promise<void> {
@@ -1766,7 +1865,7 @@ export class GenomeBrowser {
       } : spec?.kind === 'matrix' ? {
         matrixResolution: spec.matrixResolution,
         matrixNormalization: spec.matrixNormalization,
-        matrixMaxDistance: Math.ceil(2 * (this.trackHeight(spec) + 6) * (queryRegion.end - queryRegion.start) / Math.max(1, plotWidth * (1 + overscanFactor * 2))),
+        matrixMaxDistance: matrixMaximumDistance(this.trackHeight(spec), queryRegion.end - queryRegion.start, plotWidth * (1 + overscanFactor * 2)),
       } : undefined
       const queryPixelWidth = plotWidth * (1 + overscanFactor * 2)
       const features = await source.getFeatures(queryRegion, queryPixelWidth, controller.signal, options)
@@ -1774,6 +1873,7 @@ export class GenomeBrowser {
       track.features = features
       track.loadedRegion = queryRegion
       track.loadedBasesPerPixel = (queryRegion.end - queryRegion.start) / Math.max(1, queryPixelWidth)
+      track.loadedMatrixMaxDistance = spec?.kind === 'matrix' ? options?.matrixMaxDistance : undefined
       track.status = 'ready'
     } catch (error) {
       if (version !== track.requestVersion || isAbortError(error)) return
@@ -2047,6 +2147,30 @@ export function interactionArcHeight(pixelSpan: number, trackHeight: number): nu
   return Math.min(Math.max(8, trackHeight - 14), Math.max(8, Math.sqrt(Math.max(0, pixelSpan)) * 4.2))
 }
 
+export function placeCollapsedGeneLabels(
+  labels: readonly { preferredX: number; width: number }[],
+  left: number,
+  right: number,
+  gap = 6,
+): Array<{ x: number; lane: number } | undefined> {
+  const laneEnds = [left - gap, left - gap]
+  return labels.map((label) => {
+    const halfWidth = Math.max(0, label.width) / 2
+    const minimumCenter = left + halfWidth
+    const maximumCenter = right - halfWidth
+    if (minimumCenter > maximumCenter) return undefined
+    const preferred = Math.max(minimumCenter, Math.min(maximumCenter, label.preferredX))
+    const choices = laneEnds.flatMap((laneEnd, lane) => {
+      const x = Math.max(preferred, laneEnd + gap + halfWidth)
+      return x <= maximumCenter ? [{ x, lane, shift: Math.abs(x - preferred) }] : []
+    }).sort((a, b) => a.shift - b.shift || a.lane - b.lane)
+    const choice = choices[0]
+    if (!choice) return undefined
+    laneEnds[choice.lane] = choice.x + halfWidth
+    return { x: choice.x, lane: choice.lane }
+  })
+}
+
 /** Low-to-high contact intensity palette adapted from the figure workflow. */
 export function matrixWarmPaletteColor(intensity: number): string {
   const value = Math.max(0, Math.min(1, intensity))
@@ -2062,6 +2186,27 @@ export function matrixWarmPaletteColor(intensity: number): string {
   const mix = (value - lower.at) / Math.max(Number.EPSILON, upper.at - lower.at)
   const channels = lower.color.map((channel, index) => Math.round(channel + (upper.color[index] - channel) * mix))
   return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
+}
+
+/** Dark-canvas adaptation that preserves the warm progression without losing the maximum into black. */
+export function matrixDarkWarmPaletteColor(intensity: number): string {
+  const value = Math.max(0, Math.min(1, intensity))
+  const stops = [
+    { at: 0, color: [31, 27, 22] },
+    { at: 0.42, color: [255, 211, 82] },
+    { at: 0.8, color: [232, 48, 43] },
+    { at: 1, color: [255, 248, 231] },
+  ] as const
+  const upperIndex = Math.max(1, stops.findIndex((stop) => value <= stop.at))
+  const lower = stops[upperIndex - 1]
+  const upper = stops[upperIndex]
+  const mix = (value - lower.at) / Math.max(Number.EPSILON, upper.at - lower.at)
+  const channels = lower.color.map((channel, index) => Math.round(channel + (upper.color[index] - channel) * mix))
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
+}
+
+export function matrixMaximumDistance(trackHeight: number, genomicSpan: number, plotWidth: number): number {
+  return Math.ceil(2 * (Math.max(1, trackHeight) + 6) * Math.max(1, genomicSpan) / Math.max(1, plotWidth))
 }
 
 function interactionEmphasis(score: number | undefined, minimum: number, maximum: number): number {
@@ -2249,6 +2394,9 @@ function alignmentQueryChanged(previous: TrackSpec, next: TrackSpec): boolean {
 function matrixQueryChanged(previous: TrackSpec, next: TrackSpec): boolean {
   return previous.matrixResolution !== next.matrixResolution
     || previous.matrixNormalization !== next.matrixNormalization
+    || previous.height !== next.height
+    || previous.fittedHeight !== next.fittedHeight
+    || previous.manualPixelHeight !== next.manualPixelHeight
 }
 
 function canvasPalette(): CanvasPalette {

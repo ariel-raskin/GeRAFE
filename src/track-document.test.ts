@@ -85,12 +85,14 @@ describe('track document', () => {
   it('persists exact fitted and manually resized pixel heights and upgrades version 8 workspaces', () => {
     const document = documentWithTwoTracks()
     document.tracks[0].fittedHeight = 317
+    document.tracks[0].heightLocked = true
     document.tracks[1].manualPixelHeight = 143
     const legacy = JSON.parse(JSON.stringify(document))
     legacy.schemaVersion = 8
     const restored = normalizeTrackDocument(legacy)
     expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
     expect(restored.tracks[0].fittedHeight).toBe(317)
+    expect(restored.tracks[0].heightLocked).toBe(true)
     expect(restored.tracks[1].manualPixelHeight).toBe(143)
   })
 
@@ -168,14 +170,14 @@ describe('track document', () => {
       files: [{ name: 'contacts.mcool', size: 84, lastModified: 123, role: 'signal', path: 'C:\\data\\contacts.mcool' }],
     }, { id: 'matrix-track', defaultNormalization: 'weight' })
     Object.assign(track, {
-      matrixDirection: 'down', matrixResolution: 10_000, matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42, matrixPalette: 'warm',
+      matrixDirection: 'down', matrixResolution: 10_000, matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42, matrixPalette: 'warm-dark',
     })
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
     expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
     expect(restored.sources[0]).toMatchObject({ format: 'mcool', name: 'contacts.mcool' })
     expect(restored.tracks.find((item) => item.id === 'matrix-track')).toMatchObject({
       kind: 'matrix', matrixDirection: 'down', matrixResolution: 10_000,
-      matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42, matrixPalette: 'warm',
+      matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42, matrixPalette: 'warm-dark',
     })
   })
 

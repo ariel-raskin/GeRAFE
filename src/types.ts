@@ -127,6 +127,8 @@ export interface TrackRuntime {
   loadedRegion?: Region
   /** Bases represented by one requested data pixel; smaller means a finer source query. */
   loadedBasesPerPixel?: number
+  /** Furthest queried contact distance for a matrix runtime. */
+  loadedMatrixMaxDistance?: number
   status: TrackStatus
   error?: string
   requestVersion: number

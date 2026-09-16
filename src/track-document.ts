@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 12 as const
+export const TRACK_DOCUMENT_VERSION = 13 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -11,7 +11,7 @@ export type SignalStrand = 'plus' | 'minus'
 export type SignalScaleChannel = 'ordinary' | SignalStrand
 export type InteractionDirection = 'up' | 'down'
 export type InteractionFilterMode = 'all' | 'genes' | 'visible-genes'
-export type MatrixPalette = 'monochrome' | 'warm'
+export type MatrixPalette = 'monochrome' | 'warm' | 'warm-dark'
 
 export interface SourceFileSpec {
   name: string
@@ -60,6 +60,8 @@ export interface TrackSpec {
   fittedHeight?: number
   /** Exact pixel height assigned by direct boundary dragging. */
   manualPixelHeight?: number
+  /** Excludes this track from Fit tracks while retaining manual resizing. */
+  heightLocked?: boolean
   pane: 'main' | 'bottom'
   geneDisplayMode?: 'collapsed' | 'expanded' | 'squished'
   intervalDisplayMode?: 'collapsed' | 'expanded' | 'squished'
@@ -617,7 +619,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -639,6 +641,7 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     manualPixelHeight: typeof track.manualPixelHeight === 'number' && Number.isFinite(track.manualPixelHeight)
       ? Math.max(20, Math.min(4_000, Math.round(track.manualPixelHeight)))
       : undefined,
+    heightLocked: track.heightLocked === true ? true : undefined,
     pane: track.pane === 'main' || track.pane === 'bottom' ? track.pane : track.kind === 'genes' ? 'bottom' : 'main',
     sourceIds: track.sourceIds.filter((id) => sourceIds.has(id)),
     displayGroupId: track.displayGroupId && groupIds.has(track.displayGroupId) ? track.displayGroupId : undefined,
@@ -677,7 +680,9 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     matrixScaleMax: track.kind === 'matrix' && typeof track.matrixScaleMax === 'number' && Number.isFinite(track.matrixScaleMax) && track.matrixScaleMax > 0
       ? track.matrixScaleMax
       : undefined,
-    matrixPalette: track.kind === 'matrix' && track.matrixPalette === 'warm' ? 'warm' as const : track.kind === 'matrix' ? 'monochrome' as const : undefined,
+    matrixPalette: track.kind === 'matrix' && (track.matrixPalette === 'warm' || track.matrixPalette === 'warm-dark')
+      ? track.matrixPalette
+      : track.kind === 'matrix' ? 'monochrome' as const : undefined,
     alignmentDisplayMode: track.kind === 'alignment' && (track.alignmentDisplayMode === 'collapsed' || track.alignmentDisplayMode === 'expanded' || track.alignmentDisplayMode === 'squished')
       ? track.alignmentDisplayMode
       : track.kind === 'alignment' ? 'expanded' : undefined,

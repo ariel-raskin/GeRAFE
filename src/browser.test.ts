@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixWarmPaletteColor, phasedArrowPositions, resizedTrackPixels, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixDarkWarmPaletteColor, matrixMaximumDistance, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { InteractionFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 
@@ -51,6 +51,14 @@ describe('track layout and ruler formatting', () => {
     expect([...resizedTrackPixels(initial, minimums, 18)]).toEqual([['a', 118], ['b', 88]])
     expect([...resizedTrackPixels(initial, minimums, -80)]).toEqual([['a', 80], ['b', 50]])
   })
+
+  it('places collapsed gene labels in two bounded lanes and shifts later labels', () => {
+    const placements = placeCollapsedGeneLabels([
+      { preferredX: 10, width: 30 }, { preferredX: 12, width: 30 }, { preferredX: 14, width: 30 }, { preferredX: 50, width: 120 },
+    ], 0, 100)
+    expect(placements.slice(0, 3)).toEqual([{ x: 15, lane: 0 }, { x: 15, lane: 1 }, { x: 51, lane: 0 }])
+    expect(placements[3]).toBeUndefined()
+  })
 })
 
 describe('interaction rendering helpers', () => {
@@ -92,5 +100,15 @@ describe('contact-matrix rendering helpers', () => {
     expect(matrixWarmPaletteColor(0)).toBe('#fff7bc')
     expect(matrixWarmPaletteColor(0.82)).toBe('#d7191c')
     expect(matrixWarmPaletteColor(1)).toBe('#111111')
+  })
+
+  it('offers a dark-canvas warm scale with a visible light maximum', () => {
+    expect(matrixDarkWarmPaletteColor(0)).toBe('#1f1b16')
+    expect(matrixDarkWarmPaletteColor(0.8)).toBe('#e8302b')
+    expect(matrixDarkWarmPaletteColor(1)).toBe('#fff8e7')
+  })
+
+  it('requests more off-diagonal contacts when a matrix track grows', () => {
+    expect(matrixMaximumDistance(200, 1_000_000, 1_000)).toBeGreaterThan(matrixMaximumDistance(100, 1_000_000, 1_000))
   })
 })

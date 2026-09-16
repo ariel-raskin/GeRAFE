@@ -174,7 +174,7 @@ app.innerHTML = `
         <span><b id="render-value">0.0</b> ms draw</span>
         <span><b id="feature-value">0</b> features</span>
       </div>
-      <div class="interaction-hint">Wheel scrolls · Ctrl+wheel zooms · Right-click labels for options</div>
+      <div class="interaction-hint">Hold a track to select · Wheel scrolls · Ctrl+wheel zooms · Right-click labels for options</div>
     </footer>
   </main>
   <div class="track-context-menu" id="track-context-menu" role="menu" hidden></div>
@@ -1055,6 +1055,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const ordinarySignals = selected.filter((track) => track.kind === 'signal' && !track.signalStrand)
   const dataTracks = selected.filter((track) => track.kind !== 'genes')
   const resizableTracks = selected.filter((track) => track.kind !== 'genes' || track.pane !== 'bottom')
+  const fittableTracks = selected.filter((track) => track.pane === 'main')
   const one = selected.length === 1
   const sameKind = selected.every((track) => track.kind === target.kind)
   const intervalTracks = sameKind && target.kind === 'interval' ? selected : []
@@ -1098,6 +1099,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     ${one ? action('rename', 'Rename…') : ''}
     ${one && target.kind === 'stranded' ? action('color-plus', 'Set positive-strand color…') + action('color-minus', 'Set negative-strand color…') : action('color', one ? 'Set color…' : 'Set selected colors…')}
     ${resizableTracks.length ? action('height', one ? 'Set track height…' : 'Set selected heights…') : ''}
+    ${fittableTracks.length ? action('height-lock', 'Lock track height', fittableTracks.every((track) => track.heightLocked) ? 'current' : '') : ''}
     ${action('group', 'Group selected')}
     ${selected.some((track) => track.displayGroupId) ? action('remove-from-group', selected.length > 1 ? 'Remove selected tracks from groups' : 'Remove from group') : ''}
     <span class="context-separator"></span>
@@ -1133,7 +1135,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     ${matricesOnly ? submenu('matrix-resolution', 'Resolution', matrixResolutionLabel, action('matrix-resolution-auto', 'Automatic', matrixTracks.every((track) => track.matrixResolution === undefined) ? 'current' : '') + commonMatrixResolutions.map((resolution) => action(`matrix-resolution-value-${resolution}`, formatBases(resolution), matrixTracks.every((track) => track.matrixResolution === resolution) ? 'current' : '')).join('')) : ''}
     ${matricesOnly && commonMatrixNormalizations.length ? submenu('matrix-normalization', 'Normalization', escapeHtml(matrixNormalizationLabel), commonMatrixNormalizations.map((normalization) => action(`matrix-normalization-value-${encodeURIComponent(normalization)}`, escapeHtml(normalization), matrixTracks.every((track) => track.matrixNormalization === normalization) ? 'current' : '')).join('')) : ''}
     ${matricesOnly ? submenu('matrix-intensity', 'Intensity scale', matrixScaleLabel, action('matrix-scale-auto', 'Automatic z-max', matrixTracks.every((track) => track.matrixScaleMax === undefined) ? 'current' : '') + action('matrix-scale-fixed', 'Set z-max…', sameValue(matrixTracks.map((track) => track.matrixScaleMax)) && matrixTracks[0]?.matrixScaleMax ? String(matrixTracks[0].matrixScaleMax) : '') + '<span class="context-separator"></span>' + action('matrix-transform-log', 'Log intensity', matrixTracks.every((track) => track.matrixTransform !== 'linear') ? 'current' : '') + action('matrix-transform-linear', 'Linear intensity', matrixTracks.every((track) => track.matrixTransform === 'linear') ? 'current' : '')) : ''}
-    ${matricesOnly ? submenu('matrix-palette', 'Color scale', sameValue(matrixTracks.map((track) => track.matrixPalette)) ? matrixTracks[0]?.matrixPalette === 'monochrome' ? 'Track color' : 'Yellow–red–black' : 'Mixed', action('matrix-palette-monochrome', 'Single track color', matrixTracks.every((track) => track.matrixPalette === 'monochrome') ? 'current' : '') + action('matrix-palette-warm', 'Yellow → red → black', matrixTracks.every((track) => track.matrixPalette !== 'monochrome') ? 'current' : '')) : ''}
+    ${matricesOnly ? submenu('matrix-palette', 'Color scale', sameValue(matrixTracks.map((track) => track.matrixPalette)) ? matrixTracks[0]?.matrixPalette === 'monochrome' ? 'Track color' : matrixTracks[0]?.matrixPalette === 'warm-dark' ? 'Dark warm' : 'Yellow–red–black' : 'Mixed', action('matrix-palette-monochrome', 'Single track color', matrixTracks.every((track) => track.matrixPalette === 'monochrome') ? 'current' : '') + action('matrix-palette-warm', 'Yellow → red → black', matrixTracks.every((track) => track.matrixPalette === 'warm') ? 'current' : '') + action('matrix-palette-warm-dark', 'Dark warm → red → white', matrixTracks.every((track) => track.matrixPalette === 'warm-dark') ? 'current' : '')) : ''}
     ${matricesOnly ? '<span class="context-separator"></span>' : ''}
     ${one && target.kind === 'matrix' ? action('duplicate', 'Duplicate track') : ''}
     ${one && target.kind === 'matrix' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
@@ -1306,6 +1308,11 @@ function handleTrackContextAction(event: MouseEvent): void {
     openColorDialog(command === 'color-plus' ? 'Set positive-strand color' : command === 'color-minus' ? 'Set negative-strand color' : 'Set track color', initial ?? '#6d55e0')
   }
   if (command === 'height') setTrackHeights(ids)
+  if (command === 'height-lock') store.edit((draft) => {
+    const tracks = draft.tracks.filter((track) => ids.includes(track.id) && track.pane === 'main')
+    const locked = !tracks.every((track) => track.heightLocked)
+    for (const track of tracks) track.heightLocked = locked || undefined
+  })
   if (command === 'group') {
     const first = store.current.tracks.find((track) => ids.includes(track.id))
     const current = store.current.groups.find((group) => group.id === first?.displayGroupId)?.label ?? ''
@@ -1423,8 +1430,10 @@ function handleTrackContextAction(event: MouseEvent): void {
       for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixScaleMax = maximum
     })
   }
-  if (command === 'matrix-palette-monochrome' || command === 'matrix-palette-warm') store.edit((draft) => {
-    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixPalette = command === 'matrix-palette-warm' ? 'warm' : 'monochrome'
+  if (command === 'matrix-palette-monochrome' || command === 'matrix-palette-warm' || command === 'matrix-palette-warm-dark') store.edit((draft) => {
+    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') {
+      track.matrixPalette = command === 'matrix-palette-warm' ? 'warm' : command === 'matrix-palette-warm-dark' ? 'warm-dark' : 'monochrome'
+    }
   })
   if (command?.startsWith('bam-view-')) {
     const mode = command.slice(9) as 'coverage' | 'alignments' | 'both'
@@ -1592,11 +1601,17 @@ function fitUpperTracks(announce = true): void {
     return
   }
   const visibleHeight = Math.max(40, mainTrackScroll.clientHeight - bottomPane.getBoundingClientRect().height - headerCanvas.getBoundingClientRect().height)
-  // BED tracks deliberately keep their compact label-fitting height. Fit the
-  // quantitative, alignment, and gene tracks into the remaining space.
-  const fixedIntervals = upperTracks.filter((track) => track.kind === 'interval')
-  const flexibleTracks = upperTracks.filter((track) => track.kind !== 'interval')
+  // BED tracks keep their compact label-fitting height. Locked tracks retain
+  // their exact current height while the remaining flexible tracks share what is left.
+  const lockedTracks = upperTracks.filter((track) => track.heightLocked)
+  const fixedIntervals = upperTracks.filter((track) => track.kind === 'interval' && !track.heightLocked)
+  const flexibleTracks = upperTracks.filter((track) => track.kind !== 'interval' && !track.heightLocked)
+  if (lockedTracks.length === upperTracks.length) {
+    if (announce) showToast('All upper tracks have locked heights.')
+    return
+  }
   const fixedHeight = fixedIntervals.reduce((sum, track) => sum + trackPixelHeight(track.kind, track.height), 0)
+    + lockedTracks.reduce((sum, track) => sum + browser.getRenderedTrackHeight(track), 0)
   const availableHeight = Math.max(0, Math.floor(visibleHeight - fixedHeight))
   const fittedPixels = distributeFittedPixels(
     flexibleTracks.map((track) => browser.getFittedMinimumHeight(track)),
@@ -1606,6 +1621,7 @@ function fitUpperTracks(announce = true): void {
   const fittedById = new Map(flexibleTracks.map((track, index) => [track.id, fittedPixels[index]]))
   store.edit((draft) => {
     for (const track of draft.tracks) if (track.enabled && track.pane === 'main') {
+      if (track.heightLocked) continue
       delete track.manualPixelHeight
       if (track.kind === 'interval') {
         delete track.fittedHeight
@@ -1619,7 +1635,7 @@ function fitUpperTracks(announce = true): void {
   })
   mainTrackScroll.scrollTop = 0
   requestAnimationFrame(() => { mainTrackScroll.scrollTop = 0 })
-  if (announce) showToast(`Fit ${upperTracks.length} upper track${upperTracks.length === 1 ? '' : 's'} to the visible pane.`)
+  if (announce) showToast(`Fit ${upperTracks.length - lockedTracks.length} upper track${upperTracks.length - lockedTracks.length === 1 ? '' : 's'}${lockedTracks.length ? `; kept ${lockedTracks.length} height lock${lockedTracks.length === 1 ? '' : 's'}` : ''}.`)
 }
 
 function scheduleUpperAutoFit(): void {
