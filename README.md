@@ -49,12 +49,14 @@ GeRAFE is currently developed and tested as a Windows desktop application.
 | Format | Extensions | Current display |
 | --- | --- | --- |
 | BigWig | `.bw`, `.bigWig` | Indexed quantitative signal with zoom summaries |
-| bedGraph | `.bedGraph` | Quantitative signal for smaller text-based datasets |
+| bedGraph | `.bedGraph`, `.bedGraph.gz` | Quantitative signal; the desktop app creates and reuses an indexed local cache for compressed or large files |
 | TDF | `.tdf` | Indexed IGV signal tiles, including compressed and uncompressed fixed-step, variable-step, BED, and BED-with-name tiles |
 | BAM | `.bam` with `.bai` or `.csi` | Coverage and packed read alignments with CIGAR geometry, pairing, mismatches, indels, and splice gaps |
 | BED | `.bed` | BED3–BED12 intervals, blocks, thick regions, strand, labels, scores, and item colors |
 
 On desktop, GeRAFE automatically looks beside a BAM for conventional `sample.bam.bai`, `sample.bai`, `sample.bam.csi`, and `sample.csi` index names. When using the browser development build, select the BAM and its index together.
+
+Large and gzip-compressed bedGraph sources are streamed into a private multiresolution BigWig cache under the operating system's GeRAFE cache directory. GeRAFE normally uses the active reference's chromosome sizes to build the cache in one pass, falling back to an additional discovery pass for chromosomes absent from the reference. The first open can take time because ordinary gzip files cannot be randomly accessed; later opens, workspace restoration, panning, and zooming reuse the indexed cache. Changing the source file invalidates and rebuilds its cache. GeRAFE does not place sidecar files beside the original data.
 
 ## Installation
 
@@ -197,7 +199,7 @@ Useful commands:
 | Command | Purpose |
 | --- | --- |
 | `npm run dev` | Run the frontend in a browser |
-| `npm run desktop:dev` | Run the Tauri desktop application in development mode |
+| `npm run desktop:dev` | Run the Tauri desktop application in development mode using a machine-local Cargo target outside synced folders |
 | `npm run desktop:build` | Build the production desktop executable |
 | `npm run desktop:bundle` | Build the signed-update-compatible Windows NSIS installer (requires the private signing environment) |
 | `npm run desktop:check-setup` | Check Windows desktop build prerequisites without installing |

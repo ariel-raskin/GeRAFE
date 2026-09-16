@@ -1,7 +1,7 @@
 import './style.css'
 import { ungzip } from 'pako-esm2'
 import { GenomeBrowser, heightScoreForPixels, trackPixelHeight } from './browser.ts'
-import { BedGraphSource } from './data/bedgraph.ts'
+import { BedGraphSource, MAX_BEDGRAPH_BYTES } from './data/bedgraph.ts'
 import { gzipText } from './data/gzip.ts'
 import { BedSource } from './data/bed.ts'
 import { BigWigSource } from './data/bigwig.ts'
@@ -34,7 +34,7 @@ import type { SignalScaleChannel, SourceFormat, TrackDocument, TrackSourceSpec, 
 import type { TrackSource, TrackRuntime } from './types.ts'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { describeNativeFile, isDesktopApp, NativeFileHandle } from './native-file.ts'
+import { describeNativeFile, isDesktopApp, NativeFileHandle, prepareBedGraphCache } from './native-file.ts'
 import type { LocalFileDescriptor } from './native-file.ts'
 import { SUPPORTED_TRACK_DIALOG_EXTENSIONS, SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
 import { migrateLegacyStorage, STORAGE_KEYS } from './storage.ts'
@@ -698,7 +698,7 @@ async function sourceFromNativeFile(file: LocalFileDescriptor, selected: readonl
     kind: 'signal',
   }
   if (name.endsWith('.bedgraph') || name.endsWith('.bedgraph.gz')) return {
-    source: await BedGraphSource.fromFile(name.endsWith('.gz') ? gzipTextInput(file, () => handle.readFile()) : nativeTextInput(file, handle)),
+    source: await sourceFromNativeBedGraph(file, handle),
     sourceSpec: makeSourceSpec(file, 'bedgraph'),
     kind: 'signal',
   }
@@ -722,6 +722,15 @@ async function sourceFromNativeFile(file: LocalFileDescriptor, selected: readonl
     }
   }
   throw new Error(`${file.name}: supported data files are .bw/.bigWig, .bedGraph/.bedGraph.gz, .tdf, indexed .bam, and .bed.`)
+}
+
+async function sourceFromNativeBedGraph(file: LocalFileDescriptor, handle: NativeFileHandle): Promise<TrackSource> {
+  const compressed = file.name.toLowerCase().endsWith('.gz')
+  if (!compressed && file.size <= MAX_BEDGRAPH_BYTES) return BedGraphSource.fromFile(nativeTextInput(file, handle))
+  showToast(`Building or checking the indexed cache for ${file.name}…`, false, 0)
+  const cache = await prepareBedGraphCache(file.path, activeChromosomes)
+  if (!cache.reused) showToast(`Indexed ${file.name}; opening the cached signal…`)
+  return BigWigSource.fromFilehandle(file.name, new NativeFileHandle(cache.path))
 }
 
 function nativeTextInput(file: LocalFileDescriptor, handle: NativeFileHandle): { name: string; size: number; text(): Promise<string> } {
@@ -1671,12 +1680,12 @@ function persistCustomReferences(): void {
 }
 
 let toastTimer: number | undefined
-function showToast(message: string, isError = false): void {
+function showToast(message: string, isError = false, duration = 4200): void {
   window.clearTimeout(toastTimer)
   toast.textContent = message
   toast.classList.toggle('is-error', isError)
   toast.classList.add('is-visible')
-  toastTimer = window.setTimeout(() => toast.classList.remove('is-visible'), 4200)
+  if (duration > 0) toastTimer = window.setTimeout(() => toast.classList.remove('is-visible'), duration)
 }
 
 function savedTheme(): Theme {

@@ -17,7 +17,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "desktop:dev": "tauri dev",
+    "desktop:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-desktop.ps1",
     "desktop:build": "tauri build --no-bundle",
     "desktop:bundle": "tauri build --bundles nsis",
     "desktop:check-setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-windows.ps1 -CheckOnly",
