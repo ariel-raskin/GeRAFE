@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::{
+    collections::HashMap,
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
     path::Path,
@@ -65,9 +66,10 @@ fn read_file_range(
 #[tauri::command]
 async fn prepare_bedgraph_cache(
     path: String,
+    chromosome_sizes: Option<HashMap<String, u32>>,
 ) -> Result<bedgraph_cache::PreparedBedGraphCache, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        bedgraph_cache::prepare(Path::new(&path), APP_IDENTIFIER)
+        bedgraph_cache::prepare(Path::new(&path), APP_IDENTIFIER, chromosome_sizes)
     })
     .await
     .map_err(|error| format!("The bedGraph indexer stopped unexpectedly: {error}"))?

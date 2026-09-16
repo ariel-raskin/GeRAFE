@@ -6,7 +6,7 @@
 
 On 2026-09-13, the prototype opened a representative 218 MB BigWig directly from disk. A scripted Chromium run loaded two synthetic tracks and that BigWig, dragged the viewport, zoomed, and checked the browser console.
 
-On 2026-09-16, GeRAFE streamed a representative 229 MB ordinary-gzip PRO-seq bedGraph (approximately 1.08 GB decompressed) into a 221 MB local BigWig cache without materializing the decompressed text. The debug-mode first conversion took 192 seconds. An immediate reopen reused the cache, and twelve 1 Mb queries through the production JavaScript BigWig reader had a 3.48 ms median and 31.73 ms p95 latency.
+On 2026-09-16, GeRAFE streamed a representative 229 MB ordinary-gzip PRO-seq bedGraph (approximately 1.08 GB decompressed) into a 221 MB local BigWig cache without materializing the decompressed text. The initial unoptimized two-pass debug conversion took 192 seconds. After enabling optimized native dependencies and using the active hg38 chromosome sizes for one-pass conversion, a separate uncached 220 MB PRO-seq bedGraph completed in 37.8 seconds, about five times faster. Immediate reopens reused the cache. Twelve 1 Mb queries through the production JavaScript BigWig reader had 3.48–4.10 ms median and 30.28–31.73 ms p95 latency across the two caches.
 
 Results at a 1,440 × 1,000 viewport:
 

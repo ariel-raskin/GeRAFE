@@ -56,7 +56,7 @@ GeRAFE is currently developed and tested as a Windows desktop application.
 
 On desktop, GeRAFE automatically looks beside a BAM for conventional `sample.bam.bai`, `sample.bai`, `sample.bam.csi`, and `sample.csi` index names. When using the browser development build, select the BAM and its index together.
 
-Large and gzip-compressed bedGraph sources are streamed into a private multiresolution BigWig cache under the operating system's GeRAFE cache directory. The first open can take time because ordinary gzip files cannot be randomly accessed; later opens, workspace restoration, panning, and zooming reuse the indexed cache. Changing the source file invalidates and rebuilds its cache. GeRAFE does not place sidecar files beside the original data.
+Large and gzip-compressed bedGraph sources are streamed into a private multiresolution BigWig cache under the operating system's GeRAFE cache directory. GeRAFE normally uses the active reference's chromosome sizes to build the cache in one pass, falling back to an additional discovery pass for chromosomes absent from the reference. The first open can take time because ordinary gzip files cannot be randomly accessed; later opens, workspace restoration, panning, and zooming reuse the indexed cache. Changing the source file invalidates and rebuilds its cache. GeRAFE does not place sidecar files beside the original data.
 
 ## Installation
 

@@ -728,7 +728,7 @@ async function sourceFromNativeBedGraph(file: LocalFileDescriptor, handle: Nativ
   const compressed = file.name.toLowerCase().endsWith('.gz')
   if (!compressed && file.size <= MAX_BEDGRAPH_BYTES) return BedGraphSource.fromFile(nativeTextInput(file, handle))
   showToast(`Building or checking the indexed cache for ${file.name}…`, false, 0)
-  const cache = await prepareBedGraphCache(file.path)
+  const cache = await prepareBedGraphCache(file.path, activeChromosomes)
   if (!cache.reused) showToast(`Indexed ${file.name}; opening the cached signal…`)
   return BigWigSource.fromFilehandle(file.name, new NativeFileHandle(cache.path))
 }

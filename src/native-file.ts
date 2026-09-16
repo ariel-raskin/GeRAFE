@@ -26,9 +26,29 @@ export async function describeNativeFile(path: string): Promise<LocalFileDescrip
   return { name: fileNameFromPath(path), path, size: stat.size, lastModified: stat.lastModified }
 }
 
-export async function prepareBedGraphCache(path: string): Promise<PreparedBedGraphCache> {
-  const cache = await invoke<Omit<PreparedBedGraphCache, 'name'>>('prepare_bedgraph_cache', { path })
+export async function prepareBedGraphCache(path: string, chromosomes: ReadonlyMap<string, number>): Promise<PreparedBedGraphCache> {
+  const chromosomeSizes = cacheChromosomeSizes(chromosomes)
+  const cache = await invoke<Omit<PreparedBedGraphCache, 'name'>>('prepare_bedgraph_cache', { path, chromosomeSizes })
   return { ...cache, name: fileNameFromPath(cache.path) }
+}
+
+function cacheChromosomeSizes(chromosomes: ReadonlyMap<string, number>): Record<string, number> {
+  const sizes: Record<string, number> = {}
+  const add = (name: string, length: number): void => {
+    if (!(name in sizes) && Number.isSafeInteger(length) && length > 0 && length <= 0xffff_ffff) sizes[name] = length
+  }
+  for (const [name, length] of chromosomes) {
+    add(name, length)
+    if (/^chr/i.test(name)) add(name.slice(3), length)
+    else add(`chr${name}`, length)
+    if (/^(?:chr)?m(?:t)?$/i.test(name)) {
+      add('chrM', length)
+      add('chrMT', length)
+      add('M', length)
+      add('MT', length)
+    }
+  }
+  return sizes
 }
 
 export class NativeFileHandle implements GenericFilehandle {

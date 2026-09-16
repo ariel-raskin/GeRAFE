@@ -1,6 +1,6 @@
 use bigtools::{
-    bed::bedparser::BedValueError, beddata::BedParserStreamingIterator, BigWigWrite, InputSortType,
-    Value,
+    bed::bedparser::BedValueError, beddata::BedParserStreamingIterator, BBIProcessError,
+    BigWigWrite, InputSortType, Value,
 };
 use flate2::read::MultiGzDecoder;
 use serde::Serialize;
@@ -24,15 +24,23 @@ pub struct PreparedBedGraphCache {
     pub reused: bool,
 }
 
-pub fn prepare(source: &Path, app_identifier: &str) -> Result<PreparedBedGraphCache, String> {
+pub fn prepare(
+    source: &Path,
+    app_identifier: &str,
+    chromosome_sizes: Option<HashMap<String, u32>>,
+) -> Result<PreparedBedGraphCache, String> {
     let cache_root = dirs::cache_dir()
         .ok_or_else(|| "Could not locate the operating system cache directory.".to_string())?
         .join(app_identifier)
         .join("bedgraph");
-    prepare_at(source, &cache_root)
+    prepare_at(source, &cache_root, chromosome_sizes)
 }
 
-fn prepare_at(source: &Path, cache_root: &Path) -> Result<PreparedBedGraphCache, String> {
+fn prepare_at(
+    source: &Path,
+    cache_root: &Path,
+    chromosome_sizes: Option<HashMap<String, u32>>,
+) -> Result<PreparedBedGraphCache, String> {
     let canonical = source
         .canonicalize()
         .map_err(|error| format!("Could not access {}: {error}", source.display()))?;
@@ -60,7 +68,6 @@ fn prepare_at(source: &Path, cache_root: &Path) -> Result<PreparedBedGraphCache,
         .extension()
         .and_then(|value| value.to_str())
         .is_some_and(|value| value.eq_ignore_ascii_case("gz"));
-    let chromosome_sizes = scan_chromosome_sizes(&canonical, compressed)?;
     let temporary_path = source_cache.join(format!(
         ".building-{}-{}.bw",
         std::process::id(),
@@ -70,10 +77,31 @@ fn prepare_at(source: &Path, cache_root: &Path) -> Result<PreparedBedGraphCache,
             .as_nanos()
     ));
 
-    let build_result = build_bigwig(&canonical, compressed, &temporary_path, chromosome_sizes);
+    let build_result =
+        if let Some(chromosome_sizes) = chromosome_sizes.filter(|sizes| !sizes.is_empty()) {
+            match build_bigwig(&canonical, compressed, &temporary_path, chromosome_sizes) {
+                Err(BigWigBuildError::MissingChromosome) => {
+                    let _ = fs::remove_file(&temporary_path);
+                    build_bigwig(
+                        &canonical,
+                        compressed,
+                        &temporary_path,
+                        scan_chromosome_sizes(&canonical, compressed)?,
+                    )
+                }
+                result => result,
+            }
+        } else {
+            build_bigwig(
+                &canonical,
+                compressed,
+                &temporary_path,
+                scan_chromosome_sizes(&canonical, compressed)?,
+            )
+        };
     if let Err(error) = build_result {
         let _ = fs::remove_file(&temporary_path);
-        return Err(error);
+        return Err(error.message(&canonical));
     }
     fs::rename(&temporary_path, &cache_path).map_err(|error| {
         let _ = fs::remove_file(&temporary_path);
@@ -105,12 +133,15 @@ fn build_bigwig(
     compressed: bool,
     output: &Path,
     chromosome_sizes: HashMap<String, u32>,
-) -> Result<(), String> {
+) -> Result<(), BigWigBuildError> {
     let reader = open_reader(source, compressed)?;
     let rows = BedGraphRows::new(reader);
     let values = BedParserStreamingIterator::wrap_iter(rows, true);
-    let mut writer = BigWigWrite::create_file(output, chromosome_sizes)
-        .map_err(|error| format!("Could not create the indexed bedGraph cache: {error}"))?;
+    let mut writer = BigWigWrite::create_file(output, chromosome_sizes).map_err(|error| {
+        BigWigBuildError::Other(format!(
+            "Could not create the indexed bedGraph cache: {error}"
+        ))
+    })?;
     writer.options.input_sort_type = InputSortType::START;
     let workers = std::thread::available_parallelism()
         .map(|count| count.get().clamp(1, 4))
@@ -118,13 +149,40 @@ fn build_bigwig(
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(workers)
         .build()
-        .map_err(|error| format!("Could not start the bedGraph indexer: {error}"))?;
-    writer.write(values, runtime).map_err(|error| {
+        .map_err(|error| {
+            BigWigBuildError::Other(format!("Could not start the bedGraph indexer: {error}"))
+        })?;
+    match writer.write(values, runtime) {
+        Ok(()) => Ok(()),
+        Err(BBIProcessError::InvalidChromosome(_)) => Err(BigWigBuildError::MissingChromosome),
+        Err(error) => Err(BigWigBuildError::Other(error.to_string())),
+    }
+}
+
+enum BigWigBuildError {
+    MissingChromosome,
+    Other(String),
+}
+
+impl BigWigBuildError {
+    fn message(self, source: &Path) -> String {
+        let detail = match self {
+            Self::MissingChromosome => {
+                "the active reference does not include a chromosome used by this file".to_string()
+            }
+            Self::Other(detail) => detail,
+        };
         format!(
-            "Could not index {}: {error}. bedGraph rows must be grouped by chromosome, sorted by start coordinate, and non-overlapping.",
+            "Could not index {}: {detail}. bedGraph rows must be grouped by chromosome, sorted by start coordinate, and non-overlapping.",
             source.display()
         )
-    })
+    }
+}
+
+impl From<String> for BigWigBuildError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
 }
 
 fn open_reader(source: &Path, compressed: bool) -> Result<Box<dyn BufRead + Send>, String> {
@@ -303,12 +361,13 @@ mod tests {
         encoder.finish().unwrap();
 
         let cache_root = root.join("cache");
-        let first = prepare_at(&source, &cache_root).unwrap();
+        let chromosome_sizes = HashMap::from([("chr1".to_string(), 100)]);
+        let first = prepare_at(&source, &cache_root, Some(chromosome_sizes.clone())).unwrap();
         assert!(!first.reused);
         assert!(Path::new(&first.path).is_file());
         assert!(first.size > 64);
 
-        let second = prepare_at(&source, &cache_root).unwrap();
+        let second = prepare_at(&source, &cache_root, Some(chromosome_sizes.clone())).unwrap();
         assert!(second.reused);
         assert_eq!(second.path, first.path);
 
@@ -318,10 +377,27 @@ mod tests {
             .write_all(b"chr1\t0\t10\t3\nchr1\t10\t30\t4\n")
             .unwrap();
         encoder.finish().unwrap();
-        let changed = prepare_at(&source, &cache_root).unwrap();
+        let changed = prepare_at(&source, &cache_root, Some(chromosome_sizes)).unwrap();
         assert!(!changed.reused);
         assert_ne!(changed.path, first.path);
         assert!(!Path::new(&first.path).exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn discovers_sizes_when_the_reference_lacks_a_chromosome() {
+        let root = unique_test_directory();
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("alternate.bedGraph.gz");
+        let file = File::create(&source).unwrap();
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        encoder.write_all(b"contigA\t0\t20\t1\n").unwrap();
+        encoder.finish().unwrap();
+
+        let unrelated_reference = HashMap::from([("chr1".to_string(), 100)]);
+        let cache = prepare_at(&source, &root.join("cache"), Some(unrelated_reference)).unwrap();
+        assert!(Path::new(&cache.path).is_file());
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -343,10 +419,53 @@ mod tests {
     fn builds_and_reuses_the_real_file_smoke_cache() {
         let source = std::env::var("GERAFE_BEDGRAPH_SMOKE_PATH")
             .expect("GERAFE_BEDGRAPH_SMOKE_PATH must be set");
-        let first = prepare(Path::new(&source), "org.arielraskin.gerafe").unwrap();
+        let first = prepare(
+            Path::new(&source),
+            "org.arielraskin.gerafe",
+            Some(hg38_chromosome_sizes()),
+        )
+        .unwrap();
         println!("CACHE_PATH={}", first.path);
-        let second = prepare(Path::new(&source), "org.arielraskin.gerafe").unwrap();
+        let second = prepare(
+            Path::new(&source),
+            "org.arielraskin.gerafe",
+            Some(hg38_chromosome_sizes()),
+        )
+        .unwrap();
         assert!(second.reused);
         assert_eq!(second.path, first.path);
+    }
+
+    fn hg38_chromosome_sizes() -> HashMap<String, u32> {
+        [
+            ("chr1", 248_956_422),
+            ("chr2", 242_193_529),
+            ("chr3", 198_295_559),
+            ("chr4", 190_214_555),
+            ("chr5", 181_538_259),
+            ("chr6", 170_805_979),
+            ("chr7", 159_345_973),
+            ("chr8", 145_138_636),
+            ("chr9", 138_394_717),
+            ("chr10", 133_797_422),
+            ("chr11", 135_086_622),
+            ("chr12", 133_275_309),
+            ("chr13", 114_364_328),
+            ("chr14", 107_043_718),
+            ("chr15", 101_991_189),
+            ("chr16", 90_338_345),
+            ("chr17", 83_257_441),
+            ("chr18", 80_373_285),
+            ("chr19", 58_617_616),
+            ("chr20", 64_444_167),
+            ("chr21", 46_709_983),
+            ("chr22", 50_818_468),
+            ("chrX", 156_040_895),
+            ("chrY", 57_227_415),
+            ("chrM", 16_569),
+        ]
+        .into_iter()
+        .map(|(name, length)| (name.to_string(), length))
+        .collect()
     }
 }
