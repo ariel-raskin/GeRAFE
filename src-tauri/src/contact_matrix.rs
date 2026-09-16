@@ -1,13 +1,34 @@
 use gwseq_io::{
-    hic::{HiCMode, HiCRequest, Unit},
+    hic::{HiCMode, HiCReader, HiCRequest, Unit},
     open, OpenOptions, Reader,
 };
 use hdf5_pure::{File as Hdf5File, Group as Hdf5Group};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
+    time::SystemTime,
+};
 
 const AUTO_TARGET_CELL_PIXELS: f64 = 2.0;
 const MAX_MATRIX_BINS: usize = 1_200;
+const MAX_CACHED_MATRIX_FILES: usize = 8;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileStamp {
+    length: u64,
+    modified: Option<SystemTime>,
+}
+
+#[derive(Default)]
+struct MatrixFileCache {
+    hic: HashMap<PathBuf, (FileStamp, Arc<HiCReader>)>,
+    cooler: HashMap<PathBuf, (FileStamp, Hdf5File)>,
+}
+
+static MATRIX_FILE_CACHE: OnceLock<Mutex<MatrixFileCache>> = OnceLock::new();
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +58,7 @@ pub struct MatrixQuery {
     pub pixel_width: usize,
     pub resolution: Option<u64>,
     pub normalization: String,
+    pub max_distance: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,7 +97,7 @@ pub fn query(options: MatrixQuery) -> Result<MatrixQueryResult, String> {
     }
 }
 
-fn hic_reader(path: &Path) -> Result<gwseq_io::hic::HiCReader, String> {
+fn uncached_hic_reader(path: &Path) -> Result<HiCReader, String> {
     match open(
         &path.to_string_lossy(),
         OpenOptions {
@@ -88,6 +110,44 @@ fn hic_reader(path: &Path) -> Result<gwseq_io::hic::HiCReader, String> {
         Reader::HiC(reader) => Ok(reader),
         _ => Err(format!("{} is not a .hic contact matrix", path.display())),
     }
+}
+
+fn matrix_file_key(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn file_stamp(path: &Path) -> Result<FileStamp, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?;
+    Ok(FileStamp {
+        length: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+fn hic_reader(path: &Path) -> Result<Arc<HiCReader>, String> {
+    let key = matrix_file_key(path);
+    let stamp = file_stamp(path)?;
+    let cache = MATRIX_FILE_CACHE.get_or_init(|| Mutex::new(MatrixFileCache::default()));
+    if let Some(reader) = cache
+        .lock()
+        .map_err(|_| "The contact-matrix reader cache is unavailable.".to_string())?
+        .hic
+        .get(&key)
+        .filter(|(cached_stamp, _)| cached_stamp == &stamp)
+        .map(|(_, reader)| Arc::clone(reader))
+    {
+        return Ok(reader);
+    }
+    let reader = Arc::new(uncached_hic_reader(path)?);
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "The contact-matrix reader cache is unavailable.".to_string())?;
+    if cache.hic.len() >= MAX_CACHED_MATRIX_FILES && !cache.hic.contains_key(&key) {
+        cache.hic.clear();
+    }
+    cache.hic.insert(key, (stamp, Arc::clone(&reader)));
+    Ok(reader)
 }
 
 fn hic_metadata(path: &Path) -> Result<MatrixMetadata, String> {
@@ -238,11 +298,15 @@ fn query_hic(options: &MatrixQuery) -> Result<MatrixQueryResult, String> {
         .zip(matrix.row)
         .zip(matrix.col)
         .filter_map(|((value, row), col)| {
-            let bin1 = (bin_start + row as i64).checked_mul(resolution as i64)?;
-            let bin2 = (bin_start + col as i64).checked_mul(resolution as i64)?;
-            (value.is_finite() && value > 0.0 && bin1 >= 0 && bin2 >= 0).then_some(MatrixCell {
-                bin1: bin1 as u64,
-                bin2: bin2 as u64,
+            let first = (bin_start + row as i64).checked_mul(resolution as i64)?;
+            let second = (bin_start + col as i64).checked_mul(resolution as i64)?;
+            if !value.is_finite() || value <= 0.0 || first < 0 || second < 0 {
+                return None;
+            }
+            let (bin1, bin2) = ordered_bins(first as u64, second as u64);
+            within_distance(bin1, bin2, resolution, options.max_distance).then_some(MatrixCell {
+                bin1,
+                bin2,
                 value: value as f64,
             })
         })
@@ -336,6 +400,16 @@ fn query_cool(
         return Err("The Cooler pixel columns have different sizes.".into());
     }
 
+    // Cooler bin IDs are indexes into the authoritative genomic bin table.
+    // Reading the stored starts keeps contact cells aligned to their source
+    // coordinates instead of reconstructing them from an assumed origin.
+    let bin_starts = read_u64_rows(
+        &file,
+        &cooler_path(&prefix, "bins/start"),
+        first_bin,
+        last_bin - first_bin,
+    )?;
+
     let normalized = !options.normalization.eq_ignore_ascii_case("raw");
     let weights = if normalized {
         Some(read_f64_rows(
@@ -370,19 +444,56 @@ fn query_cool(
                     value * weight1 * weight2
                 };
             }
-            (value.is_finite() && value > 0.0).then_some(MatrixCell {
-                bin1: (bin1_id - chromosome_bin_start) * resolution,
-                bin2: (bin2_id - chromosome_bin_start) * resolution,
-                value,
-            })
+            let first = *bin_starts.get((bin1_id - first_bin) as usize)?;
+            let second = *bin_starts.get((bin2_id - first_bin) as usize)?;
+            let (bin1, bin2) = ordered_bins(first, second);
+            (value.is_finite()
+                && value > 0.0
+                && within_distance(bin1, bin2, resolution, options.max_distance))
+            .then_some(MatrixCell { bin1, bin2, value })
         })
         .collect();
     Ok(MatrixQueryResult { resolution, cells })
 }
 
 fn open_cooler(path: &Path) -> Result<Hdf5File, String> {
-    Hdf5File::open_streaming(path)
-        .map_err(|error| format!("Could not open {}: {error}", path.display()))
+    let key = matrix_file_key(path);
+    let stamp = file_stamp(path)?;
+    let cache = MATRIX_FILE_CACHE.get_or_init(|| Mutex::new(MatrixFileCache::default()));
+    if let Some(file) = cache
+        .lock()
+        .map_err(|_| "The contact-matrix reader cache is unavailable.".to_string())?
+        .cooler
+        .get(&key)
+        .filter(|(cached_stamp, _)| cached_stamp == &stamp)
+        .map(|(_, file)| file.clone())
+    {
+        return Ok(file);
+    }
+    let file = Hdf5File::open_streaming(path)
+        .map_err(|error| format!("Could not open {}: {error}", path.display()))?;
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "The contact-matrix reader cache is unavailable.".to_string())?;
+    if cache.cooler.len() >= MAX_CACHED_MATRIX_FILES && !cache.cooler.contains_key(&key) {
+        cache.cooler.clear();
+    }
+    cache.cooler.insert(key, (stamp, file.clone()));
+    Ok(file)
+}
+
+fn ordered_bins(first: u64, second: u64) -> (u64, u64) {
+    if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    }
+}
+
+fn within_distance(bin1: u64, bin2: u64, resolution: u64, maximum: Option<u64>) -> bool {
+    maximum
+        .map(|maximum| bin2.saturating_sub(bin1) <= maximum.saturating_add(resolution))
+        .unwrap_or(true)
 }
 
 fn cooler_resolutions(file: &Hdf5File) -> Result<Vec<u64>, String> {
@@ -577,6 +688,7 @@ mod tests {
                 pixel_width: 800,
                 resolution: None,
                 normalization: metadata.default_normalization,
+                max_distance: None,
             })
             .unwrap_or_else(|error| panic!("{variable} query failed: {error}"));
             assert!(metadata.resolutions.contains(&result.resolution));
@@ -587,5 +699,62 @@ mod tests {
                     && cell.bin2 < start + span
             }));
         }
+    }
+
+    #[test]
+    fn contact_cells_are_ordered_and_distance_filtered() {
+        assert_eq!(ordered_bins(15_000, 5_000), (5_000, 15_000));
+        assert!(within_distance(5_000, 15_000, 5_000, Some(5_000)));
+        assert!(!within_distance(5_000, 25_000, 5_000, Some(5_000)));
+    }
+
+    #[test]
+    fn configured_matching_hic_and_cool_use_the_same_genomic_bins() {
+        let (Ok(hic_path), Ok(cool_path)) = (
+            std::env::var("GERAFE_TEST_MATCHING_HIC"),
+            std::env::var("GERAFE_TEST_MATCHING_COOL"),
+        ) else {
+            return;
+        };
+        let chromosome = "chr1";
+        let start = 109_000_000;
+        let end = 111_000_000;
+        let query = |path: String, format: &str, normalization: &str| {
+            query(MatrixQuery {
+                path,
+                format: format.into(),
+                chromosome: chromosome.into(),
+                start,
+                end,
+                pixel_width: 800,
+                resolution: Some(5_000),
+                normalization: normalization.into(),
+                max_distance: None,
+            })
+            .unwrap()
+        };
+        let hic = query(hic_path, "hic", "NONE");
+        let cool = query(cool_path, "cool", "raw");
+        let hic_bins = hic
+            .cells
+            .iter()
+            .map(|cell| (cell.bin1, cell.bin2))
+            .collect::<std::collections::HashSet<_>>();
+        let cool_bins = cool
+            .cells
+            .iter()
+            .map(|cell| (cell.bin1, cell.bin2))
+            .collect::<std::collections::HashSet<_>>();
+        let common = hic_bins.intersection(&cool_bins).count();
+        assert!(
+            common > 0,
+            "the matching matrices had no common contact bins"
+        );
+        assert!(
+            common * 100 >= hic_bins.len().min(cool_bins.len()) * 95,
+            "only {common} bins overlapped (hic={}, cool={})",
+            hic_bins.len(),
+            cool_bins.len()
+        );
     }
 }

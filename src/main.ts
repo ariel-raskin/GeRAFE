@@ -1004,6 +1004,8 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const pairable = selected.length === 2 && selected.every((track) => track.kind === 'signal') && canPairSelectedStrands(selected as TrackSpec[])
   const matrixSource = target.kind === 'matrix' ? runtimeSources.get(target.sourceIds[0]) : undefined
   const matrixMetadata = isNativeMatrixSource(matrixSource) ? matrixSource.matrixMetadata : undefined
+  const matrixResolutionLabel = target.kind === 'matrix' && target.matrixResolution ? formatBases(target.matrixResolution) : 'Automatic'
+  const matrixScaleLabel = target.kind === 'matrix' && target.matrixScaleMax ? `z-max ${target.matrixScaleMax}` : 'Automatic z-max'
   const interactionGeneDetail = target.kind === 'interaction' && target.interactionFilterMode === 'genes'
     ? escapeHtml((target.interactionFilterGenes ?? []).join(', '))
     : ''
@@ -1012,6 +1014,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     const visibleDetail = current || detail === 'off' ? '' : detail
     return `<button class="context-item${current ? ' is-current' : ''}${danger ? ' danger' : ''}" data-context-action="${id}" type="button" role="menuitem" ${current ? 'aria-current="true"' : ''} ${disabled ? 'disabled' : ''}><span>${label}</span>${visibleDetail ? `<small>${visibleDetail}</small>` : ''}</button>`
   }
+  const submenu = (label: string, detail: string, items: string) => `<details class="context-submenu"><summary class="context-item"><span>${label}</span><small>${detail}</small></summary><div class="context-submenu-items">${items}</div></details>`
   trackContextMenu.innerHTML = `
     <div class="context-heading"><strong>${one ? escapeHtml(target.label) : `${selected.length} tracks selected`}</strong><span>${one ? (target.kind === 'genes' ? 'Gene annotation' : target.kind === 'interval' ? 'Interval track' : target.kind === 'interaction' ? 'BEDPE interactions' : target.kind === 'matrix' ? 'Contact matrix' : target.kind === 'alignment' ? 'BAM alignments' : target.kind === 'stranded' ? 'Linked stranded signal' : target.signalStrand ? `${target.signalStrand === 'plus' ? 'Positive' : 'Negative'}-strand signal` : 'Signal track') : 'Shared actions'}</span></div>
     ${one ? action('rename', 'Rename…') : ''}
@@ -1049,16 +1052,10 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     ${one && target.kind === 'interaction' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
     ${one && target.kind === 'matrix' ? '<span class="context-separator"></span>' : ''}
     ${one && target.kind === 'matrix' ? action('matrix-flip', 'Flip matrix upside down', target.matrixDirection === 'down' ? 'current' : '') : ''}
-    ${one && target.kind === 'matrix' ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'matrix' ? action('matrix-resolution-auto', 'Automatic resolution', target.matrixResolution === undefined ? 'current' : '') : ''}
-    ${one && target.kind === 'matrix' ? (matrixMetadata?.resolutions ?? []).map((resolution, index) => action(`matrix-resolution-${index}`, `${formatBases(resolution)} resolution`, target.matrixResolution === resolution ? 'current' : '')).join('') : ''}
-    ${one && target.kind === 'matrix' ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'matrix' ? (matrixMetadata?.normalizations ?? []).map((normalization, index) => action(`matrix-normalization-${index}`, `${escapeHtml(normalization)} normalization`, target.matrixNormalization === normalization ? 'current' : '')).join('') : ''}
-    ${one && target.kind === 'matrix' ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'matrix' ? action('matrix-transform-log', 'Log intensity', target.matrixTransform !== 'linear' ? 'current' : '') : ''}
-    ${one && target.kind === 'matrix' ? action('matrix-transform-linear', 'Linear intensity', target.matrixTransform === 'linear' ? 'current' : '') : ''}
-    ${one && target.kind === 'matrix' ? action('matrix-scale-auto', 'Automatic intensity range', target.matrixScaleMax === undefined ? 'current' : '') : ''}
-    ${one && target.kind === 'matrix' ? action('matrix-scale-fixed', 'Set maximum intensity…', target.matrixScaleMax ? String(target.matrixScaleMax) : '') : ''}
+    ${one && target.kind === 'matrix' ? submenu('Resolution', matrixResolutionLabel, action('matrix-resolution-auto', 'Automatic', target.matrixResolution === undefined ? 'current' : '') + (matrixMetadata?.resolutions ?? []).map((resolution, index) => action(`matrix-resolution-${index}`, formatBases(resolution), target.matrixResolution === resolution ? 'current' : '')).join('')) : ''}
+    ${one && target.kind === 'matrix' ? submenu('Normalization', escapeHtml(target.matrixNormalization ?? matrixMetadata?.defaultNormalization ?? 'raw'), (matrixMetadata?.normalizations ?? []).map((normalization, index) => action(`matrix-normalization-${index}`, escapeHtml(normalization), target.matrixNormalization === normalization ? 'current' : '')).join('')) : ''}
+    ${one && target.kind === 'matrix' ? submenu('Intensity scale', matrixScaleLabel, action('matrix-scale-auto', 'Automatic z-max', target.matrixScaleMax === undefined ? 'current' : '') + action('matrix-scale-fixed', 'Set z-max…', target.matrixScaleMax ? String(target.matrixScaleMax) : '') + '<span class="context-separator"></span>' + action('matrix-transform-log', 'Log intensity', target.matrixTransform !== 'linear' ? 'current' : '') + action('matrix-transform-linear', 'Linear intensity', target.matrixTransform === 'linear' ? 'current' : '')) : ''}
+    ${one && target.kind === 'matrix' ? submenu('Color scale', target.matrixPalette === 'warm' ? 'Yellow–red–black' : 'Track color', action('matrix-palette-monochrome', 'Single track color', target.matrixPalette !== 'warm' ? 'current' : '') + action('matrix-palette-warm', 'Yellow → red → black', target.matrixPalette === 'warm' ? 'current' : '')) : ''}
     ${one && target.kind === 'matrix' ? '<span class="context-separator"></span>' : ''}
     ${one && target.kind === 'matrix' ? action('duplicate', 'Duplicate track') : ''}
     ${one && target.kind === 'matrix' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
@@ -1305,6 +1302,10 @@ function handleTrackContextAction(event: MouseEvent): void {
       if (item) item.matrixScaleMax = maximum
     })
   }
+  if (command === 'matrix-palette-monochrome' || command === 'matrix-palette-warm') store.edit((draft) => {
+    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'matrix')
+    if (track) track.matrixPalette = command === 'matrix-palette-warm' ? 'warm' : 'monochrome'
+  })
   if (command?.startsWith('bam-view-')) {
     const mode = command.slice(9) as 'coverage' | 'alignments' | 'both'
     store.edit((draft) => { const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'alignment'); if (track) track.bamViewMode = mode })

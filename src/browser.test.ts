@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, phasedArrowPositions, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixWarmPaletteColor, phasedArrowPositions, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { InteractionFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 
@@ -77,5 +77,13 @@ describe('interaction rendering helpers', () => {
       { featureType: 'interaction', start: 20, end: 40, chrom1: 'chr1', start1: 20, end1: 30, chrom2: 'chr1', start2: 30, end2: 40, name: 'RUNX1T1_to_MYC' },
     ] satisfies InteractionFeature[]
     expect(filterInteractionsForGenes(interactions, [{ name: 'RUNX1' }]).map((feature) => feature.name)).toEqual(['RUNX1(chr21)_to_MYC(chr8)'])
+  })
+})
+
+describe('contact-matrix rendering helpers', () => {
+  it('maps low contacts through yellow and red to a black maximum', () => {
+    expect(matrixWarmPaletteColor(0)).toBe('#fff7bc')
+    expect(matrixWarmPaletteColor(0.82)).toBe('#d7191c')
+    expect(matrixWarmPaletteColor(1)).toBe('#111111')
   })
 })

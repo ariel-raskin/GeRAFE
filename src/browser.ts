@@ -15,6 +15,7 @@ const SCALE_LANE_MIN_WIDTH = 34
 const LABEL_CONTENT_LEFT = GROUP_RAIL_WIDTH + 8
 const LABEL_CONTENT_RIGHT = LABEL_WIDTH - 8
 const OVERSCAN_FACTOR = 1
+const MATRIX_OVERSCAN_FACTOR = 0.5
 const GENE_CONTENT_PADDING = 6
 const MIN_BOTTOM_GENE_HEIGHT = 44
 
@@ -1166,7 +1167,8 @@ export class GenomeBrowser {
     ctx.textAlign = 'center'
     const resolution = matrix?.resolution ?? spec.matrixResolution
     const normalization = spec.matrixNormalization ?? 'raw'
-    ctx.fillText(`${resolution ? formatBases(resolution) : 'auto'} · ${normalization} · ${spec.matrixTransform === 'linear' ? 'linear' : 'log'}`, labelBounds.center, bottom - 8)
+    const scaleLabel = spec.matrixScaleMax ? `z≤${formatScore(spec.matrixScaleMax)}` : 'auto z'
+    ctx.fillText(`${resolution ? formatBases(resolution) : 'auto'} · ${normalization} · ${spec.matrixTransform === 'linear' ? 'linear' : 'log'} · ${scaleLabel}`, labelBounds.center, bottom - 8)
     ctx.textAlign = 'start'
     if (track.status === 'error' || track.status === 'offline') {
       ctx.fillStyle = palette.error
@@ -1183,8 +1185,12 @@ export class GenomeBrowser {
       return 0
     }
 
-    const values = matrix.cells.map((cell) => cell.value).filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b)
-    const automaticMaximum = values[Math.min(values.length - 1, Math.floor(values.length * 0.98))] ?? 1
+    const offDiagonalValues = matrix.cells
+      .filter((cell) => cell.bin2 - cell.bin1 > matrix.resolution * 2)
+      .map((cell) => cell.value)
+      .filter((value) => Number.isFinite(value) && value > 0)
+    const values = (offDiagonalValues.length >= 20 ? offDiagonalValues : matrix.cells.map((cell) => cell.value).filter((value) => Number.isFinite(value) && value > 0)).sort((a, b) => a - b)
+    const automaticMaximum = values[Math.min(values.length - 1, Math.floor(values.length * 0.99))] ?? 1
     const maximum = Math.max(Number.EPSILON, spec.matrixScaleMax ?? automaticMaximum)
     const transform = spec.matrixTransform === 'linear'
       ? (value: number) => value / maximum
@@ -1195,7 +1201,6 @@ export class GenomeBrowser {
     const halfCell = Math.max(0.55, matrix.resolution * scale / 2)
     ctx.save()
     ctx.beginPath(); ctx.rect(PLOT_LEFT, top + 1, plotWidth, height - 2); ctx.clip()
-    ctx.fillStyle = spec.color
     for (const cell of matrix.cells) {
       if (!(cell.value > 0) || cell.bin2 + matrix.resolution <= this.region.start || cell.bin1 >= this.region.end) continue
       const firstCenter = cell.bin1 + matrix.resolution / 2
@@ -1205,7 +1210,9 @@ export class GenomeBrowser {
       if (x + halfCell < PLOT_LEFT || x - halfCell > width || y + halfCell < top || y - halfCell > bottom) continue
       const intensity = Math.max(0, Math.min(1, transform(cell.value)))
       if (!Number.isFinite(intensity) || intensity <= 0) continue
-      ctx.globalAlpha = 0.08 + Math.pow(intensity, 0.72) * 0.92
+      const warmPalette = spec.matrixPalette === 'warm'
+      ctx.fillStyle = warmPalette ? matrixWarmPaletteColor(intensity) : spec.color
+      ctx.globalAlpha = warmPalette ? 1 : 0.08 + Math.pow(intensity, 0.72) * 0.92
       ctx.beginPath()
       ctx.moveTo(x - halfCell, y)
       ctx.lineTo(x, y + halfCell)
@@ -1635,7 +1642,7 @@ export class GenomeBrowser {
 
   private async ensureData(): Promise<void> {
     await Promise.all(this.visibleSourceSpecs().flatMap((spec) => this.runtimesForTrack(spec.id)).map(async (track) => {
-      if (track?.source && !this.hasSuitableData(track)) await this.loadTrack(track)
+      if (track?.source && track.status !== 'loading' && !this.hasSuitableData(track)) await this.loadTrack(track)
     }))
   }
 
@@ -1652,7 +1659,7 @@ export class GenomeBrowser {
       return
     }
     const span = this.region.end - this.region.start
-    const overscanFactor = spec?.kind === 'matrix' ? 0.25 : OVERSCAN_FACTOR
+    const overscanFactor = spec?.kind === 'matrix' ? MATRIX_OVERSCAN_FACTOR : OVERSCAN_FACTOR
     const queryRegion = clampRegion({
       chr: this.region.chr,
       start: this.region.start - span * overscanFactor,
@@ -1678,6 +1685,7 @@ export class GenomeBrowser {
       } : spec?.kind === 'matrix' ? {
         matrixResolution: spec.matrixResolution,
         matrixNormalization: spec.matrixNormalization,
+        matrixMaxDistance: Math.ceil(2 * (this.trackHeight(spec) + 6) * (queryRegion.end - queryRegion.start) / Math.max(1, plotWidth * (1 + overscanFactor * 2))),
       } : undefined
       const queryPixelWidth = plotWidth * (1 + overscanFactor * 2)
       const features = await source.getFeatures(queryRegion, queryPixelWidth, controller.signal, options)
@@ -1693,6 +1701,7 @@ export class GenomeBrowser {
     }
     this.emitTracks()
     this.scheduleRender()
+    if (track.status === 'ready' && track.source && !this.hasSuitableData(track)) void this.loadTrack(track)
   }
 
   private visibleSignalSpecs(): TrackSpec[] {
@@ -1924,6 +1933,23 @@ export function selectInteractionFeatures(features: readonly InteractionFeature[
 
 export function interactionArcHeight(pixelSpan: number, trackHeight: number): number {
   return Math.min(Math.max(8, trackHeight - 14), Math.max(8, Math.sqrt(Math.max(0, pixelSpan)) * 4.2))
+}
+
+/** Low-to-high contact intensity palette adapted from the figure workflow. */
+export function matrixWarmPaletteColor(intensity: number): string {
+  const value = Math.max(0, Math.min(1, intensity))
+  const stops = [
+    { at: 0, color: [255, 247, 188] },
+    { at: 0.5, color: [253, 174, 97] },
+    { at: 0.82, color: [215, 25, 28] },
+    { at: 1, color: [17, 17, 17] },
+  ] as const
+  const upperIndex = Math.max(1, stops.findIndex((stop) => value <= stop.at))
+  const lower = stops[upperIndex - 1]
+  const upper = stops[upperIndex]
+  const mix = (value - lower.at) / Math.max(Number.EPSILON, upper.at - lower.at)
+  const channels = lower.color.map((channel, index) => Math.round(channel + (upper.color[index] - channel) * mix))
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
 }
 
 function interactionEmphasis(score: number | undefined, minimum: number, maximum: number): number {
