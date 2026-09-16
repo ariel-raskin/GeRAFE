@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixDarkWarmPaletteColor, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixBlueBlackPaletteColor, matrixLegendValues, matrixPaletteIntensity, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { InteractionFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 
@@ -102,10 +102,21 @@ describe('contact-matrix rendering helpers', () => {
     expect(matrixWarmPaletteColor(1)).toBe('#111111')
   })
 
-  it('offers a dark-canvas warm scale with a visible light maximum', () => {
-    expect(matrixDarkWarmPaletteColor(0)).toBe('#1f1b16')
-    expect(matrixDarkWarmPaletteColor(0.8)).toBe('#e8302b')
-    expect(matrixDarkWarmPaletteColor(1)).toBe('#fff8e7')
+  it('uses a light-blue to black palette for dark-mode matrices', () => {
+    expect(matrixBlueBlackPaletteColor(0)).toBe('#daf0ff')
+    expect(matrixBlueBlackPaletteColor(0.82)).toBe('#14437a')
+    expect(matrixBlueBlackPaletteColor(1)).toBe('#040609')
+  })
+
+  it('labels linear and log matrix gradients at their visual midpoint', () => {
+    expect(matrixLegendValues(100, 'linear')).toEqual([100, 50, 0])
+    expect(matrixLegendValues(99, 'log1p')[1]).toBeCloseTo(9)
+  })
+
+  it('can reverse which palette end represents high scores', () => {
+    expect(matrixPaletteIntensity(0.2, false)).toBe(0.2)
+    expect(matrixPaletteIntensity(0.2, true)).toBe(0.8)
+    expect(matrixPaletteIntensity(1, true)).toBe(0)
   })
 
 })
