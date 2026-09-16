@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixDarkWarmPaletteColor, matrixMaximumDistance, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
-import type { InteractionFeature } from './types.ts'
+import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixAutomaticMaximum, matrixBucketIntensity, matrixDarkWarmPaletteColor, matrixIntensityBucket, matrixMaximumDistance, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import type { InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 
 describe('gene direction arrow geometry', () => {
@@ -110,5 +110,19 @@ describe('contact-matrix rendering helpers', () => {
 
   it('requests more off-diagonal contacts when a matrix track grows', () => {
     expect(matrixMaximumDistance(200, 1_000_000, 1_000)).toBeGreaterThan(matrixMaximumDistance(100, 1_000_000, 1_000))
+  })
+
+  it('uses off-diagonal contacts for automatic intensity when enough are available', () => {
+    const cells = Array.from({ length: 20 }, (_, index) => ({ bin1: 0, bin2: 3_000 + index * 1_000, value: index + 1 }))
+    cells.push({ bin1: 1_000, bin2: 2_000, value: 10_000 })
+    const matrix = { featureType: 'matrix', start: 0, end: 30_000, resolution: 1_000, cells } satisfies MatrixFeature
+    expect(matrixAutomaticMaximum(matrix)).toBe(20)
+  })
+
+  it('bounds any number of matrix contacts to 64 reusable intensity paths', () => {
+    const buckets = new Set(Array.from({ length: 10_000 }, (_, index) => matrixIntensityBucket(index / 9_999)))
+    expect(buckets.size).toBe(64)
+    expect(matrixBucketIntensity(matrixIntensityBucket(0))).toBe(0)
+    expect(matrixBucketIntensity(matrixIntensityBucket(1))).toBe(1)
   })
 })
