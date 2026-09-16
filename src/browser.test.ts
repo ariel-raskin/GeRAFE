@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixAutomaticMaximum, matrixBucketIntensity, matrixDarkWarmPaletteColor, matrixIntensityBucket, matrixMaximumDistance, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixAutomaticMaximum, matrixBucketIntensity, matrixDarkWarmPaletteColor, matrixIntensityBucket, matrixMaximumDistance, matrixRasterDensity, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 
@@ -124,5 +124,10 @@ describe('contact-matrix rendering helpers', () => {
     expect(buckets.size).toBe(64)
     expect(matrixBucketIntensity(matrixIntensityBucket(0))).toBe(0)
     expect(matrixBucketIntensity(matrixIntensityBucket(1))).toBe(1)
+  })
+
+  it('bounds cached matrix raster memory while retaining full density for ordinary tracks', () => {
+    expect(matrixRasterDensity(2_000, 500)).toBe(1)
+    expect(matrixRasterDensity(4_000, 4_000)).toBe(0.5)
   })
 })

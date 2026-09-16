@@ -17,6 +17,7 @@ const LABEL_CONTENT_RIGHT = LABEL_WIDTH - 8
 const OVERSCAN_FACTOR = 1
 const MATRIX_OVERSCAN_FACTOR = 0.5
 const MATRIX_INTENSITY_LEVELS = 64
+const MATRIX_RASTER_MAX_PIXELS = 4_000_000
 const GENE_CONTENT_PADDING = 6
 const MIN_BOTTOM_GENE_HEIGHT = 44
 
@@ -50,9 +51,10 @@ interface GeneRenderLayout {
   transcriptCount: number
 }
 
-interface MatrixPathCache {
+interface MatrixRasterCache {
   signature: string
-  paths: Array<Path2D | undefined>
+  canvas: HTMLCanvasElement
+  density: number
 }
 
 export class GenomeBrowser {
@@ -102,7 +104,7 @@ export class GenomeBrowser {
   private smoothedFps = 60
   private abortControllers = new Map<string, AbortController>()
   private readonly matrixMaximumCache = new WeakMap<MatrixFeature, number>()
-  private readonly matrixPathCache = new WeakMap<MatrixFeature, MatrixPathCache>()
+  private readonly matrixRasterCache = new WeakMap<MatrixFeature, MatrixRasterCache>()
   private selectedTrackIds = new Set<string>()
   private geneScrollOffsets = new Map<string, number>()
   private showTssIndicators = true
@@ -1314,14 +1316,21 @@ export class GenomeBrowser {
     const baseline = direction > 0 ? top + 3 : bottom - 3
     const matrixPalette = spec.matrixPalette ?? 'monochrome'
     const transformMode = spec.matrixTransform === 'linear' ? 'linear' : 'log'
-    const signature = `${maximum}:${transformMode}:${scale}`
-    let cachedPaths = this.matrixPathCache.get(matrix)
-    if (!cachedPaths || cachedPaths.signature !== signature) {
+    const rasterWidth = Math.max(1, (matrix.end - matrix.start) * scale)
+    const density = matrixRasterDensity(rasterWidth, height)
+    const signature = `${maximum}:${transformMode}:${scale}:${height}:${direction}:${matrixPalette}:${spec.color}:${density}`
+    let raster = this.matrixRasterCache.get(matrix)
+    if (!raster || raster.signature !== signature) {
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.ceil(rasterWidth * density))
+      canvas.height = Math.max(1, Math.ceil(height * density))
+      const rasterContext = canvas.getContext('2d')
+      if (!rasterContext) return 0
       const transform = transformMode === 'linear'
         ? (value: number) => value / maximum
         : (value: number) => Math.log1p(value) / Math.log1p(maximum)
       const paths: Array<Path2D | undefined> = new Array(MATRIX_INTENSITY_LEVELS)
-      const halfCellBases = Math.max(matrix.resolution / 2, 0.55 / scale)
+      const halfCellBases = Math.max(matrix.resolution / 2, 0.55 / (scale * density))
       for (const cell of matrix.cells) {
         if (!(cell.value > 0)) continue
         const intensity = Math.max(0, Math.min(1, transform(cell.value)))
@@ -1338,22 +1347,33 @@ export class GenomeBrowser {
         path.lineTo(x, y - halfCellBases)
         path.closePath()
       }
-      cachedPaths = { signature, paths }
-      this.matrixPathCache.set(matrix, cachedPaths)
+      const rasterBaseline = direction > 0 ? 3 : height - 3
+      rasterContext.translate(-matrix.start * scale * density, rasterBaseline * density)
+      rasterContext.scale(scale * density, direction * scale * density)
+      for (let bucket = 0; bucket < paths.length; bucket += 1) {
+        const path = paths[bucket]
+        if (!path) continue
+        const intensity = matrixBucketIntensity(bucket)
+        const warmPalette = matrixPalette !== 'monochrome'
+        rasterContext.fillStyle = matrixPalette === 'warm-dark' ? matrixDarkWarmPaletteColor(intensity)
+          : warmPalette ? matrixWarmPaletteColor(intensity) : spec.color
+        rasterContext.globalAlpha = warmPalette ? 1 : 0.08 + Math.pow(intensity, 0.72) * 0.92
+        rasterContext.fill(path)
+      }
+      raster = { signature, canvas, density }
+      this.matrixRasterCache.set(matrix, raster)
     }
+    const sourceX = Math.max(0, (this.region.start - matrix.start) * scale * raster.density)
+    const sourceWidth = Math.min(plotWidth * raster.density, raster.canvas.width - sourceX)
     ctx.save()
     ctx.beginPath(); ctx.rect(PLOT_LEFT, top + 1, plotWidth, height - 2); ctx.clip()
-    ctx.translate(PLOT_LEFT - this.region.start * scale, baseline)
-    ctx.scale(scale, direction * scale)
-    for (let bucket = 0; bucket < cachedPaths.paths.length; bucket += 1) {
-      const path = cachedPaths.paths[bucket]
-      if (!path) continue
-      const intensity = matrixBucketIntensity(bucket)
-      const warmPalette = matrixPalette !== 'monochrome'
-      ctx.fillStyle = matrixPalette === 'warm-dark' ? matrixDarkWarmPaletteColor(intensity)
-        : warmPalette ? matrixWarmPaletteColor(intensity) : spec.color
-      ctx.globalAlpha = warmPalette ? 1 : 0.08 + Math.pow(intensity, 0.72) * 0.92
-      ctx.fill(path)
+    ctx.imageSmoothingEnabled = false
+    if (sourceWidth > 0) {
+      ctx.drawImage(
+        raster.canvas,
+        sourceX, 0, sourceWidth, raster.canvas.height,
+        PLOT_LEFT, top, sourceWidth / raster.density, height,
+      )
     }
     ctx.restore()
     ctx.globalAlpha = 1
@@ -2233,6 +2253,11 @@ export function matrixIntensityBucket(intensity: number): number {
 
 export function matrixBucketIntensity(bucket: number): number {
   return Math.max(0, Math.min(MATRIX_INTENSITY_LEVELS - 1, bucket)) / (MATRIX_INTENSITY_LEVELS - 1)
+}
+
+export function matrixRasterDensity(width: number, height: number, maximumPixels = MATRIX_RASTER_MAX_PIXELS): number {
+  const area = Math.max(1, width) * Math.max(1, height)
+  return Math.min(1, Math.sqrt(Math.max(1, maximumPixels) / area))
 }
 
 export function matrixMaximumDistance(trackHeight: number, genomicSpan: number, plotWidth: number): number {
