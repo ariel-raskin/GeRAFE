@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { chevronExonOverlap, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, phasedArrowPositions, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { chevronExonOverlap, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, phasedArrowPositions, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { InteractionFeature } from './types.ts'
+import type { GeneFeature } from './reference.ts'
 
 describe('gene direction arrow geometry', () => {
   it('keeps arrow phase attached to the transcript while panning', () => {
@@ -54,5 +55,22 @@ describe('interaction rendering helpers', () => {
       chrom2: 'chr1', start2: index + 10, end2: index + 11, score,
     } satisfies InteractionFeature))
     expect(selectInteractionFeatures(interactions, 2).map((feature) => feature.score)).toEqual([9, 4])
+  })
+
+  it('filters either anchor by annotated gene overlap', () => {
+    const interactions = [
+      { featureType: 'interaction', start: 100, end: 520, chrom1: 'chr1', start1: 100, end1: 120, chrom2: 'chr1', start2: 500, end2: 520, name: 'first' },
+      { featureType: 'interaction', start: 700, end: 920, chrom1: 'chr1', start1: 700, end1: 720, chrom2: 'chr1', start2: 900, end2: 920, name: 'second' },
+    ] satisfies InteractionFeature[]
+    const gene = { chr: 'chr1', start: 495, end: 540, name: 'GENE1', id: 'GENE1', strand: '+', transcripts: 1, transcriptModels: [] } satisfies GeneFeature
+    expect(filterInteractionsForGenes(interactions, [{ name: gene.name, gene }]).map((feature) => feature.name)).toEqual(['first'])
+  })
+
+  it('falls back to exact gene tokens in BEDPE names', () => {
+    const interactions = [
+      { featureType: 'interaction', start: 0, end: 20, chrom1: 'chr1', start1: 0, end1: 10, chrom2: 'chr1', start2: 10, end2: 20, name: 'RUNX1(chr21)_to_MYC(chr8)' },
+      { featureType: 'interaction', start: 20, end: 40, chrom1: 'chr1', start1: 20, end1: 30, chrom2: 'chr1', start2: 30, end2: 40, name: 'RUNX1T1_to_MYC' },
+    ] satisfies InteractionFeature[]
+    expect(filterInteractionsForGenes(interactions, [{ name: 'RUNX1' }]).map((feature) => feature.name)).toEqual(['RUNX1(chr21)_to_MYC(chr8)'])
   })
 })

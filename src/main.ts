@@ -920,6 +920,9 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const dataTracks = selected.filter((track) => track.kind !== 'genes')
   const one = selected.length === 1
   const pairable = selected.length === 2 && selected.every((track) => track.kind === 'signal') && canPairSelectedStrands(selected as TrackSpec[])
+  const interactionGeneDetail = target.kind === 'interaction' && target.interactionFilterMode === 'genes'
+    ? escapeHtml((target.interactionFilterGenes ?? []).join(', '))
+    : ''
   const action = (id: string, label: string, detail = '', disabled = false, danger = false) =>
     `<button class="context-item${danger ? ' danger' : ''}" data-context-action="${id}" type="button" role="menuitem" ${disabled ? 'disabled' : ''}><span>${label}</span>${detail ? `<small>${detail}</small>` : ''}</button>`
   trackContextMenu.innerHTML = `
@@ -948,6 +951,13 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     ${one && target.kind === 'interval' ? action('interval-squished', 'Squished interval view', target.intervalDisplayMode === 'squished' ? 'current' : '') : ''}
     ${one && target.kind === 'interval' ? action('duplicate', 'Duplicate track') : ''}
     ${one && target.kind === 'interval' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
+    ${one && target.kind === 'interaction' ? '<span class="context-separator"></span>' : ''}
+    ${one && target.kind === 'interaction' ? action('interaction-base-bottom', 'Arc base at bottom', target.interactionDirection === 'down' ? '' : 'current') : ''}
+    ${one && target.kind === 'interaction' ? action('interaction-base-top', 'Arc base at top', target.interactionDirection === 'down' ? 'current' : '') : ''}
+    ${one && target.kind === 'interaction' ? '<span class="context-separator"></span>' : ''}
+    ${one && target.kind === 'interaction' ? action('interaction-filter-all', 'Show all interactions', !target.interactionFilterMode || target.interactionFilterMode === 'all' ? 'current' : '') : ''}
+    ${one && target.kind === 'interaction' ? action('interaction-filter-genes', 'Filter by gene symbols…', interactionGeneDetail) : ''}
+    ${one && target.kind === 'interaction' ? action('interaction-filter-visible', 'Show interactions involving visible genes', target.interactionFilterMode === 'visible-genes' ? 'current' : '') : ''}
     ${one && target.kind === 'interaction' ? '<span class="context-separator"></span>' : ''}
     ${one && target.kind === 'interaction' ? action('duplicate', 'Duplicate track') : ''}
     ${one && target.kind === 'interaction' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
@@ -1122,6 +1132,30 @@ function handleTrackContextAction(event: MouseEvent): void {
   if (command?.startsWith('interval-')) {
     const mode = command.slice(9) as 'collapsed' | 'expanded' | 'squished'
     store.edit((draft) => { const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'interval'); if (track) track.intervalDisplayMode = mode })
+  }
+  if (command === 'interaction-base-bottom' || command === 'interaction-base-top') store.edit((draft) => {
+    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'interaction')
+    if (track) track.interactionDirection = command === 'interaction-base-top' ? 'down' : 'up'
+  })
+  if (command === 'interaction-filter-all' || command === 'interaction-filter-visible') store.edit((draft) => {
+    const track = draft.tracks.find((item) => item.id === targetId && item.kind === 'interaction')
+    if (!track) return
+    track.interactionFilterMode = command === 'interaction-filter-visible' ? 'visible-genes' : 'all'
+  })
+  if (command === 'interaction-filter-genes') {
+    const track = store.current.tracks.find((item) => item.id === targetId && item.kind === 'interaction')
+    const entered = window.prompt('Gene symbols, separated by commas or spaces:', (track?.interactionFilterGenes ?? []).join(', '))
+    if (entered !== null) {
+      const genes = [...new Set(entered.split(/[\s,;]+/).map((gene) => gene.trim().toLocaleUpperCase()).filter(Boolean))].slice(0, 100)
+      store.edit((draft) => {
+        const item = draft.tracks.find((candidate) => candidate.id === targetId && candidate.kind === 'interaction')
+        if (!item) return
+        item.interactionFilterGenes = genes
+        item.interactionFilterMode = genes.length ? 'genes' : 'all'
+      })
+      const unresolved = activeGeneSource ? genes.filter((gene) => !activeGeneSource?.find(gene)) : genes
+      if (unresolved.length) showToast(`${unresolved.join(', ')} ${unresolved.length === 1 ? 'was' : 'were'} not found in the active annotation; matching BEDPE names instead.`)
+    }
   }
   if (command?.startsWith('bam-view-')) {
     const mode = command.slice(9) as 'coverage' | 'alignments' | 'both'

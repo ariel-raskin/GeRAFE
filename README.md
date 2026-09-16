@@ -40,7 +40,7 @@ GeRAFE is currently developed and tested as a Windows desktop application.
 - Automatic positive/negative signal pairing from common filename markers such as `plus`/`minus` and `pos`/`neg`, with one shared zero axis, red/blue strand colors, and independently scaled strand magnitudes.
 - Stranded pairs remain compatible with visual groups; grouped autoscaling and color controls keep ordinary, positive, and negative channels separate.
 - Collapsed, expanded, and squished layouts for interval and gene tracks.
-- Arc-style BEDPE interaction tracks with endpoint anchors, score-weighted emphasis, optional item colors, and interchromosomal markers.
+- Arc-style BEDPE interaction tracks with endpoint anchors, score-weighted emphasis, optional item colors, interchromosomal markers, top/bottom arc orientation, and annotation-aware gene filters.
 - Persistent light and dark themes.
 - Automatic restoration of local desktop tracks between launches, with relinking when a source has moved or changed.
 - Versioned `.gerafe.json` workspace files with track layout, source provenance, and display settings, plus 100-step undo/redo while editing. Legacy `.locus.json` workspaces remain supported.

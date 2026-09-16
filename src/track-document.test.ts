@@ -126,7 +126,7 @@ describe('track document', () => {
     legacy.schemaVersion = 1
     for (const track of legacy.tracks) track.height = 1
     const restored = normalizeTrackDocument(legacy)
-    expect(restored.schemaVersion).toBe(7)
+    expect(restored.schemaVersion).toBe(8)
     expect(restored.tracks.every((track) => track.height >= 30 && track.height <= 33)).toBe(true)
   })
 
@@ -136,16 +136,31 @@ describe('track document', () => {
       id: 'bedpe-source', name: 'loops.bedpe', format: 'bedpe',
       files: [{ name: 'loops.bedpe', size: 42, lastModified: 123, role: 'signal', path: 'C:\\data\\loops.bedpe' }],
     }, { id: 'interaction-track' })
+    Object.assign(document.tracks.find((track) => track.id === 'interaction-track')!, {
+      interactionDirection: 'down', interactionFilterMode: 'genes', interactionFilterGenes: ['RUNX1', 'MYC'],
+    })
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
-    expect(restored.schemaVersion).toBe(7)
+    expect(restored.schemaVersion).toBe(8)
     expect(restored.sources[0]).toMatchObject({ format: 'bedpe', name: 'loops.bedpe' })
-    expect(restored.tracks.find((track) => track.id === 'interaction-track')).toMatchObject({ kind: 'interaction', height: 32 })
+    expect(restored.tracks.find((track) => track.id === 'interaction-track')).toMatchObject({
+      kind: 'interaction', height: 32, interactionDirection: 'down', interactionFilterMode: 'genes', interactionFilterGenes: ['RUNX1', 'MYC'],
+    })
   })
 
   it('migrates version 6 workspaces to the interaction-aware schema', () => {
     const legacy = documentWithTwoTracks() as any
     legacy.schemaVersion = 6
-    expect(normalizeTrackDocument(legacy).schemaVersion).toBe(7)
+    expect(normalizeTrackDocument(legacy).schemaVersion).toBe(8)
+  })
+
+  it('migrates version 7 BEDPE tracks to default arc options', () => {
+    const legacy = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 }) as any
+    addInteractionTrack(legacy, { id: 'bedpe-source', name: 'loops.bedpe', format: 'bedpe', files: [] }, { id: 'interaction-track' })
+    legacy.schemaVersion = 7
+    delete legacy.tracks[0].interactionDirection
+    delete legacy.tracks[0].interactionFilterMode
+    const restored = normalizeTrackDocument(legacy)
+    expect(restored.tracks[0]).toMatchObject({ interactionDirection: 'up', interactionFilterMode: 'all' })
   })
 
   it('migrates recognizable version 4 strand files into a persisted pair', () => {

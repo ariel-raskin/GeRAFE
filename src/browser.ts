@@ -1036,11 +1036,26 @@ export class GenomeBrowser {
       wrapText(ctx, track.error ?? 'Could not load interactions', 24, bottom - 25, 136, 15, 2)
       return 0
     }
-    const visible = track.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) as InteractionFeature[]
-    if (!visible.length) {
+    const inWindow = track.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) as InteractionFeature[]
+    if (!inWindow.length) {
       ctx.fillStyle = palette.muted
       ctx.font = '12px Inter, system-ui, sans-serif'
       ctx.fillText(track.status === 'loading' ? 'Loading interactions…' : 'No interactions in this window', PLOT_LEFT + 22, top + height / 2)
+      return 0
+    }
+
+    const filterMode = spec.interactionFilterMode ?? 'all'
+    const geneTargets: InteractionGeneTarget[] = filterMode === 'genes'
+      ? (spec.interactionFilterGenes ?? []).map((name) => ({ name, gene: this.geneSource?.find(name) }))
+      : filterMode === 'visible-genes'
+        ? (this.geneSource?.featuresFor(this.region) ?? []).map((gene) => ({ name: gene.name, gene }))
+        : []
+    const visible = filterMode === 'all' ? inWindow : filterInteractionsForGenes(inWindow, geneTargets)
+    if (!visible.length) {
+      ctx.fillStyle = palette.muted
+      ctx.font = '12px Inter, system-ui, sans-serif'
+      const unavailable = filterMode === 'visible-genes' && !this.geneSource
+      ctx.fillText(unavailable ? 'No gene annotation is available for this reference' : 'No interactions match the gene filter', PLOT_LEFT + 22, top + height / 2)
       return 0
     }
 
@@ -1049,7 +1064,8 @@ export class GenomeBrowser {
     const scoreMin = scored.length ? Math.min(...scored) : 0
     const scoreMax = scored.length ? Math.max(...scored) : 0
     const scale = plotWidth / (this.region.end - this.region.start)
-    const baseline = bottom - 7
+    const arcDirection = spec.interactionDirection === 'down' ? 1 : -1
+    const baseline = arcDirection > 0 ? top + 7 : bottom - 7
     ctx.save()
     ctx.beginPath(); ctx.rect(PLOT_LEFT, top + 2, plotWidth, height - 3); ctx.clip()
     for (const feature of shown) {
@@ -1065,7 +1081,7 @@ export class GenomeBrowser {
         const arcHeight = interactionArcHeight(Math.abs(x2 - x1), height)
         ctx.beginPath()
         ctx.moveTo(x1, baseline)
-        ctx.bezierCurveTo(x1, baseline - arcHeight * 1.35, x2, baseline - arcHeight * 1.35, x2, baseline)
+        ctx.bezierCurveTo(x1, baseline + arcDirection * arcHeight * 1.35, x2, baseline + arcDirection * arcHeight * 1.35, x2, baseline)
         ctx.stroke()
         drawInteractionAnchor(ctx, feature.start1, feature.end1, this.region, scale, baseline, width)
         drawInteractionAnchor(ctx, feature.start2, feature.end2, this.region, scale, baseline, width)
@@ -1077,11 +1093,12 @@ export class GenomeBrowser {
         const x = PLOT_LEFT + (((anchorStart + anchorEnd) / 2) - this.region.start) * scale
         drawInteractionAnchor(ctx, anchorStart, anchorEnd, this.region, scale, baseline, width)
         ctx.setLineDash([3, 3])
-        ctx.beginPath(); ctx.moveTo(x, baseline - 3); ctx.lineTo(x, top + 16); ctx.stroke()
+        const markerEnd = arcDirection > 0 ? bottom - 16 : top + 16
+        ctx.beginPath(); ctx.moveTo(x, baseline + arcDirection * 3); ctx.lineTo(x, markerEnd); ctx.stroke()
         ctx.setLineDash([])
         ctx.globalAlpha = Math.max(ctx.globalAlpha, 0.75)
         ctx.font = '9px Inter, system-ui, sans-serif'
-        ctx.fillText(otherChromosome, x + 3, top + 12)
+        ctx.fillText(otherChromosome, x + 3, arcDirection > 0 ? bottom - 6 : top + 12)
       }
     }
     ctx.restore()
@@ -1090,7 +1107,7 @@ export class GenomeBrowser {
     if (shown.length < visible.length) {
       ctx.fillStyle = palette.muted
       ctx.font = '10px Inter, system-ui, sans-serif'
-      ctx.fillText(`Showing ${shown.length.toLocaleString()} of ${visible.length.toLocaleString()} interactions`, PLOT_LEFT + 8, top + 13)
+      ctx.fillText(`Showing ${shown.length.toLocaleString()} of ${visible.length.toLocaleString()} interactions`, PLOT_LEFT + 8, arcDirection > 0 ? bottom - 5 : top + 13)
     }
     return shown.length
   }
@@ -1720,6 +1737,60 @@ function maximumMagnitude(features: readonly SignalFeature[]): number {
 }
 
 const MAX_VISIBLE_INTERACTIONS = 2_000
+
+export interface InteractionGeneTarget {
+  name: string
+  gene?: GeneFeature
+}
+
+export function filterInteractionsForGenes(features: readonly InteractionFeature[], targets: readonly InteractionGeneTarget[]): InteractionFeature[] {
+  if (!targets.length) return []
+  const intervalsByChromosome = new Map<string, Array<{ start: number; end: number }>>()
+  const unresolvedNames = new Set<string>()
+  for (const target of targets) {
+    if (!target.gene) {
+      const normalized = target.name.trim().toLocaleUpperCase()
+      if (normalized) unresolvedNames.add(normalized)
+      continue
+    }
+    const intervals = intervalsByChromosome.get(target.gene.chr) ?? []
+    intervals.push({ start: target.gene.start, end: target.gene.end })
+    intervalsByChromosome.set(target.gene.chr, intervals)
+  }
+  for (const [chromosome, intervals] of intervalsByChromosome) intervalsByChromosome.set(chromosome, mergeIntervals(intervals))
+  return features.filter((feature) => overlapsAnyInterval(intervalsByChromosome.get(feature.chrom1), feature.start1, feature.end1)
+    || overlapsAnyInterval(intervalsByChromosome.get(feature.chrom2), feature.start2, feature.end2)
+    || interactionNameContainsAnyGene(feature.name, unresolvedNames))
+}
+
+function mergeIntervals(intervals: Array<{ start: number; end: number }>): Array<{ start: number; end: number }> {
+  const sorted = intervals.sort((a, b) => a.start - b.start || a.end - b.end)
+  const merged: Array<{ start: number; end: number }> = []
+  for (const interval of sorted) {
+    const previous = merged.at(-1)
+    if (previous && interval.start <= previous.end) previous.end = Math.max(previous.end, interval.end)
+    else merged.push({ ...interval })
+  }
+  return merged
+}
+
+function overlapsAnyInterval(intervals: readonly { start: number; end: number }[] | undefined, start: number, end: number): boolean {
+  if (!intervals?.length) return false
+  let low = 0
+  let high = intervals.length
+  while (low < high) {
+    const middle = (low + high) >>> 1
+    if (intervals[middle].end <= start) low = middle + 1
+    else high = middle
+  }
+  return low < intervals.length && intervals[low].start < end
+}
+
+function interactionNameContainsAnyGene(interactionName: string | undefined, genes: ReadonlySet<string>): boolean {
+  if (!genes.size || !interactionName) return false
+  const tokens: string[] = interactionName.toLocaleUpperCase().match(/[A-Z0-9][A-Z0-9.-]*/g) ?? []
+  return tokens.some((token) => genes.has(token))
+}
 
 export function selectInteractionFeatures(features: readonly InteractionFeature[], limit = MAX_VISIBLE_INTERACTIONS): InteractionFeature[] {
   if (features.length <= limit) return [...features]

@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 7 as const
+export const TRACK_DOCUMENT_VERSION = 8 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -9,6 +9,8 @@ export type SourceFormat = 'bigwig' | 'bedgraph' | 'tdf' | 'bam' | 'bed' | 'bedp
 export type ScaleMode = 'auto-visible' | 'fixed'
 export type SignalStrand = 'plus' | 'minus'
 export type SignalScaleChannel = 'ordinary' | SignalStrand
+export type InteractionDirection = 'up' | 'down'
+export type InteractionFilterMode = 'all' | 'genes' | 'visible-genes'
 
 export interface SourceFileSpec {
   name: string
@@ -56,6 +58,9 @@ export interface TrackSpec {
   pane: 'main' | 'bottom'
   geneDisplayMode?: 'collapsed' | 'expanded' | 'squished'
   intervalDisplayMode?: 'collapsed' | 'expanded' | 'squished'
+  interactionDirection?: InteractionDirection
+  interactionFilterMode?: InteractionFilterMode
+  interactionFilterGenes?: string[]
   alignmentDisplayMode?: 'collapsed' | 'expanded' | 'squished'
   bamViewMode?: 'coverage' | 'alignments' | 'both'
   bamColorMode?: 'track' | 'strand' | 'pair-orientation' | 'mapping-quality'
@@ -358,6 +363,8 @@ export function addInteractionTrack(
     enabled: true,
     height: 32,
     pane: 'main',
+    interactionDirection: 'up',
+    interactionFilterMode: 'all',
   }
   draft.sources.push(source)
   const bottomIndex = draft.tracks.findIndex((item) => item.pane === 'bottom')
@@ -574,7 +581,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -606,6 +613,15 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     intervalDisplayMode: track.kind === 'interval' && (track.intervalDisplayMode === 'collapsed' || track.intervalDisplayMode === 'expanded' || track.intervalDisplayMode === 'squished')
       ? track.intervalDisplayMode
       : track.kind === 'interval' ? 'collapsed' : undefined,
+    interactionDirection: track.kind === 'interaction' && (track.interactionDirection === 'up' || track.interactionDirection === 'down')
+      ? track.interactionDirection
+      : track.kind === 'interaction' ? 'up' : undefined,
+    interactionFilterMode: track.kind === 'interaction' && (track.interactionFilterMode === 'genes' || track.interactionFilterMode === 'visible-genes')
+      ? track.interactionFilterMode
+      : track.kind === 'interaction' ? ('all' as InteractionFilterMode) : undefined,
+    interactionFilterGenes: track.kind === 'interaction' && Array.isArray(track.interactionFilterGenes)
+      ? [...new Set(track.interactionFilterGenes.filter((gene: unknown): gene is string => typeof gene === 'string').map((gene: string) => gene.trim()).filter(Boolean))].slice(0, 100)
+      : undefined,
     alignmentDisplayMode: track.kind === 'alignment' && (track.alignmentDisplayMode === 'collapsed' || track.alignmentDisplayMode === 'expanded' || track.alignmentDisplayMode === 'squished')
       ? track.alignmentDisplayMode
       : track.kind === 'alignment' ? 'expanded' : undefined,
@@ -630,6 +646,9 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
   for (const track of document.tracks) {
     const sourceFormat = document.sources.find((source) => track.sourceIds.includes(source.id))?.format
     const source = document.sources.find((candidate) => candidate.id === track.sourceIds[0])
+    if (track.kind === 'interaction' && track.interactionFilterMode === 'genes' && !track.interactionFilterGenes?.length) {
+      track.interactionFilterMode = 'all'
+    }
     if (track.kind === 'signal' && !track.signalStrand && source) {
       const inferred = inferSignalStrand(source.name)
       if (inferred) {
