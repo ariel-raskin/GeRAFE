@@ -15,6 +15,7 @@ import {
   removeTrack,
   reorderTracks,
   signalFeatureKey,
+  TRACK_DOCUMENT_VERSION,
   TrackDocumentStore,
   unlinkScales,
   unlinkStrandedTrack,
@@ -80,6 +81,16 @@ describe('track document', () => {
     expect(store.current.tracks[0].label).toBe('renamed')
   })
 
+  it('persists exact fitted pixel heights and upgrades version 8 workspaces', () => {
+    const document = documentWithTwoTracks()
+    document.tracks[0].fittedHeight = 317
+    const legacy = JSON.parse(JSON.stringify(document))
+    legacy.schemaVersion = 8
+    const restored = normalizeTrackDocument(legacy)
+    expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
+    expect(restored.tracks[0].fittedHeight).toBe(317)
+  })
+
   it('preserves native paths and BED interval display settings', () => {
     const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
     addIntervalTrack(document, {
@@ -126,7 +137,7 @@ describe('track document', () => {
     legacy.schemaVersion = 1
     for (const track of legacy.tracks) track.height = 1
     const restored = normalizeTrackDocument(legacy)
-    expect(restored.schemaVersion).toBe(8)
+    expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
     expect(restored.tracks.every((track) => track.height >= 30 && track.height <= 33)).toBe(true)
   })
 
@@ -140,7 +151,7 @@ describe('track document', () => {
       interactionDirection: 'down', interactionFilterMode: 'genes', interactionFilterGenes: ['RUNX1', 'MYC'],
     })
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
-    expect(restored.schemaVersion).toBe(8)
+    expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
     expect(restored.sources[0]).toMatchObject({ format: 'bedpe', name: 'loops.bedpe' })
     expect(restored.tracks.find((track) => track.id === 'interaction-track')).toMatchObject({
       kind: 'interaction', height: 32, interactionDirection: 'down', interactionFilterMode: 'genes', interactionFilterGenes: ['RUNX1', 'MYC'],
@@ -150,7 +161,7 @@ describe('track document', () => {
   it('migrates version 6 workspaces to the interaction-aware schema', () => {
     const legacy = documentWithTwoTracks() as any
     legacy.schemaVersion = 6
-    expect(normalizeTrackDocument(legacy).schemaVersion).toBe(8)
+    expect(normalizeTrackDocument(legacy).schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
   })
 
   it('migrates version 7 BEDPE tracks to default arc options', () => {

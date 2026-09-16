@@ -143,12 +143,8 @@ await page.mouse.click(bottomGeneBox.x + 60, bottomGeneBox.y + 55, { button: 'ri
 const geneMenuText = await page.locator('#track-context-menu').textContent()
 await page.locator(`[data-context-action="genes-${testGeneMode}"]`).click()
 await page.waitForTimeout(100)
-const geneBeforeScroll = await page.locator('#bottom-canvas').evaluate((element) => element.toDataURL())
-await page.mouse.move(bottomGeneBox.x + Math.min(500, bottomGeneBox.width - 20), bottomGeneBox.y + Math.min(65, bottomGeneBox.height - 10))
-await page.mouse.wheel(0, 90)
-await page.waitForTimeout(100)
-const geneAfterScroll = await page.locator('#bottom-canvas').evaluate((element) => element.toDataURL())
-const geneInternalScrollChanged = geneBeforeScroll !== geneAfterScroll
+const expandedBottomPaneHeight = await page.locator('#bottom-pane').evaluate((element) => element.getBoundingClientRect().height)
+const expandedBottomCanvasHeight = await page.locator('#bottom-canvas').evaluate((element) => element.getBoundingClientRect().height)
 await page.locator('#settings-menu-button').click()
 const settingsMenuText = await page.locator('#settings-menu-popup').textContent()
 const settingsMenuActiveElement = await page.locator(':focus').getAttribute('id')
@@ -165,6 +161,8 @@ let colorDialogVisible
 let dragGhostVisible
 let dragCursor
 let fitScrollRange
+let fitPaneGap
+let fittedTrackHeights
 let groupContextFocusedAction
 let groupClickSelectionText
 let groupHighlightChanged
@@ -220,8 +218,15 @@ if (visualDataTrackCount > 1) {
   selectAllText = await page.locator('#track-context-menu').textContent()
   await page.keyboard.press('Escape')
   await page.locator('#fit-tracks').click()
-  await page.waitForTimeout(100)
+  await page.waitForTimeout(300)
   fitScrollRange = await page.locator('#main-track-scroll').evaluate((element) => element.scrollHeight - element.clientHeight)
+  fitPaneGap = await page.evaluate(() => {
+    const canvasBottom = document.querySelector('#genome-canvas')?.getBoundingClientRect().bottom ?? 0
+    const paneTop = document.querySelector('#bottom-pane')?.getBoundingClientRect().top ?? 0
+    return paneTop - canvasBottom
+  })
+  fittedTrackHeights = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').tracks
+    ?.filter((track) => track.pane === 'main' && track.kind !== 'interval').map((track) => track.fittedHeight))
   await page.mouse.click(contextX, box.y + 55, { button: 'right' })
   clickAwaySelectionText = await page.locator('#track-context-menu').textContent()
   await page.keyboard.press('Escape')
@@ -289,7 +294,7 @@ await page.reload({ waitUntil: 'networkidle' })
 const customReferenceAfterReload = await page.locator('#reference-label').textContent()
 await browser.close()
 
-console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, geneInternalScrollChanged, initialBottomPaneHeight, initialBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, customReferenceBeforeReload, customReferenceAfterReload, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, customReferenceBeforeReload, customReferenceAfterReload, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
 if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button' || helpMenuActiveElement !== 'help-menu-button') process.exitCode = 1
@@ -306,14 +311,16 @@ if (!geneMenuText?.includes('Expanded transcript view')) process.exitCode = 1
 if (!settingsMenuText?.includes('Track options')) process.exitCode = 1
 if (tssBeforeToggle === tssAfterToggle || tssAfterToggle !== tssAfterReload) process.exitCode = 1
 if (autoFitBeforeToggle === autoFitAfterToggle || autoFitAfterToggle !== autoFitAfterReload) process.exitCode = 1
-if (Math.abs(initialBottomPaneHeight - initialBottomCanvasHeight - 8) > 2) process.exitCode = 1
-if (testGene === 'RUNX1' && testGeneMode === 'expanded' && !geneInternalScrollChanged) process.exitCode = 1
+if (Math.abs(initialBottomPaneHeight - initialBottomCanvasHeight - 1) > 2 || Math.abs(expandedBottomPaneHeight - expandedBottomCanvasHeight - 1) > 2) process.exitCode = 1
+if (testGene === 'RUNX1' && testGeneMode === 'expanded' && expandedBottomPaneHeight <= initialBottomPaneHeight) process.exitCode = 1
 if (visualDataTrackCount > 1 && (!dragGhostVisible || dragCursor !== 'grabbing')) process.exitCode = 1
 if (visualDataTrackCount > 1 && Number(fitScrollRange) > 2) process.exitCode = 1
+if (visualDataTrackCount > 1 && (Math.abs(Number(fitPaneGap)) > 2 || fittedTrackHeights?.some((height) => !Number.isFinite(height)))) process.exitCode = 1
 if (Math.abs(headerTopBeforeScroll - headerTopAfterScroll) > 1) process.exitCode = 1
 if (Number(result.bottomPaneHeight) < initialBottomPaneHeight + 30) process.exitCode = 1
 if (visualDataTrackCount > 1 && !linkedScaleText?.includes('2 tracks selected')) process.exitCode = 1
 if (visualDataTrackCount > 1 && (!groupMenuText?.includes('Autoscale group together') || !groupMenuText?.includes('Remove all group tracks'))) process.exitCode = 1
+if (visualDataTrackCount > 1 && (!groupMenuText?.includes('Set group track color') || groupMenuText?.includes('Set unstranded track color'))) process.exitCode = 1
 if (visualDataTrackCount > 1 && !groupMenuAfterPaneMove?.includes('Experiment A')) process.exitCode = 1
 if (visualDataTrackCount > 1 && !selectAllText?.includes(`${visualDataTrackCount + 1} tracks selected`)) process.exitCode = 1
 if (visualDataTrackCount > 1 && (!colorDialogVisible || !dragGhostVisible)) process.exitCode = 1

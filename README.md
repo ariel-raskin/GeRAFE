@@ -157,7 +157,8 @@ GeRAFE** to see the installed version.
 - Recognizable complementary BigWig, bedGraph, and TDF signal files link automatically. Right-click the combined track to set strand colors, relink either source, or separate the sources again. Under **Settings → Track options**, choose whether to show TSS elbows, auto-link strands, apply red/blue strand colors, and autoscale new visual groups.
 - Drag selected tracks to reorder them or move them between the upper and lower panes.
 - Click a group card to select the entire group; right-click it for group-wide options.
-- Use **Fit tracks** to fit the visible upper tracks into the available pane height. The separate indicator on the right side of the button enables persistent automatic fitting as tracks or pane dimensions change. Each channel of a linked positive/negative pair receives the same height as a regular signal track.
+- Use **Fit tracks** to fit the visible upper tracks exactly into the available pane height. Long names retain enough height for two centered lines. The separate indicator on the right side of the button enables persistent automatic fitting as tracks or pane dimensions change. Each channel of a linked positive/negative pair receives the same height as a regular signal track.
+- The lower gene track sizes itself to the visible collapsed, expanded, or squished transcript layout; its small reference provenance label is informational and does not reserve additional layout space.
 
 ### BAM display controls
 

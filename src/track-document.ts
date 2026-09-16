@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 8 as const
+export const TRACK_DOCUMENT_VERSION = 9 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -55,6 +55,8 @@ export interface TrackSpec {
   color: string
   enabled: boolean
   height: number
+  /** Exact pixel height assigned by Fit tracks; manual height changes clear it. */
+  fittedHeight?: number
   pane: 'main' | 'bottom'
   geneDisplayMode?: 'collapsed' | 'expanded' | 'squished'
   intervalDisplayMode?: 'collapsed' | 'expanded' | 'squished'
@@ -581,7 +583,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -597,6 +599,9 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     color: track.color,
     enabled: track.enabled,
     height: legacyHeights ? legacyHeightScore(track.kind, track.height) : Math.round(track.height),
+    fittedHeight: typeof track.fittedHeight === 'number' && Number.isFinite(track.fittedHeight)
+      ? Math.max(20, Math.min(4_000, Math.round(track.fittedHeight)))
+      : undefined,
     pane: track.pane === 'main' || track.pane === 'bottom' ? track.pane : track.kind === 'genes' ? 'bottom' : 'main',
     sourceIds: track.sourceIds.filter((id) => sourceIds.has(id)),
     displayGroupId: track.displayGroupId && groupIds.has(track.displayGroupId) ? track.displayGroupId : undefined,
