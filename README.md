@@ -146,7 +146,7 @@ GeRAFE** to see the installed version.
 - Drag horizontally over the track data to pan.
 - Hold `Ctrl` while using the mouse wheel to zoom around the pointer.
 - Double-click the data area or use the toolbar `+` and `−` buttons to zoom.
-- The percentage between the zoom buttons is chromosome-relative: **100%** shows the full chromosome.
+- Drag the slider between the zoom buttons for direct chromosome-scale zoom control; its left edge shows the full chromosome and its right edge reaches base-level detail.
 - Use the normal mouse wheel to scroll through tracks or an overflowing gene track.
 
 ### Manage tracks
@@ -157,7 +157,7 @@ GeRAFE** to see the installed version.
 - Recognizable complementary BigWig, bedGraph, and TDF signal files link automatically. Right-click the combined track to set strand colors, relink either source, or separate the sources again. Under **Settings → Track options**, choose whether to show TSS elbows, auto-link strands, apply red/blue strand colors, and autoscale new visual groups.
 - Drag selected tracks to reorder them or move them between the upper and lower panes.
 - Click a group card to select the entire group; right-click it for group-wide options.
-- Use **Fit tracks** to fit the visible upper tracks into the available pane height. Each channel of a linked positive/negative pair receives the same height as a regular signal track.
+- Use **Fit tracks** to fit the visible upper tracks into the available pane height. The separate indicator on the right side of the button enables persistent automatic fitting as tracks or pane dimensions change. Each channel of a linked positive/negative pair receives the same height as a regular signal track.
 
 ### BAM display controls
 

@@ -782,23 +782,18 @@ export class GenomeBrowser {
       ctx.lineTo(width, zeroY)
       ctx.stroke()
     }
-    ctx.fillStyle = spec.color
-    ctx.globalAlpha = 0.84
-    ctx.save()
-    ctx.beginPath()
-    ctx.rect(PLOT_LEFT, chartTop, plotWidth, chartHeight)
-    ctx.clip()
-    for (let x = 0; x < bins.length; x += 1) {
-      const bin = bins[x]
-      if (!bin) continue
-      const yMax = spec.signalStrand === 'minus' ? chartTop + (bin.max / Math.max(1e-9, max)) * chartHeight : chartBottom - ((bin.max - min) / amplitude) * chartHeight
-      const yMin = spec.signalStrand === 'minus' ? chartTop + (bin.min / Math.max(1e-9, max)) * chartHeight : chartBottom - ((bin.min - min) / amplitude) * chartHeight
-      const barTop = Math.min(yMax, zeroY)
-      const barBottom = Math.max(yMin, zeroY)
-      ctx.fillRect(PLOT_LEFT + x, barTop, 1.25, Math.max(1, barBottom - barTop))
-    }
-    ctx.restore()
-    ctx.globalAlpha = 1
+    drawSignalBins(
+      ctx,
+      bins,
+      PLOT_LEFT,
+      chartTop,
+      chartBottom,
+      zeroY,
+      (value) => spec.signalStrand === 'minus'
+        ? chartTop + (value / Math.max(1e-9, max)) * chartHeight
+        : chartBottom - ((value - min) / amplitude) * chartHeight,
+      spec.color,
+    )
     const scaleValue = max !== 0 ? max : min !== 0 ? Math.abs(min) : 0
     if (scaleValue !== 0) {
       const maxLabel = formatScore(scaleValue)
@@ -937,9 +932,11 @@ export class GenomeBrowser {
     }
     const visible = track.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) as IntervalFeature[]
     if (!visible.length) {
-      ctx.fillStyle = palette.muted
-      ctx.font = '12px Inter, system-ui, sans-serif'
-      ctx.fillText(track.status === 'loading' ? 'Loading intervals…' : 'No intervals in this window', PLOT_LEFT + 22, top + height / 2)
+      if (track.status === 'loading') {
+        ctx.fillStyle = palette.muted
+        ctx.font = '12px Inter, system-ui, sans-serif'
+        ctx.fillText('Loading intervals…', PLOT_LEFT + 22, top + height / 2)
+      }
       return 0
     }
 
@@ -1839,12 +1836,64 @@ function drawMagnitudeBins(
   ctx.globalAlpha = 0.84
   ctx.save()
   ctx.beginPath(); ctx.rect(left, top, bins.length, height); ctx.clip()
-  for (let x = 0; x < bins.length; x += 1) {
-    const bin = bins[x]
-    if (!bin) continue
-    const magnitude = Math.max(Math.abs(bin.min), Math.abs(bin.max))
-    const barHeight = Math.max(1, (magnitude / maximum) * height)
-    ctx.fillRect(left + x, downward ? top : bottom - barHeight, 1.25, barHeight)
+  for (let start = 0; start < bins.length;) {
+    while (start < bins.length && !bins[start]) start += 1
+    if (start >= bins.length) break
+    let end = start
+    while (end + 1 < bins.length && bins[end + 1]) end += 1
+    const baseline = downward ? top : bottom
+    ctx.beginPath()
+    ctx.moveTo(left + start, baseline)
+    for (let x = start; x <= end; x += 1) {
+      const bin = bins[x]!
+      const magnitude = Math.max(Math.abs(bin.min), Math.abs(bin.max))
+      const y = downward ? top + (magnitude / maximum) * height : bottom - (magnitude / maximum) * height
+      ctx.lineTo(left + x, y)
+      ctx.lineTo(left + x + 1, y)
+    }
+    ctx.lineTo(left + end + 1, baseline)
+    ctx.closePath()
+    ctx.fill()
+    start = end + 1
+  }
+  ctx.restore()
+  ctx.globalAlpha = 1
+}
+
+function drawSignalBins(
+  ctx: CanvasRenderingContext2D,
+  bins: readonly (Bin | undefined)[],
+  left: number,
+  top: number,
+  bottom: number,
+  zeroY: number,
+  valueToY: (value: number) => number,
+  color: string,
+): void {
+  ctx.fillStyle = color
+  ctx.globalAlpha = 0.84
+  ctx.save()
+  ctx.beginPath(); ctx.rect(left, top, bins.length, bottom - top); ctx.clip()
+  for (let start = 0; start < bins.length;) {
+    while (start < bins.length && !bins[start]) start += 1
+    if (start >= bins.length) break
+    let end = start
+    while (end + 1 < bins.length && bins[end + 1]) end += 1
+    ctx.beginPath()
+    ctx.moveTo(left + start, zeroY)
+    for (let x = start; x <= end; x += 1) {
+      const y = valueToY(Math.max(0, bins[x]!.max))
+      ctx.lineTo(left + x, y)
+      ctx.lineTo(left + x + 1, y)
+    }
+    for (let x = end; x >= start; x -= 1) {
+      const y = valueToY(Math.min(0, bins[x]!.min))
+      ctx.lineTo(left + x + 1, y)
+      ctx.lineTo(left + x, y)
+    }
+    ctx.closePath()
+    ctx.fill()
+    start = end + 1
   }
   ctx.restore()
   ctx.globalAlpha = 1

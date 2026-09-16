@@ -71,13 +71,29 @@ await page.mouse.down()
 await page.mouse.move(box.x + box.width * 0.48, box.y + 95, { steps: 12 })
 await page.mouse.up()
 await page.mouse.move(box.x + box.width * 0.55, box.y + 95)
-const zoomBeforeWheel = await page.locator('#zoom-level').textContent()
+const zoomBeforeWheel = await page.locator('#zoom-level').inputValue()
 await page.keyboard.down('Control')
 await page.mouse.wheel(0, -300)
 await page.keyboard.up('Control')
 await page.waitForTimeout(500)
-const zoomAfterWheel = await page.locator('#zoom-level').textContent()
+const zoomAfterWheel = await page.locator('#zoom-level').inputValue()
 const zoomTitle = await page.locator('#zoom-level').getAttribute('title')
+const spanBeforeSlider = await page.evaluate(() => {
+  const region = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').region
+  return region?.end - region?.start
+})
+await page.locator('#zoom-level').fill('72')
+await page.locator('#zoom-level').dispatchEvent('input')
+await page.waitForTimeout(300)
+const spanAfterSlider = await page.evaluate(() => {
+  const region = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').region
+  return region?.end - region?.start
+})
+await page.locator('#chromosome-button').click()
+const chromosomeMenuVisible = await page.locator('#chromosome-popup').isVisible()
+const chromosomeMenuOpenClass = await page.locator('#chromosome-picker').evaluate((element) => element.classList.contains('is-open'))
+const selectedChromosomeText = await page.locator('#chromosome-popup [aria-selected="true"]').textContent()
+await page.keyboard.press('Escape')
 await page.locator('#file-menu-button').click()
 const fileMenuVisible = await page.locator('#file-menu-popup').isVisible()
 const fileMenuText = await page.locator('#file-menu-popup').textContent()
@@ -104,6 +120,8 @@ else {
 }
 const trackContextVisible = await page.locator('#track-context-menu').isVisible()
 const initialTrackContextText = await page.locator('#track-context-menu').textContent()
+const currentIndicatorCount = await page.locator('#track-context-menu .context-item.is-current').count()
+const arcFlipOptionCount = await page.locator('#track-context-menu [data-context-action="interaction-flip"]').count()
 const trackContextFocusedAction = await page.evaluate(() => document.activeElement?.getAttribute('data-context-action'))
 let strandedRoundTrip = false
 if (hasStrandedTrack) {
@@ -134,9 +152,10 @@ const geneInternalScrollChanged = geneBeforeScroll !== geneAfterScroll
 await page.locator('#settings-menu-button').click()
 const settingsMenuText = await page.locator('#settings-menu-popup').textContent()
 const settingsMenuActiveElement = await page.locator(':focus').getAttribute('id')
-const tssBeforeToggle = await page.locator('#tss-indicators-menu-item').getAttribute('aria-checked')
-await page.locator('#tss-indicators-menu-item').click()
-const tssAfterToggle = await page.locator('#tss-indicators-menu-item').getAttribute('aria-checked')
+await page.locator('#track-options-menu-item').click()
+const tssBeforeToggle = await page.locator('#tss-indicators-toggle').isChecked()
+await page.locator('#tss-indicators-toggle').click()
+const tssAfterToggle = await page.locator('#tss-indicators-toggle').isChecked()
 await page.keyboard.press('Escape')
 let linkedScaleText
 let groupMenuText
@@ -207,6 +226,9 @@ if (visualDataTrackCount > 1) {
   clickAwaySelectionText = await page.locator('#track-context-menu').textContent()
   await page.keyboard.press('Escape')
 }
+const autoFitBeforeToggle = await page.locator('#fit-tracks-auto').getAttribute('aria-pressed')
+await page.locator('#fit-tracks-auto').click()
+const autoFitAfterToggle = await page.locator('#fit-tracks-auto').getAttribute('aria-pressed')
 
 const resizerBox = await page.locator('#pane-resizer').boundingBox()
 if (!resizerBox) throw new Error('Bottom pane resizer was not visible.')
@@ -249,7 +271,11 @@ await page.screenshot({ path: 'dist/smoke-dark-reference.png', fullPage: true })
 await page.keyboard.press('Escape')
 await page.reload({ waitUntil: 'networkidle' })
 const themeAfterReload = await page.locator('html').getAttribute('data-theme')
-const tssAfterReload = await page.locator('#tss-indicators-menu-item').getAttribute('aria-checked')
+await page.locator('#settings-menu-button').click()
+await page.locator('#track-options-menu-item').click()
+const tssAfterReload = await page.locator('#tss-indicators-toggle').isChecked()
+const autoFitAfterReload = await page.locator('#fit-tracks-auto').getAttribute('aria-pressed')
+await page.keyboard.press('Escape')
 const offlineTrackStatus = await page.locator('#track-status').textContent()
 const offlineLeftPixel = await page.locator('#genome-canvas').evaluate((element) => [...element.getContext('2d').getImageData(0, 10, 1, 1).data])
 await page.locator('#reference-file-input').setInputFiles({
@@ -263,18 +289,23 @@ await page.reload({ waitUntil: 'networkidle' })
 const customReferenceAfterReload = await page.locator('#reference-label').textContent()
 await browser.close()
 
-console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, geneDetailProbe, geneMenuText, geneInternalScrollChanged, initialBottomPaneHeight, initialBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, customReferenceBeforeReload, customReferenceAfterReload, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, geneInternalScrollChanged, initialBottomPaneHeight, initialBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, customReferenceBeforeReload, customReferenceAfterReload, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
 if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button' || helpMenuActiveElement !== 'help-menu-button') process.exitCode = 1
 if (!helpMenuVisible || !helpMenuText?.includes('Check for updates') || !aboutDialogVisible || !aboutVersionText?.startsWith('Version ') || !browserUpdateDisabled) process.exitCode = 1
 if (!trackContextVisible) process.exitCode = 1
 if (trackContextFocusedAction || groupContextFocusedAction) process.exitCode = 1
+if (initialTrackContextText?.toLocaleLowerCase().includes('current') || initialTrackContextText?.includes('Set visual group')) process.exitCode = 1
+if ((!firstTrackSpec || ['interval', 'interaction', 'alignment'].includes(firstTrackSpec.kind)) && currentIndicatorCount < 1) process.exitCode = 1
+if (firstTrackSpec?.kind === 'interaction' && (arcFlipOptionCount !== 1 || initialTrackContextText.includes('Arc base at'))) process.exitCode = 1
 if (searchSelectAll.start !== 0 || searchSelectAll.end !== searchSelectAll.length) process.exitCode = 1
-if (!zoomBeforeWheel?.includes('%') || !zoomAfterWheel?.includes('%') || zoomBeforeWheel === zoomAfterWheel || !zoomTitle?.includes('100% shows the full chromosome')) process.exitCode = 1
+if (Number(zoomBeforeWheel) === Number(zoomAfterWheel) || !zoomTitle?.includes('100% shows the full chromosome')) process.exitCode = 1
+if (!(Number(spanAfterSlider) < Number(spanBeforeSlider)) || !chromosomeMenuVisible || !chromosomeMenuOpenClass || !selectedChromosomeText) process.exitCode = 1
 if (!geneMenuText?.includes('Expanded transcript view')) process.exitCode = 1
-if (!settingsMenuText?.includes('Show TSS elbow arrows')) process.exitCode = 1
+if (!settingsMenuText?.includes('Track options')) process.exitCode = 1
 if (tssBeforeToggle === tssAfterToggle || tssAfterToggle !== tssAfterReload) process.exitCode = 1
+if (autoFitBeforeToggle === autoFitAfterToggle || autoFitAfterToggle !== autoFitAfterReload) process.exitCode = 1
 if (Math.abs(initialBottomPaneHeight - initialBottomCanvasHeight - 8) > 2) process.exitCode = 1
 if (testGene === 'RUNX1' && testGeneMode === 'expanded' && !geneInternalScrollChanged) process.exitCode = 1
 if (visualDataTrackCount > 1 && (!dragGhostVisible || dragCursor !== 'grabbing')) process.exitCode = 1

@@ -18,11 +18,13 @@ describe('GeRAFE storage migration', () => {
     const storage = new MemoryStorage()
     storage.setItem(LEGACY_STORAGE_KEYS.workspace, '{"schemaVersion":4}')
     storage.setItem(LEGACY_STORAGE_KEYS.theme, 'light')
+    storage.setItem(LEGACY_STORAGE_KEYS.upperPaneAutoFit, 'true')
 
     migrateLegacyStorage(storage)
 
     expect(storage.getItem(STORAGE_KEYS.workspace)).toBe('{"schemaVersion":4}')
     expect(storage.getItem(STORAGE_KEYS.theme)).toBe('light')
+    expect(storage.getItem(STORAGE_KEYS.upperPaneAutoFit)).toBe('true')
   })
 
   it('does not overwrite values already saved by GeRAFE', () => {
