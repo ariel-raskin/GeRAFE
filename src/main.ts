@@ -1,6 +1,6 @@
 import './style.css'
 import { ungzip } from 'pako-esm2'
-import { GenomeBrowser, heightScoreForPixels, trackPixelHeight } from './browser.ts'
+import { distributeFittedPixels, GenomeBrowser, heightScoreForPixels, trackPixelHeight } from './browser.ts'
 import { BedGraphSource, MAX_BEDGRAPH_BYTES } from './data/bedgraph.ts'
 import { gzipText } from './data/gzip.ts'
 import { BedSource } from './data/bed.ts'
@@ -307,6 +307,7 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
     updateZoomLevel(region)
     store.setViewport(activeReference.id, region)
     void ensureGeneDetails(region.chr)
+    if (bottomPaneAutoFit) requestAnimationFrame(fitBottomPaneToContent)
   },
   onPerformance(sample) {
     document.querySelector('#fps-value')!.textContent = sample.fps.toFixed(0)
@@ -431,6 +432,7 @@ document.querySelector<HTMLButtonElement>('#track-options-menu-item')!.addEventL
 tssIndicatorsToggle.addEventListener('change', () => {
   localStorage.setItem(TSS_INDICATORS_KEY, String(tssIndicatorsToggle.checked))
   browser.setShowTssIndicators(tssIndicatorsToggle.checked)
+  if (bottomPaneAutoFit) requestAnimationFrame(fitBottomPaneToContent)
 })
 strandedAutoLinkToggle.addEventListener('change', () => {
   localStorage.setItem(STRANDED_AUTO_LINK_KEY, String(strandedAutoLinkToggle.checked))
@@ -977,6 +979,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const signals = selected.filter((track) => track.kind === 'signal' || track.kind === 'stranded')
   const ordinarySignals = selected.filter((track) => track.kind === 'signal' && !track.signalStrand)
   const dataTracks = selected.filter((track) => track.kind !== 'genes')
+  const resizableTracks = selected.filter((track) => track.kind !== 'genes' || track.pane !== 'bottom')
   const one = selected.length === 1
   const pairable = selected.length === 2 && selected.every((track) => track.kind === 'signal') && canPairSelectedStrands(selected as TrackSpec[])
   const interactionGeneDetail = target.kind === 'interaction' && target.interactionFilterMode === 'genes'
@@ -991,7 +994,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     <div class="context-heading"><strong>${one ? escapeHtml(target.label) : `${selected.length} tracks selected`}</strong><span>${one ? (target.kind === 'genes' ? 'Gene annotation' : target.kind === 'interval' ? 'Interval track' : target.kind === 'interaction' ? 'BEDPE interactions' : target.kind === 'alignment' ? 'BAM alignments' : target.kind === 'stranded' ? 'Linked stranded signal' : target.signalStrand ? `${target.signalStrand === 'plus' ? 'Positive' : 'Negative'}-strand signal` : 'Signal track') : 'Shared actions'}</span></div>
     ${one ? action('rename', 'Rename…') : ''}
     ${one && target.kind === 'stranded' ? action('color-plus', 'Set positive-strand color…') + action('color-minus', 'Set negative-strand color…') : action('color', one ? 'Set color…' : 'Set selected colors…')}
-    ${action('height', one ? 'Set track height…' : 'Set selected heights…')}
+    ${resizableTracks.length ? action('height', one ? 'Set track height…' : 'Set selected heights…') : ''}
     ${action('group', 'Group selected')}
     ${selected.some((track) => track.displayGroupId) ? action('remove-from-group', selected.length > 1 ? 'Remove selected tracks from groups' : 'Remove from group') : ''}
     <span class="context-separator"></span>
@@ -1068,6 +1071,7 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
   const members = store.current.tracks.filter((track) => track.displayGroupId === groupId)
   const signalIds = members.filter((track) => track.kind === 'signal' || track.kind === 'stranded').map((track) => track.id)
   const hasOrdinaryColor = members.some((track) => track.kind !== 'stranded' && !(track.kind === 'signal' && track.signalStrand))
+  const hasLinkedStranded = members.some((track) => track.kind === 'stranded')
   const hasPlusColor = members.some((track) => track.kind === 'stranded' || (track.kind === 'signal' && track.signalStrand === 'plus'))
   const hasMinusColor = members.some((track) => track.kind === 'stranded' || (track.kind === 'signal' && track.signalStrand === 'minus'))
   const memberIds = new Set(members.map((track) => track.id))
@@ -1083,7 +1087,7 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
     ${action('group-open', 'Open tracks into group…')}
     ${action('group-add-selected', 'Add selected tracks', selectedOutside.length ? `${selectedOutside.length} selected` : '', selectedOutside.length === 0)}
     <span class="context-separator"></span>
-    ${hasOrdinaryColor ? action('group-color-ordinary', 'Set unstranded track color…') : ''}
+    ${hasOrdinaryColor ? action(hasLinkedStranded ? 'group-color-ordinary' : 'group-color-all', hasLinkedStranded ? 'Set unstranded track color…' : 'Set group track color…') : ''}
     ${hasPlusColor ? action('group-color-plus', 'Set positive-strand color…') : ''}
     ${hasMinusColor ? action('group-color-minus', 'Set negative-strand color…') : ''}
     ${action('group-height', 'Set group track height…')}
@@ -1285,6 +1289,7 @@ function handleGroupContextAction(command: string | undefined, groupId: string):
   const group = store.current.groups.find((item) => item.id === groupId)
   if (!group) return
   const memberIds = store.current.tracks.filter((track) => track.displayGroupId === groupId).map((track) => track.id)
+  const hasLinkedStranded = store.current.tracks.some((track) => track.displayGroupId === groupId && track.kind === 'stranded')
   const signalIds = store.current.tracks.filter((track) => (track.kind === 'signal' || track.kind === 'stranded') && track.displayGroupId === groupId).map((track) => track.id)
   if (command === 'group-select') {
     selectedTrackIds.clear()
@@ -1301,11 +1306,15 @@ function handleGroupContextAction(command: string | undefined, groupId: string):
     store.edit((draft) => addTracksToGroup(draft, groupId, addIds))
   }
   if (command?.startsWith('group-color-')) {
-    const channel = command.slice('group-color-'.length) as SignalScaleChannel
+    const requestedChannel = command.slice('group-color-'.length)
+    const channel = requestedChannel === 'all' ? undefined : requestedChannel as SignalScaleChannel
     pendingColorGroupId = groupId
     pendingColorChannel = channel
     const initial = channel === 'plus' ? group.positiveColor : channel === 'minus' ? group.negativeColor : group.color
-    openColorDialog(`Set ${channel === 'ordinary' ? 'unstranded track' : `${channel}-strand`} group color`, initial ?? '#6d55e0')
+    const title = channel === undefined ? 'Set group track color' : channel === 'ordinary'
+      ? hasLinkedStranded ? 'Set unstranded track group color' : 'Set group track color'
+      : `Set ${channel}-strand group color`
+    openColorDialog(title, initial ?? '#6d55e0')
   }
   if (command === 'group-height') setTrackHeights(memberIds)
   if (command === 'group-auto-linked') store.edit((draft) => {
@@ -1352,13 +1361,19 @@ function addTracksToGroup(draft: TrackDocument, groupId: string, trackIds: reado
 }
 
 function setTrackHeights(trackIds: readonly string[]): void {
-  const current = store.current.tracks.find((track) => trackIds.includes(track.id))?.height ?? 1
+  const resizableIds = store.current.tracks
+    .filter((track) => trackIds.includes(track.id) && (track.kind !== 'genes' || track.pane !== 'bottom'))
+    .map((track) => track.id)
+  if (!resizableIds.length) return
+  const current = store.current.tracks.find((track) => resizableIds.includes(track.id))?.height ?? 1
   const entered = window.prompt('Track height (1–100):', String(Math.round(current)))
   const height = Number(entered)
   if (!Number.isFinite(height) || height < 1 || height > 100) return
-  if (store.current.tracks.some((track) => trackIds.includes(track.id) && track.pane === 'bottom' && track.kind === 'genes')) bottomPaneAutoFit = true
   store.edit((draft) => {
-    for (const track of draft.tracks) if (trackIds.includes(track.id)) track.height = Math.round(height)
+    for (const track of draft.tracks) if (resizableIds.includes(track.id)) {
+      track.height = Math.round(height)
+      delete track.fittedHeight
+    }
   })
 }
 
@@ -1374,19 +1389,19 @@ function fitUpperTracks(announce = true): void {
   const fixedIntervals = upperTracks.filter((track) => track.kind === 'interval')
   const flexibleTracks = upperTracks.filter((track) => track.kind !== 'interval')
   const fixedHeight = fixedIntervals.reduce((sum, track) => sum + trackPixelHeight(track.kind, track.height), 0)
-  const availableHeight = Math.max(0, visibleHeight - fixedHeight)
-  const totalHeightUnits = flexibleTracks.reduce((sum, track) => sum + (track.kind === 'stranded' ? 2 : 1), 0)
-  const pixelsPerUnit = totalHeightUnits ? availableHeight / totalHeightUnits : 0
+  const availableHeight = Math.max(0, Math.floor(visibleHeight - fixedHeight))
+  const fittedPixels = distributeFittedPixels(
+    flexibleTracks.map((track) => browser.getFittedMinimumHeight(track)),
+    flexibleTracks.map((track) => track.kind === 'stranded' ? 2 : 1),
+    availableHeight,
+  )
+  const fittedById = new Map(flexibleTracks.map((track, index) => [track.id, fittedPixels[index]]))
   store.edit((draft) => {
     for (const track of draft.tracks) if (track.enabled && track.pane === 'main' && track.kind !== 'interval') {
-      const units = track.kind === 'stranded' ? 2 : 1
-      track.height = heightScoreForPixels(track.kind, pixelsPerUnit * units)
-    }
-    const fitted = draft.tracks.filter((track) => track.enabled && track.pane === 'main' && track.kind !== 'interval')
-    while (fixedHeight + fitted.reduce((sum, track) => sum + trackPixelHeight(track.kind, track.height), 0) > visibleHeight) {
-      const largest = fitted.filter((track) => track.height > 1).sort((a, b) => trackPixelHeight(b.kind, b.height) - trackPixelHeight(a.kind, a.height))[0]
-      if (!largest) break
-      largest.height -= 1
+      const pixels = fittedById.get(track.id)
+      if (!pixels) continue
+      track.height = heightScoreForPixels(track.kind, pixels)
+      track.fittedHeight = pixels
     }
   })
   mainTrackScroll.scrollTop = 0
@@ -1720,6 +1735,7 @@ async function importReference(file: File | undefined): Promise<void> {
 async function activateGeneTrack(reference: ReferenceGenome): Promise<void> {
   activeGeneSource = undefined
   browser.setGeneSource(undefined)
+  if (bottomPaneAutoFit) fitBottomPaneToContent()
   browser.setCytobands(undefined)
   if (reference.id !== 'hg38') return
   try {
@@ -1740,6 +1756,7 @@ async function activateGeneTrack(reference: ReferenceGenome): Promise<void> {
     activeGeneSource = genes
     browser.setCytobands(cytobands)
     browser.setGeneSource(genes, 'hg38 · RefSeq 2022-10-28')
+    if (bottomPaneAutoFit) fitBottomPaneToContent()
     await ensureGeneDetails(browser.getRegion().chr)
   } catch (error) {
     showToast(error instanceof Error ? error.message : String(error), true)
@@ -1770,6 +1787,7 @@ async function ensureGeneDetails(chromosome: string): Promise<void> {
     activeGeneSource.replaceChromosome(chromosome, details)
     hg38TranscriptLoaded.add(chromosome)
     browser.refresh()
+    if (bottomPaneAutoFit) fitBottomPaneToContent()
   } catch (error) {
     hg38TranscriptPromises.delete(chromosome)
     showToast(error instanceof Error ? error.message : String(error), true)
@@ -1902,16 +1920,13 @@ function zoomFromSlider(value: number): void {
 }
 
 function fitBottomPaneToContent(): void {
-  const contentHeight = store.current.tracks
-    .filter((track) => track.enabled && track.pane === 'bottom')
-    .reduce((height, track) => height + trackPixelHeight(track.kind, track.height), 0)
-  setBottomPaneHeight(contentHeight + 8)
+  setBottomPaneHeight(browser.getPaneContentHeight('bottom') + 1)
 }
 
 function setBottomPaneHeight(requested: number): void {
   const measuredHeight = document.querySelector<HTMLElement>('.browser-body')?.clientHeight ?? 0
   const bodyHeight = measuredHeight > 0 ? measuredHeight : window.innerHeight
-  const height = Math.max(86, Math.min(requested, bodyHeight * 0.78))
+  const height = Math.max(44, Math.min(requested, bodyHeight * 0.78))
   bottomPane.style.height = `${height}px`
   mainTrackScroll.style.paddingBottom = `${height}px`
 }

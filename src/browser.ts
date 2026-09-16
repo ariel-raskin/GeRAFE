@@ -16,6 +16,7 @@ const LABEL_CONTENT_LEFT = GROUP_RAIL_WIDTH + 8
 const LABEL_CONTENT_RIGHT = LABEL_WIDTH - 8
 const OVERSCAN_FACTOR = 1
 const GENE_CONTENT_PADDING = 6
+const MIN_BOTTOM_GENE_HEIGHT = 44
 
 export interface BrowserCallbacks {
   onRegionChange(region: Region): void
@@ -157,6 +158,22 @@ export class GenomeBrowser {
 
   getRegion(): Region {
     return { ...this.region }
+  }
+
+  getPaneContentHeight(pane: 'main' | 'bottom'): number {
+    return this.paneStackHeight(pane)
+  }
+
+  getFittedMinimumHeight(spec: TrackSpec): number {
+    const ctx = spec.pane === 'bottom' ? this.bottomContext : this.mainContext
+    ctx.save()
+    ctx.font = '600 12px Inter, system-ui, sans-serif'
+    const scaleLaneWidth = spec.kind === 'signal' || spec.kind === 'stranded' ? 48 : 0
+    const lineCount = wrappedLines(ctx, spec.label, trackLabelBounds(scaleLaneWidth).width, 2).length
+    ctx.restore()
+    if (spec.kind === 'stranded') return (lineCount > 1 ? 50 : 20) * 2
+    if (spec.kind === 'alignment' || spec.kind === 'genes') return lineCount > 1 ? 60 : 36
+    return lineCount > 1 ? (spec.kind === 'signal' ? 50 : 46) : 20
   }
 
   refresh(): void {
@@ -435,7 +452,7 @@ export class GenomeBrowser {
 
   private resizeCanvas(canvas: HTMLCanvasElement, context: CanvasRenderingContext2D, pane: 'main' | 'bottom'): void {
     const parentWidth = canvas.parentElement?.clientWidth ?? 900
-    const minimum = pane === 'main' ? TRACK_HEIGHT : 72
+    const minimum = pane === 'main' ? TRACK_HEIGHT : MIN_BOTTOM_GENE_HEIGHT
     const contentHeight = this.paneStackHeight(pane)
     const cssHeight = Math.max(minimum, contentHeight)
     const ratio = Math.min(window.devicePixelRatio || 1, 2)
@@ -504,7 +521,7 @@ export class GenomeBrowser {
         this.drawGroupRail(groupRun.id, groupRun.top, groupRun.bottom, palette)
         groupRun = undefined
       }
-      const rowHeight = trackSpecHeight(spec)
+      const rowHeight = this.trackHeight(spec)
       if (spec.kind === 'signal') {
         const runtime = this.runtimes.get(signalFeatureKey(spec.id, spec.signalStrand))!
         const domain = spec.scaleBindingId ? domains.get(spec.scaleBindingId) : undefined
@@ -1333,13 +1350,13 @@ export class GenomeBrowser {
     ctx.fillStyle = palette.ink
     ctx.font = '600 12px Inter, system-ui, sans-serif'
     const labelBounds = trackLabelBounds()
-    const labelLines = wrappedLines(ctx, spec.label || source?.name || 'Genes', labelBounds.width, Math.max(1, Math.floor((height - 34) / 15)))
-    const labelTop = top + Math.max(15, (height - 14 - labelLines.length * 15) / 2 + 4)
+    const labelLines = wrappedLines(ctx, spec.label || source?.name || 'Genes', labelBounds.width, Math.max(1, Math.min(2, Math.floor((height - 8) / 15))))
+    const labelTop = verticallyCenteredBaseline(top, height, labelLines.length, 15)
     drawCenteredTextLines(ctx, labelLines, labelBounds.center, labelTop, 15)
     ctx.fillStyle = palette.muted
-    ctx.font = '11px Inter, system-ui, sans-serif'
+    ctx.font = '8px Inter, system-ui, sans-serif'
     ctx.textAlign = 'center'
-    ctx.fillText(source ? this.geneAssembly : 'No annotation source for this reference', labelBounds.center, bottom - 9)
+    ctx.fillText(ellipsize(ctx, source ? this.geneAssembly : 'No annotation source for this reference', labelBounds.width), labelBounds.center, bottom - 5)
     ctx.textAlign = 'start'
     if (!source) return 0
 
@@ -1473,7 +1490,7 @@ export class GenomeBrowser {
   }
 
   private scrollGeneTrack(spec: TrackSpec, deltaY: number, width: number): boolean {
-    const height = trackSpecHeight(spec)
+    const height = this.trackHeight(spec)
     const context = spec.pane === 'main' ? this.mainContext : this.bottomContext
     const layout = this.buildGeneLayout(spec, width, context)
     const maxOffset = Math.max(0, layout.contentHeight - height)
@@ -1590,10 +1607,17 @@ export class GenomeBrowser {
     return this.document.tracks.filter((track) => track.enabled && track.pane === pane)
   }
 
+  private trackHeight(track: TrackSpec): number {
+    if (track.kind !== 'genes' || track.pane !== 'bottom') return trackSpecHeight(track)
+    const width = this.bottomCanvas.parentElement?.clientWidth || this.cssWidth(this.bottomCanvas)
+    const layoutHeight = this.geneSource ? this.buildGeneLayout(track, width, this.bottomContext).contentHeight : 0
+    return Math.max(MIN_BOTTOM_GENE_HEIGHT, Math.ceil(layoutHeight))
+  }
+
   private itemAt(_canvas: HTMLCanvasElement, pane: 'main' | 'bottom', x: number, y: number): { kind: 'track' | 'group'; id: string } | undefined {
     let top = 0
     for (const track of this.visibleSpecs(pane)) {
-      const bottom = top + trackSpecHeight(track)
+      const bottom = top + this.trackHeight(track)
       if (y >= top && y < bottom) return x < GROUP_RAIL_WIDTH && track.displayGroupId
         ? { kind: 'group', id: track.displayGroupId }
         : { kind: 'track', id: track.id }
@@ -1603,7 +1627,7 @@ export class GenomeBrowser {
   }
 
   private paneStackHeight(pane: 'main' | 'bottom'): number {
-    return this.visibleSpecs(pane).reduce((height, track) => height + trackSpecHeight(track), 0)
+    return this.visibleSpecs(pane).reduce((height, track) => height + this.trackHeight(track), 0)
   }
 
   private dropTarget(clientX: number, clientY: number, draggedIds: readonly string[]): { pane: 'main' | 'bottom'; insertionIndex: number } | undefined {
@@ -1625,7 +1649,7 @@ export class GenomeBrowser {
       let index = 0
       if (this.trackDrag?.withinGroupId) {
         for (const spec of specs) {
-          const rowHeight = trackSpecHeight(spec)
+          const rowHeight = this.trackHeight(spec)
           if (spec.displayGroupId === this.trackDrag.withinGroupId && localY < y + rowHeight / 2) return { pane: entry.pane, insertionIndex: index }
           y += rowHeight
           index += 1
@@ -1634,7 +1658,7 @@ export class GenomeBrowser {
         return undefined
       }
       for (const block of trackBlocks(specs)) {
-        const height = block.reduce((sum, track) => sum + trackSpecHeight(track), 0)
+        const height = block.reduce((sum, track) => sum + this.trackHeight(track), 0)
         if (localY < y + height / 2) return { pane: entry.pane, insertionIndex: index }
         y += height
         index += block.length
@@ -1649,9 +1673,9 @@ export class GenomeBrowser {
     const fullSpecs = this.visibleSpecs(pane)
     const remainingSpecs = fullSpecs.filter((track) => !movingIds.has(track.id))
     const trackAfterInsertion = remainingSpecs[insertionIndex]
-    if (!trackAfterInsertion) return fullSpecs.reduce((sum, track) => sum + trackSpecHeight(track), 0)
+    if (!trackAfterInsertion) return fullSpecs.reduce((sum, track) => sum + this.trackHeight(track), 0)
     const originalIndex = fullSpecs.findIndex((track) => track.id === trackAfterInsertion.id)
-    return fullSpecs.slice(0, originalIndex).reduce((sum, track) => sum + trackSpecHeight(track), 0)
+    return fullSpecs.slice(0, originalIndex).reduce((sum, track) => sum + this.trackHeight(track), 0)
   }
 
   private movingIds(trackIds: readonly string[]): Set<string> {
@@ -2112,6 +2136,7 @@ function cytobandColor(stain: string, palette: CanvasPalette): string {
 }
 
 function trackSpecHeight(track: TrackSpec): number {
+  if (Number.isFinite(track.fittedHeight)) return Math.max(20, Math.round(track.fittedHeight!))
   return trackPixelHeight(track.kind, track.height)
 }
 
@@ -2124,6 +2149,26 @@ export function trackPixelHeight(kind: TrackSpec['kind'], score: number): number
 export function heightScoreForPixels(kind: TrackSpec['kind'], pixels: number): number {
   const channelPixels = kind === 'stranded' ? pixels / 2 : pixels
   return Math.max(1, Math.min(100, Math.round((channelPixels - 16) / (kind === 'genes' ? 3.2 : 3.6))))
+}
+
+export function distributeFittedPixels(minimums: readonly number[], weights: readonly number[], total: number): number[] {
+  if (minimums.length !== weights.length) throw new Error('Fit minimums and weights must have the same length.')
+  const floors = minimums.map((value) => Math.max(1, Math.ceil(value)))
+  const minimumTotal = floors.reduce((sum, value) => sum + value, 0)
+  const target = Math.max(minimumTotal, Math.floor(total))
+  const extra = target - minimumTotal
+  const weightTotal = weights.reduce((sum, value) => sum + Math.max(0, value), 0)
+  if (!extra || !weightTotal) return floors
+  const shares = weights.map((weight) => extra * Math.max(0, weight) / weightTotal)
+  const result = floors.map((value, index) => value + Math.floor(shares[index]))
+  let remainder = target - result.reduce((sum, value) => sum + value, 0)
+  const order = shares.map((share, index) => ({ index, fraction: share - Math.floor(share) }))
+    .sort((a, b) => b.fraction - a.fraction || a.index - b.index)
+  for (let index = 0; remainder > 0; index = (index + 1) % order.length) {
+    result[order[index].index] += 1
+    remainder -= 1
+  }
+  return result
 }
 
 function trackBlocks(tracks: readonly TrackSpec[]): TrackSpec[][] {
