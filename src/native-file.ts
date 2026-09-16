@@ -13,6 +13,10 @@ interface NativeFileStat {
   lastModified: number
 }
 
+export interface PreparedBedGraphCache extends LocalFileDescriptor {
+  reused: boolean
+}
+
 export function isDesktopApp(): boolean {
   return isTauri()
 }
@@ -20,6 +24,11 @@ export function isDesktopApp(): boolean {
 export async function describeNativeFile(path: string): Promise<LocalFileDescriptor> {
   const stat = await invoke<NativeFileStat>('stat_file', { path })
   return { name: fileNameFromPath(path), path, size: stat.size, lastModified: stat.lastModified }
+}
+
+export async function prepareBedGraphCache(path: string): Promise<PreparedBedGraphCache> {
+  const cache = await invoke<Omit<PreparedBedGraphCache, 'name'>>('prepare_bedgraph_cache', { path })
+  return { ...cache, name: fileNameFromPath(cache.path) }
 }
 
 export class NativeFileHandle implements GenericFilehandle {

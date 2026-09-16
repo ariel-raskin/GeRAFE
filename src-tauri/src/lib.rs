@@ -7,6 +7,8 @@ use std::{
 };
 use tauri::Manager;
 
+mod bedgraph_cache;
+
 const LEGACY_APP_IDENTIFIER: &str = "org.stengelraskin.locusglide";
 const APP_IDENTIFIER: &str = "org.arielraskin.gerafe";
 
@@ -58,6 +60,17 @@ fn read_file_range(
         .map_err(|error| format!("Could not read {path}: {error}"))?;
     bytes.truncate(count);
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+#[tauri::command]
+async fn prepare_bedgraph_cache(
+    path: String,
+) -> Result<bedgraph_cache::PreparedBedGraphCache, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        bedgraph_cache::prepare(Path::new(&path), APP_IDENTIFIER)
+    })
+    .await
+    .map_err(|error| format!("The bedGraph indexer stopped unexpectedly: {error}"))?
 }
 
 fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
@@ -176,7 +189,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![stat_file, read_file_range])
+        .invoke_handler(tauri::generate_handler![
+            stat_file,
+            read_file_range,
+            prepare_bedgraph_cache
+        ])
         .run(tauri::generate_context!())
         .expect("error while running GeRAFE");
 }

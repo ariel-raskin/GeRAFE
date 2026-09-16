@@ -19,6 +19,10 @@ serde_json = "1"
 tauri-plugin-dialog = "2"
 dirs = "6"
 tauri-plugin-process = "2"
+bigtools = { version = "0.5.8", default-features = false, features = ["write"] }
+flate2 = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
