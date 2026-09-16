@@ -258,10 +258,11 @@ button, label { -webkit-tap-highlight-color: transparent; }
 .locus-form button { border: 0; padding: 0 14px; color: white; background: var(--accent); font-size: 11px; font-weight: 700; cursor: pointer; }
 
 .zoom-controls { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; letter-spacing: .04em; }
-.zoom-controls span { min-width: 42px; text-align: center; font-variant-numeric: tabular-nums; }
+.zoom-meter { --zoom-position: 0; position: relative; width: 46px; height: 18px; display: inline-block; }
+.zoom-meter::before { content: ''; position: absolute; inset: 8px 2px auto; height: 1px; background: var(--field-line); }
+.zoom-meter i { position: absolute; top: 4px; left: calc(2px + (100% - 12px) * var(--zoom-position)); width: 10px; height: 10px; border: 2px solid var(--accent); border-radius: 50%; background: var(--paper); box-shadow: 0 0 0 1px color-mix(in srgb, var(--canvas-bg) 70%, transparent); }
 .zoom-controls button { width: 30px; height: 30px; border: 0; border-radius: 5px; color: var(--button-ink); background: var(--button-muted); font-size: 16px; cursor: pointer; }
 .zoom-controls button:hover { color: white; background: var(--accent); }
-.app-version { padding: 0 3px; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .theme-toggle {
   width: 32px;
@@ -338,6 +339,8 @@ button, label { -webkit-tap-highlight-color: transparent; }
   pointer-events: none;
   user-select: none;
 }
+
+.corner-brand small { position: absolute; top: 3px; left: 7px; color: var(--muted); font-size: 8px; font-variant-numeric: tabular-nums; letter-spacing: .03em; }
 
 .corner-brand img {
   width: auto;

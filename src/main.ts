@@ -104,7 +104,6 @@ app.innerHTML = `
             <button class="menu-item" id="about-menu-item" type="button" role="menuitem"><span>About GeRAFE</span><small>v${__GERAFE_VERSION__}</small></button>
           </div>
         </div>
-        <span class="app-version" title="Installed GeRAFE version">v${__GERAFE_VERSION__}</span>
       </nav>
       <span class="toolbar-divider"></span>
       <div class="reference-control">
@@ -128,7 +127,7 @@ app.innerHTML = `
       <button class="fit-tracks-button" id="fit-tracks" type="button" title="Fit all upper tracks into the visible upper pane">Fit tracks</button>
       <div class="zoom-controls" aria-label="Zoom controls">
         <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
-        <span id="zoom-level" aria-live="polite">100%</span>
+        <span class="zoom-meter" id="zoom-level" role="status" aria-live="polite" title="Zoom level"><i></i></span>
         <button id="zoom-in" type="button" aria-label="Zoom in">＋</button>
       </div>
       <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch color theme"></button>
@@ -139,6 +138,7 @@ app.innerHTML = `
         <div class="genome-header-wrap">
           <canvas id="genome-header" aria-label="Chromosome ideogram and genomic coordinate ruler"></canvas>
           <div class="corner-brand" aria-label="GeRAFE">
+            <small title="Installed GeRAFE version">v${__GERAFE_VERSION__}</small>
             <img src="/gerafe-icon.png" alt="" />
             <strong>GeRAFE</strong>
           </div>
@@ -1723,7 +1723,9 @@ function updateZoomLevel(region: { chr: string; start: number; end: number }): v
   const span = Math.max(1, region.end - region.start)
   const percentage = chromosomeLength / span * 100
   const label = document.querySelector<HTMLElement>('#zoom-level')!
-  label.textContent = formatZoomPercentage(percentage)
+  const position = Math.max(0, Math.min(1, Math.log10(Math.max(100, percentage) / 100) / 5))
+  label.style.setProperty('--zoom-position', String(position))
+  label.setAttribute('aria-label', `Zoom: ${formatZoomPercentage(percentage)}`)
   label.title = `${percentage.toLocaleString(undefined, { maximumFractionDigits: 1 })}% zoom · ${formatBases(span)} visible · 100% shows the full chromosome`
 }
 

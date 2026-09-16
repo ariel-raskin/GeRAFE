@@ -331,6 +331,11 @@ export class GenomeBrowser {
     canvas.addEventListener('pointercancel', finishPointer)
     canvas.addEventListener('wheel', (event) => {
       if (!event.ctrlKey && !event.metaKey) {
+        if (event.deltaX !== 0) {
+          event.preventDefault()
+          this.panHorizontally(canvas, event.deltaX)
+          return
+        }
         const hit = this.itemAt(canvas, pane, event.offsetX, event.offsetY)
         const spec = hit?.kind === 'track' ? this.document.tracks.find((track) => track.id === hit.id && track.kind === 'genes') : undefined
         if (spec && this.scrollGeneTrack(spec, event.deltaY, this.cssWidth(canvas))) event.preventDefault()
@@ -383,7 +388,13 @@ export class GenomeBrowser {
     canvas.addEventListener('pointerup', finish)
     canvas.addEventListener('pointercancel', finish)
     canvas.addEventListener('wheel', (event) => {
-      if (!event.ctrlKey && !event.metaKey) return
+      if (!event.ctrlKey && !event.metaKey) {
+        if (event.deltaX !== 0) {
+          event.preventDefault()
+          this.panHorizontally(canvas, event.deltaX)
+        }
+        return
+      }
       event.preventDefault()
       this.zoom(Math.exp(event.deltaY * 0.0015), Math.max(0, Math.min(1, (event.offsetX - PLOT_LEFT) / Math.max(1, this.cssWidth(canvas) - PLOT_LEFT))))
     }, { passive: false })
@@ -391,6 +402,17 @@ export class GenomeBrowser {
       if (event.offsetX >= PLOT_LEFT) this.zoom(0.5, (event.offsetX - PLOT_LEFT) / Math.max(1, this.cssWidth(canvas) - PLOT_LEFT))
     })
     canvas.addEventListener('contextmenu', (event) => event.preventDefault())
+  }
+
+  private panHorizontally(canvas: HTMLCanvasElement, deltaPixels: number): void {
+    const chromosomeLength = this.chromosomes.get(this.region.chr)
+    if (!chromosomeLength) return
+    const plotWidth = Math.max(1, this.cssWidth(canvas) - PLOT_LEFT)
+    const shift = deltaPixels * (this.region.end - this.region.start) / plotWidth
+    this.region = clampRegion({ chr: this.region.chr, start: this.region.start + shift, end: this.region.end + shift }, chromosomeLength)
+    this.callbacks.onRegionChange(this.region)
+    this.scheduleRender()
+    if (!this.hasOverscanCoverage()) void this.ensureData()
   }
 
   private resize(): void {
@@ -720,7 +742,7 @@ export class GenomeBrowser {
     const maxLabelLines = track.status === 'error' || track.status === 'offline' ? 2 : Math.max(1, Math.floor((height - 20) / 15))
     const labelBounds = trackLabelBounds(scaleLaneWidth)
     const labelLayout = wrappedLines(ctx, spec.label, labelBounds.width, maxLabelLines)
-    const labelTop = top + Math.max(15, (height - labelLayout.length * 15) / 2 + 4)
+    const labelTop = verticallyCenteredBaseline(top, height, labelLayout.length, 15)
     drawCenteredTextLines(ctx, labelLayout, labelBounds.center, labelTop, 15)
     if (track.status === 'error' || track.status === 'offline') {
       ctx.fillStyle = palette.error
@@ -837,7 +859,7 @@ export class GenomeBrowser {
     ctx.font = '600 12px Inter, system-ui, sans-serif'
     const labelBounds = trackLabelBounds(scaleLaneWidth)
     const labelLayout = wrappedLines(ctx, spec.label, labelBounds.width, Math.max(1, Math.floor((height - 20) / 15)))
-    drawCenteredTextLines(ctx, labelLayout, labelBounds.center, top + Math.max(15, (height - labelLayout.length * 15) / 2 + 4), 15)
+    drawCenteredTextLines(ctx, labelLayout, labelBounds.center, verticallyCenteredBaseline(top, height, labelLayout.length, 15), 15)
 
     const chartTop = top + 12
     const chartBottom = bottom - 10
@@ -904,7 +926,7 @@ export class GenomeBrowser {
     ctx.font = '600 12px Inter, system-ui, sans-serif'
     const labelBounds = trackLabelBounds()
     const labelLines = wrappedLines(ctx, spec.label, labelBounds.width, Math.max(1, Math.floor((height - 16) / 15)))
-    drawCenteredTextLines(ctx, labelLines, labelBounds.center, top + Math.max(15, (height - labelLines.length * 15) / 2 + 4), 15)
+    drawCenteredTextLines(ctx, labelLines, labelBounds.center, verticallyCenteredBaseline(top, height, labelLines.length, 15), 15)
     if (track.status === 'error' || track.status === 'offline') {
       ctx.fillStyle = palette.error
       ctx.font = '11px Inter, system-ui, sans-serif'
@@ -1284,10 +1306,10 @@ export class GenomeBrowser {
         }
         const arrowHalfHeight = mode === 'squished' ? 0.8 : 1.7
         ctx.lineWidth = mode === 'squished' ? 0.75 : 1
-        for (const phasedX of phasedArrowPositions(rawTxX1, PLOT_LEFT + 3, Math.min(width, rawTxX2) - 4, 36, 14)) {
-          const arrowX = placeChevronOnExon(phasedX, exonPixels, 3)
-          if (arrowX === undefined) continue
-          ctx.strokeStyle = palette.geneTrack
+        for (const arrowX of phasedArrowPositions(rawTxX1, PLOT_LEFT + 3, Math.min(width, rawTxX2) - 4, 36, 14)) {
+          const exonOverlap = chevronExonOverlap(arrowX, exonPixels, 3)
+          if (exonOverlap === 'partial') continue
+          ctx.strokeStyle = exonOverlap === 'inside' ? palette.geneTrack : color
           ctx.beginPath()
           ctx.moveTo(arrowX - direction * 3, centerY - arrowHalfHeight)
           ctx.lineTo(arrowX + direction * 2, centerY)
@@ -1825,17 +1847,11 @@ export function phasedArrowPositions(rawFeatureStart: number, visibleStart: numb
 }
 
 /** Keeps directional chevrons fully inside a visible exon, or omits them when none can hold one. */
-export function placeChevronOnExon(position: number, exons: readonly { start: number; end: number }[], halfWidth: number): number | undefined {
-  const eligible = exons.filter((exon) => exon.end - exon.start >= halfWidth * 2)
-  if (!eligible.length) return undefined
-  const containing = eligible.find((exon) => position - halfWidth >= exon.start && position + halfWidth <= exon.end)
-  if (containing) return position
-  const nearest = eligible.reduce((best, exon) => {
-    const candidate = Math.max(exon.start + halfWidth, Math.min(exon.end - halfWidth, position))
-    const bestCandidate = Math.max(best.start + halfWidth, Math.min(best.end - halfWidth, position))
-    return Math.abs(candidate - position) < Math.abs(bestCandidate - position) ? exon : best
-  })
-  return Math.max(nearest.start + halfWidth, Math.min(nearest.end - halfWidth, position))
+export function chevronExonOverlap(position: number, exons: readonly { start: number; end: number }[], halfWidth: number): 'outside' | 'inside' | 'partial' {
+  const left = position - halfWidth
+  const right = position + halfWidth
+  if (exons.some((exon) => left >= exon.start && right <= exon.end)) return 'inside'
+  return exons.some((exon) => right > exon.start && left < exon.end) ? 'partial' : 'outside'
 }
 
 function cytobandColor(stain: string, palette: CanvasPalette): string {
@@ -1923,6 +1939,11 @@ function drawCenteredTextLines(ctx: CanvasRenderingContext2D, lines: readonly st
   ctx.textAlign = 'center'
   drawTextLines(ctx, lines, centerX, y, lineHeight)
   ctx.textAlign = 'start'
+}
+
+/** First baseline that visually centers a line block for the canvas text metrics used here. */
+export function verticallyCenteredBaseline(top: number, height: number, lineCount: number, lineHeight: number): number {
+  return top + height / 2 - (Math.max(1, lineCount) - 1) * lineHeight / 2 + 4
 }
 
 function trackLabelBounds(scaleLaneWidth = 0): { width: number; center: number } {

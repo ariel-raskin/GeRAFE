@@ -316,6 +316,12 @@ export function signalFeatureKey(trackId: string, strand?: SignalStrand): string
   return strand ? `${trackId}:${strand}` : trackId
 }
 
+/** Compact BED tracks start just tall enough for their wrapped left-card label. */
+export function intervalLabelHeightScore(label: string): number {
+  const estimatedLines = Math.max(1, Math.ceil(label.length / 20))
+  return Math.max(5, Math.min(20, Math.ceil(estimatedLines * 15 / 3.6)))
+}
+
 export function addIntervalTrack(
   draft: TrackDocument,
   source: TrackSourceSpec,
@@ -328,7 +334,7 @@ export function addIntervalTrack(
     label: options.label ?? source.name,
     color: options.color ?? TRACK_COLORS[draft.tracks.filter((item) => item.kind !== 'genes').length % TRACK_COLORS.length],
     enabled: true,
-    height: 32,
+    height: intervalLabelHeightScore(options.label ?? source.name),
     pane: 'main',
     intervalDisplayMode: 'collapsed',
   }

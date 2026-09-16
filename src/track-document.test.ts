@@ -8,6 +8,7 @@ import {
   computeScaleDomains,
   createTrackDocument,
   inferSignalStrand,
+  intervalLabelHeightScore,
   linkScales,
   normalizeTrackDocument,
   removeTrack,
@@ -90,6 +91,11 @@ describe('track document', () => {
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
     expect(restored.sources[0].files[0].path).toBe('C:\\data\\peaks.bed')
     expect(restored.tracks.find((track) => track.id === 'bed-track')).toMatchObject({ kind: 'interval', intervalDisplayMode: 'expanded' })
+  })
+
+  it('starts interval tracks at a compact label-fitting height', () => {
+    expect(intervalLabelHeightScore('peaks.bed')).toBe(5)
+    expect(intervalLabelHeightScore('a very long interval-track label that wraps')).toBeGreaterThan(5)
   })
 
   it('creates alignment tracks with independent BAM display and filtering options', () => {

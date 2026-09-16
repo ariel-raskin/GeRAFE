@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatCoordinate, formatScore, heightScoreForPixels, phasedArrowPositions, placeChevronOnExon, trackPixelHeight } from './browser.ts'
+import { chevronExonOverlap, formatCoordinate, formatScore, heightScoreForPixels, phasedArrowPositions, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 
 describe('gene direction arrow geometry', () => {
   it('keeps arrow phase attached to the transcript while panning', () => {
@@ -8,10 +8,10 @@ describe('gene direction arrow geometry', () => {
     expect(afterFivePixelPan.slice(0, before.length)).toEqual(before.map((position) => position - 5))
   })
 
-  it('keeps chevrons fully inside exons and moves nearby chevrons onto an exon', () => {
-    expect(placeChevronOnExon(112, [{ start: 100, end: 120 }], 3)).toBe(112)
-    expect(placeChevronOnExon(128, [{ start: 100, end: 120 }], 3)).toBe(117)
-    expect(placeChevronOnExon(50, [{ start: 100, end: 104 }], 3)).toBeUndefined()
+  it('allows chevrons outside exons but avoids partial exon overlap', () => {
+    expect(chevronExonOverlap(112, [{ start: 100, end: 120 }], 3)).toBe('inside')
+    expect(chevronExonOverlap(121, [{ start: 100, end: 120 }], 3)).toBe('partial')
+    expect(chevronExonOverlap(50, [{ start: 100, end: 104 }], 3)).toBe('outside')
   })
 })
 
@@ -31,5 +31,10 @@ describe('track layout and ruler formatting', () => {
   it('keeps large scale labels readable without exponential notation', () => {
     expect(formatScore(1_600)).toBe('1600')
     expect(formatScore(-12_345)).toBe('-12345')
+  })
+
+  it('centers text line blocks around a track midpoint', () => {
+    expect(verticallyCenteredBaseline(0, 100, 1, 15)).toBe(54)
+    expect(verticallyCenteredBaseline(0, 100, 2, 15)).toBe(46.5)
   })
 })
