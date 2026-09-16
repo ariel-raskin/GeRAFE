@@ -16,6 +16,7 @@ const LABEL_CONTENT_LEFT = GROUP_RAIL_WIDTH + 8
 const LABEL_CONTENT_RIGHT = LABEL_WIDTH - 8
 const OVERSCAN_FACTOR = 1
 const MATRIX_OVERSCAN_FACTOR = 0.5
+const MATRIX_INTENSITY_LEVELS = 64
 const GENE_CONTENT_PADDING = 6
 const MIN_BOTTOM_GENE_HEIGHT = 44
 
@@ -47,6 +48,11 @@ interface GeneRenderLayout {
   slotHeight: number
   contentHeight: number
   transcriptCount: number
+}
+
+interface MatrixPathCache {
+  signature: string
+  paths: Array<Path2D | undefined>
 }
 
 export class GenomeBrowser {
@@ -95,6 +101,8 @@ export class GenomeBrowser {
   private lastFrameTime = performance.now()
   private smoothedFps = 60
   private abortControllers = new Map<string, AbortController>()
+  private readonly matrixMaximumCache = new WeakMap<MatrixFeature, number>()
+  private readonly matrixPathCache = new WeakMap<MatrixFeature, MatrixPathCache>()
   private selectedTrackIds = new Set<string>()
   private geneScrollOffsets = new Map<string, number>()
   private showTssIndicators = true
@@ -1295,48 +1303,62 @@ export class GenomeBrowser {
       return 0
     }
 
-    const offDiagonalValues = matrix.cells
-      .filter((cell) => cell.bin2 - cell.bin1 > matrix.resolution * 2)
-      .map((cell) => cell.value)
-      .filter((value) => Number.isFinite(value) && value > 0)
-    const values = (offDiagonalValues.length >= 20 ? offDiagonalValues : matrix.cells.map((cell) => cell.value).filter((value) => Number.isFinite(value) && value > 0)).sort((a, b) => a - b)
-    const automaticMaximum = values[Math.min(values.length - 1, Math.floor(values.length * 0.99))] ?? 1
+    let automaticMaximum = this.matrixMaximumCache.get(matrix)
+    if (automaticMaximum === undefined) {
+      automaticMaximum = matrixAutomaticMaximum(matrix)
+      this.matrixMaximumCache.set(matrix, automaticMaximum)
+    }
     const maximum = Math.max(Number.EPSILON, spec.matrixScaleMax ?? automaticMaximum)
-    const transform = spec.matrixTransform === 'linear'
-      ? (value: number) => value / maximum
-      : (value: number) => Math.log1p(value) / Math.log1p(maximum)
     const scale = plotWidth / Math.max(1, this.region.end - this.region.start)
     const direction = spec.matrixDirection === 'down' ? 1 : -1
     const baseline = direction > 0 ? top + 3 : bottom - 3
-    const halfCell = Math.max(0.55, matrix.resolution * scale / 2)
     const matrixPalette = spec.matrixPalette ?? 'monochrome'
+    const transformMode = spec.matrixTransform === 'linear' ? 'linear' : 'log'
+    const signature = `${maximum}:${transformMode}:${scale}`
+    let cachedPaths = this.matrixPathCache.get(matrix)
+    if (!cachedPaths || cachedPaths.signature !== signature) {
+      const transform = transformMode === 'linear'
+        ? (value: number) => value / maximum
+        : (value: number) => Math.log1p(value) / Math.log1p(maximum)
+      const paths: Array<Path2D | undefined> = new Array(MATRIX_INTENSITY_LEVELS)
+      const halfCellBases = Math.max(matrix.resolution / 2, 0.55 / scale)
+      for (const cell of matrix.cells) {
+        if (!(cell.value > 0)) continue
+        const intensity = Math.max(0, Math.min(1, transform(cell.value)))
+        if (!Number.isFinite(intensity) || intensity <= 0) continue
+        const bucket = matrixIntensityBucket(intensity)
+        const path = paths[bucket] ??= new Path2D()
+        const firstCenter = cell.bin1 + matrix.resolution / 2
+        const secondCenter = cell.bin2 + matrix.resolution / 2
+        const x = (firstCenter + secondCenter) / 2
+        const y = (secondCenter - firstCenter) / 2
+        path.moveTo(x - halfCellBases, y)
+        path.lineTo(x, y + halfCellBases)
+        path.lineTo(x + halfCellBases, y)
+        path.lineTo(x, y - halfCellBases)
+        path.closePath()
+      }
+      cachedPaths = { signature, paths }
+      this.matrixPathCache.set(matrix, cachedPaths)
+    }
     ctx.save()
     ctx.beginPath(); ctx.rect(PLOT_LEFT, top + 1, plotWidth, height - 2); ctx.clip()
-    for (const cell of matrix.cells) {
-      if (!(cell.value > 0) || cell.bin2 + matrix.resolution <= this.region.start || cell.bin1 >= this.region.end) continue
-      const firstCenter = cell.bin1 + matrix.resolution / 2
-      const secondCenter = cell.bin2 + matrix.resolution / 2
-      const x = PLOT_LEFT + (((firstCenter + secondCenter) / 2) - this.region.start) * scale
-      const y = baseline + direction * ((secondCenter - firstCenter) / 2) * scale
-      if (x + halfCell < PLOT_LEFT || x - halfCell > width || y + halfCell < top || y - halfCell > bottom) continue
-      const intensity = Math.max(0, Math.min(1, transform(cell.value)))
-      if (!Number.isFinite(intensity) || intensity <= 0) continue
+    ctx.translate(PLOT_LEFT - this.region.start * scale, baseline)
+    ctx.scale(scale, direction * scale)
+    for (let bucket = 0; bucket < cachedPaths.paths.length; bucket += 1) {
+      const path = cachedPaths.paths[bucket]
+      if (!path) continue
+      const intensity = matrixBucketIntensity(bucket)
       const warmPalette = matrixPalette !== 'monochrome'
       ctx.fillStyle = matrixPalette === 'warm-dark' ? matrixDarkWarmPaletteColor(intensity)
         : warmPalette ? matrixWarmPaletteColor(intensity) : spec.color
       ctx.globalAlpha = warmPalette ? 1 : 0.08 + Math.pow(intensity, 0.72) * 0.92
-      ctx.beginPath()
-      ctx.moveTo(x - halfCell, y)
-      ctx.lineTo(x, y + halfCell)
-      ctx.lineTo(x + halfCell, y)
-      ctx.lineTo(x, y - halfCell)
-      ctx.closePath()
-      ctx.fill()
+      ctx.fill(path)
     }
+    ctx.restore()
     ctx.globalAlpha = 1
     ctx.strokeStyle = palette.axisLine
     ctx.beginPath(); ctx.moveTo(PLOT_LEFT, baseline + 0.5); ctx.lineTo(width, baseline + 0.5); ctx.stroke()
-    ctx.restore()
     return matrix.cells.length
   }
 
@@ -2191,6 +2213,26 @@ export function matrixDarkWarmPaletteColor(intensity: number): string {
   const mix = (value - lower.at) / Math.max(Number.EPSILON, upper.at - lower.at)
   const channels = lower.color.map((channel, index) => Math.round(channel + (upper.color[index] - channel) * mix))
   return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
+}
+
+export function matrixAutomaticMaximum(matrix: MatrixFeature): number {
+  const offDiagonalValues = matrix.cells
+    .filter((cell) => cell.bin2 - cell.bin1 > matrix.resolution * 2)
+    .map((cell) => cell.value)
+    .filter((value) => Number.isFinite(value) && value > 0)
+  const values = (offDiagonalValues.length >= 20
+    ? offDiagonalValues
+    : matrix.cells.map((cell) => cell.value).filter((value) => Number.isFinite(value) && value > 0))
+    .sort((a, b) => a - b)
+  return values[Math.min(values.length - 1, Math.floor(values.length * 0.99))] ?? 1
+}
+
+export function matrixIntensityBucket(intensity: number): number {
+  return Math.round(Math.max(0, Math.min(1, intensity)) * (MATRIX_INTENSITY_LEVELS - 1))
+}
+
+export function matrixBucketIntensity(bucket: number): number {
+  return Math.max(0, Math.min(MATRIX_INTENSITY_LEVELS - 1, bucket)) / (MATRIX_INTENSITY_LEVELS - 1)
 }
 
 export function matrixMaximumDistance(trackHeight: number, genomicSpan: number, plotWidth: number): number {
