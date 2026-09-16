@@ -169,11 +169,7 @@ fn hic_metadata(path: &Path) -> Result<MatrixMetadata, String> {
     }
     normalizations.sort_by_key(|value| normalization_order(value));
     normalizations.dedup();
-    let default_normalization = ["KR", "VC_SQRT", "VC", "NONE"]
-        .iter()
-        .find(|wanted| normalizations.iter().any(|value| value == **wanted))
-        .unwrap_or(&"NONE")
-        .to_string();
+    let default_normalization = "NONE".to_string();
     Ok(MatrixMetadata {
         format: "hic".into(),
         chromosomes: reader
@@ -234,16 +230,7 @@ fn metadata_from_cooler(
     normalizations.sort_by_key(|name| cooler_normalization_order(name));
     normalizations.dedup();
     normalizations.push("raw".into());
-    let default_normalization = normalizations
-        .iter()
-        .find(|name| name.eq_ignore_ascii_case("weight"))
-        .or_else(|| {
-            normalizations
-                .iter()
-                .find(|name| name.eq_ignore_ascii_case("KR"))
-        })
-        .unwrap_or_else(|| normalizations.last().expect("raw was appended"))
-        .clone();
+    let default_normalization = "raw".to_string();
     let names = read_strings(file, &cooler_path(prefix, "chroms/name"))?;
     let lengths = read_u64(file, &cooler_path(prefix, "chroms/length"))?;
     if names.len() != lengths.len() {
@@ -668,6 +655,10 @@ mod tests {
             };
             let metadata = metadata(Path::new(&path), format)
                 .unwrap_or_else(|error| panic!("{variable} metadata failed: {error}"));
+            assert_eq!(
+                metadata.default_normalization,
+                if format == "hic" { "NONE" } else { "raw" }
+            );
             assert!(
                 !metadata.resolutions.is_empty(),
                 "{variable} has no resolutions"
