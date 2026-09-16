@@ -962,7 +962,7 @@ export class GenomeBrowser {
         while (rawX1 <= (laneEnds[lane] ?? Number.NEGATIVE_INFINITY)) lane += 1
         laneEnds[lane] = rawX2 + labelWidth + 5
       }
-      const centerY = top + 9 + lane * rowHeight
+      const centerY = mode === 'collapsed' ? top + height / 2 : top + 9 + lane * rowHeight
       if (centerY + featureHeight > bottom) continue
       const color = feature.itemRgb ?? spec.color
       ctx.strokeStyle = color

@@ -900,6 +900,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     ${one && target.kind === 'stranded' ? action('color-plus', 'Set positive-strand color…') + action('color-minus', 'Set negative-strand color…') : action('color', one ? 'Set color…' : 'Set selected colors…')}
     ${action('height', one ? 'Set track height…' : 'Set selected heights…')}
     ${action('group', selected.length > 1 ? 'Group selected…' : 'Set visual group…')}
+    ${selected.some((track) => track.displayGroupId) ? action('remove-from-group', selected.length > 1 ? 'Remove selected tracks from groups' : 'Remove from group') : ''}
     <span class="context-separator"></span>
     ${signals.length ? action('scale-auto', 'Scale automatically', 'visible window') : ''}
     ${ordinarySignals.length ? action('prevent-negative', 'Prevent negative values', ordinarySignals.every((track) => track.allowNegativeValues === false) ? 'current' : '') : ''}
@@ -1041,6 +1042,10 @@ function handleTrackContextAction(event: MouseEvent): void {
     const label = window.prompt('Visual group name (leave blank to remove grouping):', current)
     if (label !== null) store.edit((draft) => assignDisplayGroup(draft, ids, label, { autoScale: savedGroupAutoscale() }))
   }
+  if (command === 'remove-from-group') store.edit((draft) => {
+    const groupedIds = draft.tracks.filter((track) => ids.includes(track.id) && track.displayGroupId).map((track) => track.id)
+    assignDisplayGroup(draft, groupedIds, '')
+  })
   if (command === 'scale-auto') store.edit((draft) => {
     const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
     for (const scale of draft.scales) if (scaleIds.has(scale.id)) scale.mode = 'auto-visible'
@@ -1237,9 +1242,7 @@ function fitUpperTracks(): void {
   store.edit((draft) => {
     for (const track of draft.tracks) if (track.enabled && track.pane === 'main') {
       const units = track.kind === 'stranded' ? 2 : 1
-      let score = heightScoreForPixels(track.kind, pixelsPerUnit * units)
-      while (score > 1 && trackPixelHeight(track.kind, score) > pixelsPerUnit * units) score -= 1
-      track.height = score
+      track.height = heightScoreForPixels(track.kind, pixelsPerUnit * units)
     }
     const fitted = draft.tracks.filter((track) => track.enabled && track.pane === 'main')
     while (fitted.reduce((sum, track) => sum + trackPixelHeight(track.kind, track.height), 0) > visibleHeight) {
