@@ -32,7 +32,7 @@ The dominant variable was the number of matrix cells fetched and painted, not th
 
 ## Current baseline
 
-The current baseline uses the source-selected matrix resolution, a bounded overscan window, and direct per-cell canvas drawing. Automatic matrix depth is fixed at 20% of the visible genomic span and is independent of track height. Users can explicitly request the full visible span or a fixed genomic depth when the additional contacts are useful. Changes to this path should be compared against the post-PR-#61 behavior before merging.
+The current baseline uses the source-selected matrix resolution, a bounded overscan window, and direct per-cell canvas drawing. New tracks default to the full visible genomic span. The optional automatic-depth mode is fixed at 20% of the visible span, and fixed genomic-depth presets are also available. Every mode is independent of track height. Changes to this path should be compared against the post-PR-#61 behavior before merging.
 
 ## Scale and palette model
 
@@ -46,7 +46,7 @@ The matrix settings dialog supports three intensity-range modes:
 
 Automatic modes can exclude a configurable number of diagonals, including the main diagonal, from scale calculation. This prevents the strong contact diagonal from flattening weaker off-diagonal structure without hiding those cells from the plot. The default of three preserves the earlier exclusion of the main and first two adjacent diagonals. A manual z-min applies to all three modes. Linear and log intensity, score-direction reversal, and preset or custom color stops remain presentation-only. Custom palettes support two to eight ordered colors.
 
-The warm preset follows the earlier figure-rendering workflow: most of the scale is assigned to the light/yellow/red colors and a configurable high-score tail transitions smoothly into the final dark color. `matrixHighColorStart` records where that final transition begins, from 50% through 99% of the normalized scale. This makes a narrow set of outliers dark without flattening the visible differences among the rest of the contacts.
+Palette stops are evenly spaced across the resolved intensity range. The warm preset follows the earlier figure-rendering workflow with light, yellow, orange, red, and deep-red stops. Robust percentile or fixed-range scaling now provides the explicit control for preventing a small number of outliers from flattening visible contact differences; the earlier high-color-threshold palette warp has been retired.
 
 Matrix tracks in a linked visual group share the largest automatic or fixed z-max calculated for the matrix members of that group. Independent groups retain a separate z-max for every matrix. Applying matrix settings to a matrix-only group also applies z-min and automatic-scale parameters consistently to every member. This is intentionally separate from the matrix normalization stored for each source. Mixed groups may contain other track kinds, but linked matrix scaling is calculated only from their matrix members.
 

@@ -173,7 +173,7 @@ describe('track document', () => {
       matrixDirection: 'down', matrixResolution: 10_000, matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42,
       matrixScaleMode: 'fixed', matrixScaleMin: 2, matrixScalePercentile: 0.98, matrixIgnoreDiagonals: 4,
       matrixDepthMode: 'fixed', matrixMaxDistance: 250_000,
-      matrixPalette: 'custom', matrixPaletteColors: ['#ffffff', '#ff0000', '#111111'], matrixHighColorStart: 0.94, matrixPaletteReversed: true,
+      matrixPalette: 'custom', matrixPaletteColors: ['#ffffff', '#ff0000', '#111111'], matrixPaletteReversed: true,
     })
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
     expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
@@ -182,7 +182,7 @@ describe('track document', () => {
       kind: 'matrix', matrixDirection: 'down', matrixResolution: 10_000,
       matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMode: 'fixed', matrixScaleMin: 2, matrixScaleMax: 42,
       matrixScalePercentile: 0.98, matrixIgnoreDiagonals: 4, matrixDepthMode: 'fixed', matrixMaxDistance: 250_000, matrixPalette: 'custom',
-      matrixPaletteColors: ['#ffffff', '#ff0000', '#111111'], matrixHighColorStart: 0.94, matrixPaletteReversed: true,
+      matrixPaletteColors: ['#ffffff', '#ff0000', '#111111'], matrixPaletteReversed: true,
     })
   })
 
@@ -194,12 +194,12 @@ describe('track document', () => {
     expect(normalizeTrackDocument(legacy).tracks[0]).toMatchObject({ matrixPalette: 'blue-black' })
   })
 
-  it('migrates version 14 matrices to the default high-color transition', () => {
+  it('drops the retired high-color threshold from older matrix workspaces', () => {
     const legacy = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 1_000_000 }) as any
     const track = addMatrixTrack(legacy, { id: 'matrix-source', name: 'contacts.cool', format: 'cool', files: [] })
     legacy.schemaVersion = 14
-    delete track.matrixHighColorStart
-    expect(normalizeTrackDocument(legacy).tracks[0]).toMatchObject({ matrixHighColorStart: 0.9 })
+    ;(track as any).matrixHighColorStart = 0.94
+    expect((normalizeTrackDocument(legacy).tracks[0] as any).matrixHighColorStart).toBeUndefined()
   })
 
   it('migrates version 15 matrices to robust scaling and height-independent automatic depth', () => {
@@ -213,7 +213,7 @@ describe('track document', () => {
     delete track.matrixDepthMode
     expect(normalizeTrackDocument(legacy).tracks[0]).toMatchObject({
       matrixScaleMode: 'percentile', matrixScaleMin: 0, matrixScalePercentile: 0.99,
-      matrixIgnoreDiagonals: 3, matrixDepthMode: 'auto',
+      matrixIgnoreDiagonals: 3, matrixDepthMode: 'full',
     })
   })
 
@@ -221,8 +221,8 @@ describe('track document', () => {
     const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 1_000_000 })
     const cooler = addMatrixTrack(document, { id: 'cool', name: 'contacts.cool', format: 'cool', files: [] })
     const hic = addMatrixTrack(document, { id: 'hic', name: 'contacts.hic', format: 'hic', files: [] }, { defaultNormalization: 'NONE' })
-    expect(cooler).toMatchObject({ matrixNormalization: 'raw', matrixPalette: 'warm' })
-    expect(hic).toMatchObject({ matrixNormalization: 'NONE', matrixPalette: 'warm' })
+    expect(cooler).toMatchObject({ matrixNormalization: 'raw', matrixPalette: 'warm', matrixDepthMode: 'full' })
+    expect(hic).toMatchObject({ matrixNormalization: 'NONE', matrixPalette: 'warm', matrixDepthMode: 'full' })
   })
 
   it('migrates version 10 matrix tracks to the monochrome palette', () => {

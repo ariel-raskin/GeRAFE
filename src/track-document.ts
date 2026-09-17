@@ -86,8 +86,6 @@ export interface TrackSpec {
   matrixPalette?: MatrixPalette
   /** Reverses which end of the selected palette represents the highest score. */
   matrixPaletteReversed?: boolean
-  /** Palette position where the smooth transition into the final color begins. */
-  matrixHighColorStart?: number
   /** Ordered low-to-high colors for the custom matrix palette. */
   matrixPaletteColors?: string[]
   alignmentDisplayMode?: 'collapsed' | 'expanded' | 'squished'
@@ -422,9 +420,8 @@ export function addMatrixTrack(
     matrixScaleMin: 0,
     matrixScalePercentile: 0.99,
     matrixIgnoreDiagonals: 3,
-    matrixDepthMode: 'auto',
+    matrixDepthMode: 'full',
     matrixPalette: 'warm',
-    matrixHighColorStart: 0.9,
   }
   draft.sources.push(source)
   const bottomIndex = draft.tracks.findIndex((item) => item.pane === 'bottom')
@@ -724,7 +721,7 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
       : track.kind === 'matrix' ? 3 : undefined,
     matrixDepthMode: track.kind === 'matrix' && (track.matrixDepthMode === 'auto' || track.matrixDepthMode === 'full' || track.matrixDepthMode === 'fixed')
       ? track.matrixDepthMode
-      : track.kind === 'matrix' ? 'auto' as const : undefined,
+      : track.kind === 'matrix' ? 'full' as const : undefined,
     matrixMaxDistance: track.kind === 'matrix' && typeof track.matrixMaxDistance === 'number' && Number.isSafeInteger(track.matrixMaxDistance) && track.matrixMaxDistance > 0
       ? track.matrixMaxDistance
       : undefined,
@@ -732,9 +729,6 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
       ? (track.matrixPalette as string) === 'warm-dark' ? 'blue-black' : track.matrixPalette
       : track.kind === 'matrix' ? 'monochrome' as const : undefined,
     matrixPaletteReversed: track.kind === 'matrix' && track.matrixPaletteReversed === true ? true : undefined,
-    matrixHighColorStart: track.kind === 'matrix' && typeof track.matrixHighColorStart === 'number' && Number.isFinite(track.matrixHighColorStart)
-      ? Math.max(0.5, Math.min(0.99, track.matrixHighColorStart))
-      : track.kind === 'matrix' ? 0.9 : undefined,
     matrixPaletteColors: track.kind === 'matrix' && Array.isArray(track.matrixPaletteColors)
       ? track.matrixPaletteColors.filter((color: unknown): color is string => typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color)).slice(0, 8)
       : undefined,

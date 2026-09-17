@@ -1334,13 +1334,8 @@ export class GenomeBrowser {
     ctx.textAlign = 'center'
     const resolution = matrix?.resolution ?? spec.matrixResolution
     const normalization = spec.matrixNormalization ?? 'raw'
-    const scaleMode = spec.matrixScaleMode ?? (spec.matrixScaleMax === undefined ? 'percentile' : 'fixed')
-    const scaleLabel = scaleMode === 'fixed'
-      ? `z ${formatScore(minimum)}–${formatScore(maximum)}`
-      : scaleMode === 'maximum' ? 'auto max' : `auto p${formatPercentile(spec.matrixScalePercentile ?? 0.99)}`
-    const depthLabel = spec.matrixDepthMode === 'full' ? 'full depth'
-      : spec.matrixDepthMode === 'fixed' && spec.matrixMaxDistance ? `${formatBases(spec.matrixMaxDistance)} depth` : 'auto depth'
-    ctx.fillText(`${resolution ? formatBases(resolution) : 'auto'} · ${normalization} · ${spec.matrixTransform === 'linear' ? 'linear' : 'log'} · ${scaleLabel} · ${depthLabel}`, labelBounds.center, Math.min(bottom - 7, labelTop + labelLines.length * 15 + 3))
+    const metadata = ellipsize(ctx, `${resolution ? formatBases(resolution) : 'auto resolution'} · ${normalization}`, labelBounds.width)
+    ctx.fillText(metadata, labelBounds.center, Math.min(bottom - 7, labelTop + labelLines.length * 15 + 3))
     ctx.textAlign = 'start'
     if (track.status === 'error' || track.status === 'offline') {
       ctx.fillStyle = palette.error
@@ -1892,7 +1887,7 @@ export class GenomeBrowser {
       } : spec?.kind === 'matrix' ? {
         matrixResolution: spec.matrixResolution,
         matrixNormalization: spec.matrixNormalization,
-        matrixMaxDistance: matrixQueryMaximumDistance(span, spec.matrixDepthMode ?? 'auto', spec.matrixMaxDistance),
+        matrixMaxDistance: matrixQueryMaximumDistance(span, spec.matrixDepthMode ?? 'full', spec.matrixMaxDistance),
       } : undefined
       const queryPixelWidth = plotWidth * (1 + overscanFactor * 2)
       const features = await source.getFeatures(queryRegion, queryPixelWidth, controller.signal, options)
@@ -2215,7 +2210,7 @@ export function placeCollapsedGeneLabels(
   })
 }
 
-export const MATRIX_WARM_COLORS = ['#fffdf2', '#fff7bc', '#fdae61', '#d7191c', '#111111'] as const
+export const MATRIX_WARM_COLORS = ['#fffdf2', '#fff7bc', '#fdae61', '#d7191c', '#700d1a'] as const
 export const MATRIX_BLUE_BLACK_COLORS = ['#daf0ff', '#4d97cf', '#14437a', '#040609'] as const
 const matrixAutomaticMaximumCache = new WeakMap<MatrixFeature, Map<string, number>>()
 
@@ -2274,16 +2269,14 @@ export function resolveMatrixMaximums(
   return resolved
 }
 
-/** Interpolates palette colors while reserving a configurable high-score tail for the final color. */
-export function matrixGradientColor(colors: readonly string[], intensity: number, highColorStart = 0.9): string {
+/** Interpolates evenly spaced low-to-high palette colors. */
+export function matrixGradientColor(colors: readonly string[], intensity: number): string {
   const valid = colors.filter((color) => /^#[0-9a-f]{6}$/i.test(color))
   if (!valid.length) return '#000000'
   if (valid.length === 1) return valid[0].toLocaleLowerCase()
   const value = Math.max(0, Math.min(1, intensity))
-  const tailStart = Math.max(0.5, Math.min(0.99, highColorStart))
-  const penultimateIndex = valid.length - 2
   const stops = valid.map((color, index) => ({
-    at: index === valid.length - 1 ? 1 : penultimateIndex === 0 ? 0 : tailStart * index / penultimateIndex,
+    at: index / (valid.length - 1),
     color,
   }))
   const upperIndex = Math.max(1, stops.findIndex((stop) => value <= stop.at))
@@ -2297,13 +2290,13 @@ export function matrixGradientColor(colors: readonly string[], intensity: number
 }
 
 /** Low-to-high publication palette adapted from the earlier figure workflow. */
-export function matrixWarmPaletteColor(intensity: number, highColorStart = 0.9): string {
-  return matrixGradientColor(MATRIX_WARM_COLORS, intensity, highColorStart)
+export function matrixWarmPaletteColor(intensity: number): string {
+  return matrixGradientColor(MATRIX_WARM_COLORS, intensity)
 }
 
 /** Dark-mode contact palette: low scores are light blue and high scores approach black. */
-export function matrixBlueBlackPaletteColor(intensity: number, highColorStart = 0.9): string {
-  return matrixGradientColor(MATRIX_BLUE_BLACK_COLORS, intensity, highColorStart)
+export function matrixBlueBlackPaletteColor(intensity: number): string {
+  return matrixGradientColor(MATRIX_BLUE_BLACK_COLORS, intensity)
 }
 
 /** Legend values at the high, visual midpoint, and low ends of a matrix scale. */
@@ -2333,11 +2326,10 @@ export function matrixPaletteIntensity(scoreIntensity: number, reversed: boolean
 
 function matrixPaletteStyle(spec: TrackSpec, intensity: number): { color: string; alpha: number } {
   const value = Math.max(0, Math.min(1, intensity))
-  const highColorStart = spec.matrixHighColorStart ?? 0.9
-  if (spec.matrixPalette === 'warm') return { color: matrixWarmPaletteColor(value, highColorStart), alpha: 1 }
-  if (spec.matrixPalette === 'blue-black') return { color: matrixBlueBlackPaletteColor(value, highColorStart), alpha: 1 }
+  if (spec.matrixPalette === 'warm') return { color: matrixWarmPaletteColor(value), alpha: 1 }
+  if (spec.matrixPalette === 'blue-black') return { color: matrixBlueBlackPaletteColor(value), alpha: 1 }
   if (spec.matrixPalette === 'custom' && (spec.matrixPaletteColors?.length ?? 0) >= 2) {
-    return { color: matrixGradientColor(spec.matrixPaletteColors!, value, highColorStart), alpha: 1 }
+    return { color: matrixGradientColor(spec.matrixPaletteColors!, value), alpha: 1 }
   }
   return { color: spec.color, alpha: 0.08 + Math.pow(value, 0.72) * 0.92 }
 }
@@ -2678,10 +2670,6 @@ export function formatCoordinate(value: number, step = 1, referenceValue = value
 export function formatScore(value: number): string {
   if (Math.abs(value) >= 1000) return Math.round(value).toString()
   return Number(value.toPrecision(3)).toString()
-}
-
-function formatPercentile(value: number): string {
-  return Number((Math.max(0, Math.min(1, value)) * 100).toFixed(1)).toString()
 }
 
 /** Pixel positions whose phase remains tied to the feature start as the viewport pans. */

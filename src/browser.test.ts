@@ -149,15 +149,15 @@ describe('contact-matrix rendering helpers', () => {
     expect(matrixAutomaticMaximum(matrix, 0.5, 3)).toBe(2)
   })
 
-  it('maps low contacts through yellow and red to a black maximum', () => {
+  it('maps low contacts through yellow and red to a deep-red maximum', () => {
     expect(matrixWarmPaletteColor(0)).toBe('#fffdf2')
-    expect(matrixWarmPaletteColor(0.9)).toBe('#d7191c')
-    expect(matrixWarmPaletteColor(1)).toBe('#111111')
+    expect(matrixWarmPaletteColor(0.75)).toBe('#d7191c')
+    expect(matrixWarmPaletteColor(1)).toBe('#700d1a')
   })
 
   it('uses a light-blue to black palette for dark-mode matrices', () => {
     expect(matrixBlueBlackPaletteColor(0)).toBe('#daf0ff')
-    expect(matrixBlueBlackPaletteColor(0.9)).toBe('#14437a')
+    expect(matrixBlueBlackPaletteColor(2 / 3)).toBe('#14437a')
     expect(matrixBlueBlackPaletteColor(1)).toBe('#040609')
   })
 
@@ -174,11 +174,11 @@ describe('contact-matrix rendering helpers', () => {
     expect(matrixPaletteIntensity(1, true)).toBe(0)
   })
 
-  it('can reserve the final palette color for a narrow high-score tail', () => {
+  it('interpolates custom palette colors at even score intervals', () => {
     const colors = ['#fff7bc', '#d7191c', '#111111']
-    expect(matrixGradientColor(colors, 0.9, 0.9)).toBe('#d7191c')
-    expect(matrixGradientColor(colors, 0.95, 0.9)).not.toBe('#111111')
-    expect(matrixGradientColor(colors, 1, 0.9)).toBe('#111111')
+    expect(matrixGradientColor(colors, 0.5)).toBe('#d7191c')
+    expect(matrixGradientColor(colors, 0.75)).not.toBe('#111111')
+    expect(matrixGradientColor(colors, 1)).toBe('#111111')
   })
 
   it('shares the largest matrix z-max only when a group is linked', () => {
