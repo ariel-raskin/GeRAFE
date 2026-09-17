@@ -34,11 +34,11 @@ GeRAFE is currently developed and tested as a Windows desktop application.
 - Built-in hg38 chromosome sizes, cytobands, and RefSeq gene/transcript annotations.
 - Import custom reference assemblies from `.fai`, `.genome`, `.chrom.sizes`, and other two-column chromosome-size files.
 - Two independently scrollable and resizable track panes with a fixed coordinate header.
-- Reorder tracks by dragging and organize related tracks into visual groups.
+- Reorder tracks by dragging and organize related tracks into groups.
 - Select one or multiple tracks and edit their colors, heights, height locks, grouping, and shared type-specific display settings.
 - Automatic visible-window scaling, fixed scales, linked scales, and optional zero-flooring for quantitative tracks.
 - Automatic positive/negative signal pairing from common filename markers such as `plus`/`minus` and `pos`/`neg`, with one shared zero axis, red/blue strand colors, and independently scaled strand magnitudes.
-- Stranded pairs remain compatible with visual groups; grouped autoscaling and color controls keep ordinary, positive, and negative channels separate.
+- Stranded pairs remain compatible with groups; grouped autoscaling and color controls keep ordinary, positive, and negative channels separate.
 - Collapsed, expanded, and squished layouts for interval and gene tracks.
 - Arc-style BEDPE interaction tracks with endpoint anchors, score-weighted emphasis, optional item colors, interchromosomal markers, top/bottom arc orientation, and annotation-aware gene filters.
 - Indexed cis contact-map tracks from `.hic`, `.cool`, and multiresolution `.mcool` files, with zoom-aware resolution selection and triangular heatmap rendering.
@@ -157,10 +157,11 @@ GeRAFE** to see the installed version.
 
 - Click a track label to select it.
 - Use `Ctrl`-click to toggle selection, `Shift`-click to select a range, or `Ctrl+A` outside a text field to select all visible tracks.
-- Right-click a track label for display, color, height, scale, grouping, duplication, relinking, and removal options. Ordinary signal tracks can also suppress negative values when those values are not meaningful.
-- Recognizable complementary BigWig, bedGraph, and TDF signal files link automatically. Right-click the combined track to set strand colors, relink either source, or separate the sources again. Under **Settings → Track options**, choose whether to show TSS elbows, auto-link strands, apply red/blue strand colors, and autoscale new visual groups.
+- Right-click a track label for organized Appearance, Display, Scale, Grouping, and Source controls. When multiple tracks are selected, the menu shows only actions supported by every selected track. Ordinary signal tracks can also clamp negative values to zero when those values are not meaningful.
+- Recognizable complementary BigWig, bedGraph, and TDF signal files link automatically. Right-click the combined track to set strand colors, relink either source, or separate the pair again. Under **Settings → Track behavior**, choose whether to show TSS indicators, pair plus/minus tracks automatically, apply red/blue strand colors, and share scales when tracks are grouped.
 - Drag selected tracks to reorder them or move them between the upper and lower panes. Hold the primary mouse button over a track body to select it without returning to its label. Hover either outer boundary of a selected track—or of a consecutive selected run—and drag vertically to resize every selected track by the same pixel amount.
 - Click a group card to select the entire group; right-click it for group-wide options.
+- The first-run interaction tip is also available later from **Help → Track interactions**.
 - Use **Fit tracks** to fit the visible upper tracks exactly into the available pane height. Long names retain enough height for two centered lines. **Lock track height** in a track's context menu reserves its current height and excludes it from manual and automatic fitting. The separate indicator on the right side of the button enables persistent automatic fitting as tracks or pane dimensions change. Each channel of a linked positive/negative pair receives the same height as a regular signal track.
 - The lower gene track sizes itself to the visible layout; its small reference provenance label is informational and does not reserve additional layout space. Collapsed mode overlays representative gene structures on one baseline and uses two collision-aware name lanes, keeping its height bounded at wide genomic spans. Expanded and squished modes retain transcript stacking.
 
