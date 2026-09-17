@@ -33,3 +33,13 @@ The dominant variable was the number of matrix cells fetched and painted, not th
 ## Current baseline
 
 The current baseline uses the source-selected matrix resolution, a bounded overscan window, and direct per-cell canvas drawing. Changes to this path should be compared against the post-PR-#61 behavior before merging.
+
+## Scale and palette model
+
+Matrix presentation settings deliberately do not change the genomic query or the number of fetched cells. The matrix settings dialog controls automatic or fixed z-max, linear or log intensity, score-direction reversal, and preset or custom color stops. Custom palettes support two to eight ordered colors.
+
+The warm preset follows the earlier figure-rendering workflow: most of the scale is assigned to the light/yellow/red colors and a configurable high-score tail transitions smoothly into the final dark color. `matrixHighColorStart` records where that final transition begins, from 50% through 99% of the normalized scale. This makes a narrow set of outliers dark without flattening the visible differences among the rest of the contacts.
+
+Matrix tracks in a linked visual group share the largest automatic or fixed z-max calculated for the matrix members of that group. Independent groups retain a separate z-max for every matrix. This is intentionally separate from the matrix normalization stored for each source. Mixed groups may contain other track kinds, but linked matrix scaling is calculated only from their matrix members.
+
+The renderer clips every contact diamond to the inside of its track and redraws the lower track boundary after the matrix. Palette, legend, group scaling, and track-height changes must remain presentation-only so they cannot reintroduce the height-dependent query expansion described above.
