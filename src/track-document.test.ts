@@ -260,14 +260,22 @@ describe('track document', () => {
     expect(new Set(members.map((track) => track.scaleBindingId)).size).toBe(1)
   })
 
-  it('moves a selected group as one unit between panes', () => {
+  it('detaches a single group member when it moves to another pane', () => {
     const document = documentWithTwoTracks()
     assignDisplayGroup(document, ['t1', 't2'], 'Pair')
     reorderTracks(document, ['t1'], 'bottom', 0)
-    const members = document.tracks.filter((track) => track.displayGroupId === document.groups.find((group) => group.label === 'Pair')?.id)
+    expect(document.tracks.find((track) => track.id === 't1')).toMatchObject({ pane: 'bottom', displayGroupId: undefined })
+    expect(document.tracks.find((track) => track.id === 't2')).toMatchObject({ pane: 'main' })
+  })
+
+  it('preserves a complete group when all its tracks move between panes', () => {
+    const document = documentWithTwoTracks()
+    assignDisplayGroup(document, ['t1', 't2'], 'Pair')
+    const groupId = document.tracks.find((track) => track.id === 't1')!.displayGroupId!
+    reorderTracks(document, ['t1', 't2'], 'bottom', 0)
+    const members = document.tracks.filter((track) => track.displayGroupId === groupId)
     expect(members.map((track) => track.id)).toEqual(['t1', 't2'])
     expect(members.every((track) => track.pane === 'bottom')).toBe(true)
-    expect(document.tracks.filter((track) => track.pane === 'bottom').map((track) => track.id)).toEqual(['t1', 't2', 'reference-genes'])
   })
 
   it('reorders members within a group without removing them from it', () => {

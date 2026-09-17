@@ -18,6 +18,7 @@ const OVERSCAN_FACTOR = 1
 const MATRIX_OVERSCAN_FACTOR = 0.5
 const GENE_CONTENT_PADDING = 6
 const MIN_BOTTOM_GENE_HEIGHT = 44
+const TRACK_RESIZE_HOVER_DELAY_MS = 500
 
 export interface BrowserCallbacks {
   onRegionChange(region: Region): void
@@ -87,6 +88,7 @@ export class GenomeBrowser {
     minimumPixels: Map<string, number>
   }
   private trackResizeHover?: { canvas: HTMLCanvasElement; pane: 'main' | 'bottom'; y: number }
+  private trackResizeHoverCandidate?: { canvas: HTMLCanvasElement; pane: 'main' | 'bottom'; y: number; timer: number }
   private readonly resizePreviewPixels = new Map<string, number>()
   private readonly trackDragGhost: HTMLDivElement
   private mainResizeObserver: ResizeObserver
@@ -294,7 +296,11 @@ export class GenomeBrowser {
     canvas.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return
       const resizeHit = this.resizeBoundaryAt(pane, event.offsetY)
-      if (resizeHit) {
+      const resizeIsArmed = resizeHit
+        && this.trackResizeHover?.canvas === canvas
+        && this.trackResizeHover.pane === pane
+        && this.trackResizeHover.y === resizeHit.y
+      if (resizeHit && resizeIsArmed) {
         const tracks = this.document.tracks.filter((track) => resizeHit.trackIds.includes(track.id))
         canvas.setPointerCapture(event.pointerId)
         this.trackResize = {
@@ -311,6 +317,7 @@ export class GenomeBrowser {
         document.body.classList.add('is-track-resizing')
         return
       }
+      if (resizeHit) this.clearTrackResizeHover(canvas)
       if (event.offsetX < LABEL_WIDTH) {
         const hit = this.itemAt(canvas, pane, event.offsetX, event.offsetY)
         if (!hit) {
@@ -320,14 +327,12 @@ export class GenomeBrowser {
         if (hit.kind === 'track') this.callbacks.onTrackSelection(hit.id, event.ctrlKey || event.metaKey, event.shiftKey)
         else this.callbacks.onGroupSelection(hit.id, event.ctrlKey || event.metaKey)
         const targetTrack = hit.kind === 'track' ? this.document.tracks.find((track) => track.id === hit.id) : undefined
-        const withinGroupId = hit.kind === 'track' ? targetTrack?.displayGroupId : undefined
         const draggedIds = hit.kind === 'group'
           ? this.document.tracks.filter((track) => track.displayGroupId === hit.id).map((track) => track.id)
-          : withinGroupId
-            ? (this.selectedTrackIds.has(hit.id)
-                ? [...this.selectedTrackIds].filter((id) => this.document.tracks.find((track) => track.id === id)?.displayGroupId === withinGroupId)
-                : [hit.id])
-            : this.selectedTrackIds.has(hit.id) ? [...this.selectedTrackIds] : [hit.id]
+          : this.selectedTrackIds.has(hit.id) ? [...this.selectedTrackIds] : [hit.id]
+        const withinGroupId = hit.kind === 'track' && draggedIds.every((id) => this.document.tracks.find((track) => track.id === id)?.displayGroupId === targetTrack?.displayGroupId)
+          ? targetTrack?.displayGroupId
+          : undefined
         canvas.setPointerCapture(event.pointerId)
         this.trackDrag = {
           sourceCanvas: canvas, draggedIds, startX: event.clientX, startY: event.clientY,
@@ -388,12 +393,7 @@ export class GenomeBrowser {
       if (this.trackBodyHold?.canvas === canvas && Math.hypot(event.clientX - this.trackBodyHold.startX, event.clientY - this.trackBodyHold.startY) >= 5) this.cancelTrackBodyHold()
       if (!this.dragging || this.dragging.canvas !== canvas) {
         const hit = this.resizeBoundaryAt(pane, event.offsetY)
-        const next = hit ? { canvas, pane, y: hit.y } : undefined
-        if (this.trackResizeHover?.canvas !== next?.canvas || this.trackResizeHover?.y !== next?.y) {
-          this.trackResizeHover = next
-          canvas.classList.toggle('is-track-resize-hover', Boolean(hit))
-          this.scheduleRender()
-        }
+        this.updateTrackResizeHover(canvas, pane, hit?.y)
         return
       }
       const plotWidth = Math.max(1, this.cssWidth(canvas) - PLOT_LEFT)
@@ -419,7 +419,10 @@ export class GenomeBrowser {
         this.resizePreviewPixels.clear()
         canvas.classList.remove('is-track-resizing')
         document.body.classList.remove('is-track-resizing')
-        if (event.type === 'pointerup') this.callbacks.onTrackHeightsResize(updates)
+        if (event.type === 'pointerup') {
+          this.callbacks.onTrackHeightsResize(updates)
+          void this.ensureData()
+        }
         else {
           this.resizeCanvas(canvas, pane === 'main' ? this.mainContext : this.bottomContext, pane)
           this.scheduleRender()
@@ -445,9 +448,7 @@ export class GenomeBrowser {
     canvas.addEventListener('pointercancel', finishPointer)
     canvas.addEventListener('pointerleave', () => {
       if (this.trackResize?.canvas === canvas) return
-      this.trackResizeHover = undefined
-      canvas.classList.remove('is-track-resize-hover')
-      this.scheduleRender()
+      this.clearTrackResizeHover(canvas)
     })
     canvas.addEventListener('wheel', (event) => {
       if (!event.ctrlKey && !event.metaKey) {
@@ -538,6 +539,38 @@ export class GenomeBrowser {
   private cancelTrackBodyHold(): void {
     if (this.trackBodyHold) window.clearTimeout(this.trackBodyHold.timer)
     this.trackBodyHold = undefined
+  }
+
+  private updateTrackResizeHover(canvas: HTMLCanvasElement, pane: 'main' | 'bottom', y: number | undefined): void {
+    if (this.trackResizeHover?.canvas === canvas && this.trackResizeHover.y === y) return
+    if (this.trackResizeHoverCandidate?.canvas === canvas && this.trackResizeHoverCandidate.y === y) return
+    this.clearTrackResizeHover(canvas)
+    if (y === undefined) return
+    const candidate = {
+      canvas,
+      pane,
+      y,
+      timer: window.setTimeout(() => {
+        if (this.trackResizeHoverCandidate !== candidate) return
+        this.trackResizeHoverCandidate = undefined
+        this.trackResizeHover = { canvas, pane, y }
+        canvas.classList.add('is-track-resize-hover')
+        this.scheduleRender()
+      }, TRACK_RESIZE_HOVER_DELAY_MS),
+    }
+    this.trackResizeHoverCandidate = candidate
+  }
+
+  private clearTrackResizeHover(canvas?: HTMLCanvasElement): void {
+    if (this.trackResizeHoverCandidate && (!canvas || this.trackResizeHoverCandidate.canvas === canvas)) {
+      window.clearTimeout(this.trackResizeHoverCandidate.timer)
+      this.trackResizeHoverCandidate = undefined
+    }
+    if (this.trackResizeHover && (!canvas || this.trackResizeHover.canvas === canvas)) {
+      this.trackResizeHover.canvas.classList.remove('is-track-resize-hover')
+      this.trackResizeHover = undefined
+      this.scheduleRender()
+    } else canvas?.classList.remove('is-track-resize-hover')
   }
 
   private resize(): void {
@@ -1927,7 +1960,21 @@ export class GenomeBrowser {
     for (const entry of panes) {
       if (this.trackDrag?.withinGroupId) {
         const groupPane = this.document.tracks.find((track) => track.displayGroupId === this.trackDrag?.withinGroupId)?.pane
-        if (entry.pane !== groupPane) continue
+        if (entry.pane !== groupPane) {
+          const viewport = entry.canvas.parentElement?.getBoundingClientRect()
+          if (!viewport || clientX < viewport.left || clientX > viewport.right || clientY < viewport.top || clientY > viewport.bottom) continue
+          const localY = clientY - entry.canvas.getBoundingClientRect().top
+          const specs = this.visibleSpecs(entry.pane).filter((track) => !movingIds.has(track.id))
+          let y = 0
+          let index = 0
+          for (const block of trackBlocks(specs)) {
+            const height = block.reduce((sum, track) => sum + this.trackHeight(track), 0)
+            if (localY < y + height / 2) return { pane: entry.pane, insertionIndex: index }
+            y += height
+            index += block.length
+          }
+          return { pane: entry.pane, insertionIndex: specs.length }
+        }
       }
       const viewport = entry.canvas.parentElement?.getBoundingClientRect()
       if (!viewport || clientX < viewport.left || clientX > viewport.right || clientY < viewport.top || clientY > viewport.bottom) continue
@@ -1967,13 +2014,7 @@ export class GenomeBrowser {
   }
 
   private movingIds(trackIds: readonly string[]): Set<string> {
-    const ids = new Set(trackIds)
-    if (this.trackDrag?.withinGroupId) return ids
-    for (const track of this.document.tracks) {
-      if (!ids.has(track.id) || !track.displayGroupId) continue
-      for (const member of this.document.tracks) if (member.displayGroupId === track.displayGroupId) ids.add(member.id)
-    }
-    return ids
+    return new Set(trackIds)
   }
 
   private showTrackDragGhost(): void {
@@ -2491,9 +2532,12 @@ function alignmentQueryChanged(previous: TrackSpec, next: TrackSpec): boolean {
     || previous.bamIncludeSupplementary !== next.bamIncludeSupplementary
 }
 
-function matrixQueryChanged(previous: TrackSpec, next: TrackSpec): boolean {
+export function matrixQueryChanged(previous: TrackSpec, next: TrackSpec): boolean {
   return previous.matrixResolution !== next.matrixResolution
     || previous.matrixNormalization !== next.matrixNormalization
+    || previous.height !== next.height
+    || previous.fittedHeight !== next.fittedHeight
+    || previous.manualPixelHeight !== next.manualPixelHeight
 }
 
 function canvasPalette(): CanvasPalette {
