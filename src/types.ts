@@ -46,6 +46,11 @@ export interface MatrixCell {
   value: number
 }
 
+export interface MatrixCellPosition {
+  bin1: number
+  bin2: number
+}
+
 /** Sparse cells from a square cis contact-matrix query. */
 export interface MatrixFeature {
   featureType: 'matrix'
@@ -53,6 +58,10 @@ export interface MatrixFeature {
   end: number
   resolution: number
   cells: MatrixCell[]
+  /** Explicit non-finite source pixels. Sparse omitted pixels are zero, not missing. */
+  missingCells: MatrixCellPosition[]
+  /** Genomic bin starts masked by the active normalization, when exposed by the source. */
+  maskedBins: number[]
 }
 
 export interface AlignmentDifference {

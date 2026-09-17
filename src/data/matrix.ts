@@ -14,6 +14,8 @@ export interface ContactMatrixMetadata {
 interface ContactMatrixResult {
   resolution: number
   cells: Array<{ bin1: number; bin2: number; value: number }>
+  missingCells: Array<{ bin1: number; bin2: number }>
+  maskedBins: number[]
 }
 
 export class NativeMatrixSource implements TrackSource {
@@ -57,6 +59,8 @@ export class NativeMatrixSource implements TrackSource {
       end: region.end,
       resolution: result.resolution,
       cells: result.cells,
+      missingCells: result.missingCells,
+      maskedBins: result.maskedBins,
     }]
   }
 }
