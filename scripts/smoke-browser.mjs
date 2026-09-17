@@ -116,7 +116,7 @@ if (dataPaths.length) await page.mouse.click(contextX, firstTrackY, { button: 'r
 else {
   const bottomBox = await page.locator('#bottom-canvas').boundingBox()
   if (!bottomBox) throw new Error('Bottom track canvas was not visible.')
-  await page.mouse.click(bottomBox.x + 60, bottomBox.y + 55, { button: 'right' })
+  await page.mouse.click(bottomBox.x + 60, bottomBox.y + Math.min(30, bottomBox.height / 2), { button: 'right' })
 }
 const trackContextVisible = await page.locator('#track-context-menu').isVisible()
 const initialTrackContextText = await page.locator('#track-context-menu').textContent()
@@ -139,7 +139,7 @@ const bottomGeneBox = await page.locator('#bottom-canvas').boundingBox()
 if (!bottomGeneBox) throw new Error('Bottom gene canvas was not visible.')
 const initialBottomPaneHeight = await page.locator('#bottom-pane').evaluate((element) => element.getBoundingClientRect().height)
 const initialBottomCanvasHeight = bottomGeneBox.height
-await page.mouse.click(bottomGeneBox.x + 60, bottomGeneBox.y + 55, { button: 'right' })
+await page.mouse.click(bottomGeneBox.x + 60, bottomGeneBox.y + Math.min(30, bottomGeneBox.height / 2), { button: 'right' })
 const geneMenuText = await page.locator('#track-context-menu').textContent()
 await page.locator(`[data-context-action="genes-${testGeneMode}"]`).click()
 await page.waitForTimeout(100)
@@ -256,6 +256,8 @@ const result = await page.evaluate(() => ({
   visibleFeatures: document.querySelector('#feature-value')?.textContent,
   reference: document.querySelector('#reference-label')?.textContent,
   bottomPaneHeight: document.querySelector('#bottom-pane')?.getBoundingClientRect().height,
+  toolbarHeight: document.querySelector('.toolbar')?.getBoundingClientRect().height,
+  rulerHeight: document.querySelector('#genome-header')?.getBoundingClientRect().height,
 }))
 const geneDetailProbe = await page.evaluate(async () => {
   try {
@@ -296,7 +298,7 @@ const customReferenceAfterReload = await page.locator('#reference-label').textCo
 await page.evaluate(() => {
   const existing = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
   localStorage.setItem('gerafe-track-document', JSON.stringify({
-  schemaVersion: 14,
+  schemaVersion: 15,
   referenceId: existing.referenceId,
   region: { chr: existing.region?.chr ?? 'contigA', start: 10_000, end: 30_000 },
   sources: [
@@ -307,7 +309,7 @@ await page.evaluate(() => {
     { id: 'matrix-a', kind: 'matrix', sourceIds: ['matrix-source-a'], label: 'First matrix', color: '#6d55e0', enabled: true, height: 50, pane: 'main', displayGroupId: 'matrix-group', matrixDirection: 'up', matrixNormalization: 'raw', matrixTransform: 'log1p', matrixPalette: 'warm' },
     { id: 'matrix-b', kind: 'matrix', sourceIds: ['matrix-source-b'], label: 'Second matrix', color: '#6d55e0', enabled: true, height: 50, pane: 'main', displayGroupId: 'matrix-group', matrixDirection: 'up', matrixNormalization: 'raw', matrixTransform: 'log1p', matrixPalette: 'warm' },
   ],
-  groups: [{ id: 'matrix-group', label: 'Matrix group' }],
+  groups: [{ id: 'matrix-group', label: 'Matrix group', scaleBehavior: 'linked' }],
   scales: [],
   }))
 })
@@ -317,21 +319,28 @@ const matrixCanvasBox = await page.locator('#genome-canvas').boundingBox()
 if (!matrixCanvasBox) throw new Error('Matrix smoke canvas was not visible.')
 await page.mouse.click(matrixCanvasBox.x + 8, matrixCanvasBox.y + 60, { button: 'right' })
 const matrixGroupMenuText = await page.locator('#track-context-menu').textContent()
-await page.locator('[data-context-action="matrix-palette-reverse"]').click()
+await page.locator('[data-context-action="matrix-settings"]').click()
+const matrixSettingsVisible = await page.locator('#matrix-settings-dialog').isVisible()
+await page.screenshot({ path: 'dist/smoke-matrix-settings.png', fullPage: true })
+await page.locator('#matrix-palette').selectOption('custom')
+await page.locator('#matrix-add-color').click()
+await page.locator('#matrix-high-color-start').fill('95')
+await page.locator('#matrix-palette-reversed').check()
+await page.locator('#matrix-group-scaling').selectOption('independent')
+await page.locator('#matrix-settings-form button[type="submit"]').click()
 await page.waitForTimeout(250)
-const matrixGroupReverseApplied = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').tracks?.every((track) => track.kind !== 'matrix' || track.matrixPaletteReversed === true))
-await page.mouse.click(matrixCanvasBox.x + 8, matrixCanvasBox.y + 60, { button: 'right' })
-await page.locator('[data-context-submenu="matrix-palette"]').hover()
-await page.locator('#track-context-flyout [data-context-action="matrix-palette-blue-black"]').click()
-await page.waitForTimeout(250)
-const matrixGroupPaletteApplied = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').tracks?.every((track) => track.kind !== 'matrix' || track.matrixPalette === 'blue-black'))
+const matrixGroupSettingsApplied = await page.evaluate(() => {
+  const document = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+  return document.tracks?.every((track) => track.kind !== 'matrix' || (track.matrixPalette === 'custom' && track.matrixPaletteReversed === true && track.matrixHighColorStart === 0.95 && track.matrixPaletteColors?.length === 6))
+    && document.groups?.find((group) => group.id === 'matrix-group')?.scaleBehavior === 'independent'
+})
 await page.mouse.click(matrixCanvasBox.x + 8, matrixCanvasBox.y + 60, { button: 'right' })
 await page.locator('[data-context-action="group-select"]').click()
 await page.mouse.click(matrixCanvasBox.x + 60, matrixCanvasBox.y + 60, { button: 'right' })
 const selectedMatrixMenuText = await page.locator('#track-context-menu').textContent()
 await browser.close()
 
-console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixGroupReverseApplied, matrixGroupPaletteApplied, selectedMatrixMenuText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixSettingsVisible, matrixGroupSettingsApplied, selectedMatrixMenuText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
 if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button' || helpMenuActiveElement !== 'help-menu-button') process.exitCode = 1
@@ -354,6 +363,7 @@ if (visualDataTrackCount > 1 && (!dragGhostVisible || dragCursor !== 'grabbing')
 if (visualDataTrackCount > 1 && Number(fitScrollRange) > 2) process.exitCode = 1
 if (visualDataTrackCount > 1 && (Math.abs(Number(fitPaneGap)) > 2 || fittedTrackHeights?.some((height) => !Number.isFinite(height)))) process.exitCode = 1
 if (Math.abs(headerTopBeforeScroll - headerTopAfterScroll) > 1) process.exitCode = 1
+if (Number(result.toolbarHeight) > 46.5 || Number(result.rulerHeight) > 70.5) process.exitCode = 1
 if (Number(result.bottomPaneHeight) < initialBottomPaneHeight + 30) process.exitCode = 1
 if (visualDataTrackCount > 1 && !linkedScaleText?.includes('2 tracks selected')) process.exitCode = 1
 if (visualDataTrackCount > 1 && (!groupMenuText?.includes('Autoscale group together') || !groupMenuText?.includes('Remove all group tracks'))) process.exitCode = 1
@@ -366,6 +376,6 @@ if (hasStrandedTrack && (!initialTrackContextText?.includes('Linked stranded sig
 if (hasStrandedTrack && !strandedRoundTrip) process.exitCode = 1
 if (dataPaths.length && (!offlineTrackStatus?.includes('reopening or attention') || offlineLeftPixel.slice(0, 3).join(',') === '150,144,135')) process.exitCode = 1
 if (customReferenceBeforeReload !== customReferenceAfterReload) process.exitCode = 1
-if (!matrixGroupMenuText?.includes('Intensity scale') || !matrixGroupMenuText?.includes('Reverse score colors') || !matrixGroupMenuText?.includes('Set group track color') || !matrixGroupMenuText?.includes('Set group track height')) process.exitCode = 1
-if (!matrixGroupReverseApplied || !matrixGroupPaletteApplied || !selectedMatrixMenuText?.includes('2 tracks selected') || !selectedMatrixMenuText?.includes('Reverse score colors')) process.exitCode = 1
+if (!matrixGroupMenuText?.includes('Matrix settings') || !matrixGroupMenuText?.includes('Set group track color') || !matrixGroupMenuText?.includes('Set group track height')) process.exitCode = 1
+if (!matrixSettingsVisible || !matrixGroupSettingsApplied || !selectedMatrixMenuText?.includes('2 tracks selected') || !selectedMatrixMenuText?.includes('Matrix settings')) process.exitCode = 1
 if (consoleErrors.length > 0) process.exitCode = 1

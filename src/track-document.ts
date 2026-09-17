@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 14 as const
+export const TRACK_DOCUMENT_VERSION = 15 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -11,7 +11,7 @@ export type SignalStrand = 'plus' | 'minus'
 export type SignalScaleChannel = 'ordinary' | SignalStrand
 export type InteractionDirection = 'up' | 'down'
 export type InteractionFilterMode = 'all' | 'genes' | 'visible-genes'
-export type MatrixPalette = 'monochrome' | 'warm' | 'blue-black'
+export type MatrixPalette = 'monochrome' | 'warm' | 'blue-black' | 'custom'
 
 export interface SourceFileSpec {
   name: string
@@ -76,6 +76,10 @@ export interface TrackSpec {
   matrixPalette?: MatrixPalette
   /** Reverses which end of the selected palette represents the highest score. */
   matrixPaletteReversed?: boolean
+  /** Palette position where the smooth transition into the final color begins. */
+  matrixHighColorStart?: number
+  /** Ordered low-to-high colors for the custom matrix palette. */
+  matrixPaletteColors?: string[]
   alignmentDisplayMode?: 'collapsed' | 'expanded' | 'squished'
   bamViewMode?: 'coverage' | 'alignments' | 'both'
   bamColorMode?: 'track' | 'strand' | 'pair-orientation' | 'mapping-quality'
@@ -405,6 +409,7 @@ export function addMatrixTrack(
     matrixNormalization: options.defaultNormalization ?? 'raw',
     matrixTransform: 'log1p',
     matrixPalette: 'warm',
+    matrixHighColorStart: 0.9,
   }
   draft.sources.push(source)
   const bottomIndex = draft.tracks.findIndex((item) => item.pane === 'bottom')
@@ -621,7 +626,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -682,10 +687,16 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     matrixScaleMax: track.kind === 'matrix' && typeof track.matrixScaleMax === 'number' && Number.isFinite(track.matrixScaleMax) && track.matrixScaleMax > 0
       ? track.matrixScaleMax
       : undefined,
-    matrixPalette: track.kind === 'matrix' && (track.matrixPalette === 'warm' || track.matrixPalette === 'blue-black' || (track.matrixPalette as string) === 'warm-dark')
+    matrixPalette: track.kind === 'matrix' && (track.matrixPalette === 'warm' || track.matrixPalette === 'blue-black' || track.matrixPalette === 'custom' || (track.matrixPalette as string) === 'warm-dark')
       ? (track.matrixPalette as string) === 'warm-dark' ? 'blue-black' : track.matrixPalette
       : track.kind === 'matrix' ? 'monochrome' as const : undefined,
     matrixPaletteReversed: track.kind === 'matrix' && track.matrixPaletteReversed === true ? true : undefined,
+    matrixHighColorStart: track.kind === 'matrix' && typeof track.matrixHighColorStart === 'number' && Number.isFinite(track.matrixHighColorStart)
+      ? Math.max(0.5, Math.min(0.99, track.matrixHighColorStart))
+      : track.kind === 'matrix' ? 0.9 : undefined,
+    matrixPaletteColors: track.kind === 'matrix' && Array.isArray(track.matrixPaletteColors)
+      ? track.matrixPaletteColors.filter((color: unknown): color is string => typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color)).slice(0, 8)
+      : undefined,
     alignmentDisplayMode: track.kind === 'alignment' && (track.alignmentDisplayMode === 'collapsed' || track.alignmentDisplayMode === 'expanded' || track.alignmentDisplayMode === 'squished')
       ? track.alignmentDisplayMode
       : track.kind === 'alignment' ? 'expanded' : undefined,
