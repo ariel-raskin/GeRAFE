@@ -65,6 +65,33 @@ fn read_file_range(
 }
 
 #[tauri::command]
+fn windows_cursor_asset(kind: String) -> Result<tauri::ipc::Response, String> {
+    #[cfg(windows)]
+    {
+        let file_name = match kind.as_str() {
+            "action" => "aero_link.cur",
+            "resize-x" => "aero_ew.cur",
+            "resize-y" => "aero_ns.cur",
+            _ => return Err(format!("Unknown Windows cursor asset: {kind}")),
+        };
+        let windows_directory = std::env::var_os("WINDIR")
+            .ok_or_else(|| "Windows did not provide its installation directory".to_string())?;
+        let path = Path::new(&windows_directory)
+            .join("Cursors")
+            .join(file_name);
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
+        return Ok(tauri::ipc::Response::new(bytes));
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = kind;
+        Err("Windows cursor assets are only available on Windows".to_string())
+    }
+}
+
+#[tauri::command]
 async fn prepare_bedgraph_cache(
     path: String,
     chromosome_sizes: Option<HashMap<String, u32>>,
@@ -216,6 +243,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             stat_file,
             read_file_range,
+            windows_cursor_asset,
             prepare_bedgraph_cache,
             contact_matrix_metadata,
             query_contact_matrix
@@ -259,5 +287,14 @@ mod tests {
         assert!(!migrate_legacy_app_data_at(&root).unwrap());
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exposes_only_known_windows_cursor_assets() {
+        assert!(windows_cursor_asset("action".to_string()).is_ok());
+        assert!(windows_cursor_asset("resize-x".to_string()).is_ok());
+        assert!(windows_cursor_asset("resize-y".to_string()).is_ok());
+        assert!(windows_cursor_asset("arrow".to_string()).is_err());
     }
 }

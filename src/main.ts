@@ -45,6 +45,9 @@ import { SUPPORTED_TRACK_DIALOG_EXTENSIONS, SUPPORTED_TRACK_EXTENSION_LABEL } fr
 import { migrateLegacyStorage, STORAGE_KEYS } from './storage.ts'
 import { AppUpdateController, createTauriUpdateBackend, updateProgressPercent } from './app-update.ts'
 import type { AppUpdateState } from './app-update.ts'
+import { installWindowsCursorScaleCorrection } from './platform-cursors.ts'
+
+void installWindowsCursorScaleCorrection()
 
 type Theme = 'light' | 'dark'
 type ActionDialogRequest = {
