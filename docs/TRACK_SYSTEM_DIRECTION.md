@@ -124,6 +124,13 @@ Track order remains authoritative within two named browser panes. Groups referen
 
 Bulk actions learned from `gene_tracks_organic` should remain available: group/ungroup selected tracks, link/unlink selected scales, recolor all/plus/minus channels, enable/disable, duplicate, and set heights.
 
+### Current browser layout conventions
+
+- A horizontal boundary belongs to the track immediately above it. Dragging that boundary changes only that track's height and does not require preselection; the top edge of the track below is not a separate resize target.
+- Signal plots keep a small symmetric inset while using the rest of the track height. Numeric scale labels are centered on their horizontal tick marks in the label card.
+- Collapsed gene mode is a single structural and label lane. When gene structures would overlap in screen space, the first visible structure is retained and later overlapping structures are omitted; labels that cannot remain near their structure are also omitted. Expanded and squished modes retain their multi-transcript layouts.
+- Ruler annotations occupy distinct vertical bands: cytoband labels remain adjacent to the ideogram, the genomic-span indicator sits below them, and genomic-coordinate ticks occupy the bottom of the ruler.
+
 ## Agreement between browser and figure mode
 
 The following must remain identical when moving from browsing to figure composition:

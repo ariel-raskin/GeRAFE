@@ -297,6 +297,7 @@ const strandedAutoLinkToggle = document.querySelector<HTMLInputElement>('#strand
 const groupAutoscaleToggle = document.querySelector<HTMLInputElement>('#group-autoscale-toggle')!
 const strandedAutoColorsToggle = document.querySelector<HTMLInputElement>('#stranded-auto-colors-toggle')!
 const matrixSettingsDialog = document.querySelector<HTMLElement>('#matrix-settings-dialog')!
+const matrixSettingsContent = matrixSettingsDialog.querySelector<HTMLElement>('.matrix-settings-content')!
 const matrixSettingsForm = document.querySelector<HTMLFormElement>('#matrix-settings-form')!
 const matrixSettingsScope = document.querySelector<HTMLElement>('#matrix-settings-scope')!
 const matrixScaleMode = document.querySelector<HTMLSelectElement>('#matrix-scale-mode')!
@@ -1789,6 +1790,7 @@ function openMatrixSettingsDialog(trackIds: readonly string[]): void {
   renderMatrixPaletteColors()
   updateMatrixSettingsVisibility()
   updateMatrixHighColorOutput()
+  matrixSettingsContent.scrollTop = 0
   matrixSettingsDialog.hidden = false
   window.setTimeout(() => matrixScaleMode.focus(), 0)
 }
