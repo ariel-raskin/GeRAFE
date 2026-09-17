@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixBlueBlackPaletteColor, matrixGradientColor, matrixLegendValues, matrixPaletteIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixBlueBlackPaletteColor, matrixGradientColor, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { InteractionFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
+import type { TrackSpec } from './track-document.ts'
 
 describe('gene direction arrow geometry', () => {
   it('keeps arrow phase attached to the transcript while panning', () => {
@@ -118,6 +119,12 @@ describe('interaction rendering helpers', () => {
 })
 
 describe('contact-matrix rendering helpers', () => {
+  it('reloads matrix data only after a committed height change', () => {
+    const original: TrackSpec = { id: 'matrix', kind: 'matrix', sourceIds: [], label: 'Matrix', color: '#000000', enabled: true, height: 40, manualPixelHeight: 160, pane: 'main' }
+    expect(matrixQueryChanged(original, { ...original, manualPixelHeight: 240 })).toBe(true)
+    expect(matrixQueryChanged(original, { ...original })).toBe(false)
+  })
+
   it('maps low contacts through yellow and red to a black maximum', () => {
     expect(matrixWarmPaletteColor(0)).toBe('#fffdf2')
     expect(matrixWarmPaletteColor(0.9)).toBe('#d7191c')

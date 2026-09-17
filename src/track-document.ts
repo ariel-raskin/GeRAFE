@@ -492,15 +492,22 @@ export function reorderTracks(
   if (withinGroupId) {
     const groupMembers = draft.tracks.filter((track) => track.displayGroupId === withinGroupId)
     if (!groupMembers.length || [...movingIds].some((id) => !groupMembers.some((track) => track.id === id))) return
-    pane = groupMembers[0].pane
-  } else {
-    for (const track of draft.tracks) {
-      if (!movingIds.has(track.id) || !track.displayGroupId) continue
-      for (const member of draft.tracks) if (member.displayGroupId === track.displayGroupId) movingIds.add(member.id)
-    }
+    if (pane !== groupMembers[0].pane) withinGroupId = undefined
   }
   const moving = draft.tracks.filter((track) => movingIds.has(track.id))
   if (!moving.length) return
+  // Visual groups stay contiguous and cannot span panes. Moving a partial
+  // group outside its own within-group reorder detaches that subset; moving
+  // every member preserves the group.
+  const partiallyMovedGroupIds = new Set(moving
+    .map((track) => track.displayGroupId)
+    .filter((id): id is string => Boolean(id))
+    .filter((id) => {
+      const members = draft.tracks.filter((track) => track.displayGroupId === id)
+      return members.some((track) => !movingIds.has(track.id))
+        && (!withinGroupId || members.some((track) => movingIds.has(track.id) && track.pane !== pane))
+    }))
+  for (const track of moving) if (track.displayGroupId && partiallyMovedGroupIds.has(track.displayGroupId)) track.displayGroupId = undefined
   for (const track of moving) track.pane = pane
   const remaining = draft.tracks.filter((track) => !movingIds.has(track.id))
   const target = remaining.filter((track) => track.pane === pane)
@@ -514,6 +521,7 @@ export function reorderTracks(
   const otherPane: 'main' | 'bottom' = pane === 'main' ? 'bottom' : 'main'
   const other = remaining.filter((track) => track.pane === otherPane)
   draft.tracks = pane === 'main' ? [...target, ...other] : [...other, ...target]
+  pruneDocument(draft)
 }
 
 export function assignDisplayGroup(draft: TrackDocument, trackIds: readonly string[], label: string, options: { autoScale?: boolean } = {}): void {

@@ -693,6 +693,7 @@ trackContextMenu.addEventListener('click', (event) => {
 trackContextMenu.addEventListener('pointerover', (event) => {
   const trigger = (event.target as Element).closest<HTMLButtonElement>('[data-context-submenu]')
   if (trigger) openContextSubmenu(trigger)
+  else if ((event.target as Element).closest('[data-context-action]')) closeContextSubmenu()
 })
 trackContextMenu.addEventListener('focusin', (event) => {
   const trigger = (event.target as Element).closest<HTMLButtonElement>('[data-context-submenu]')
@@ -1172,7 +1173,6 @@ function selectGroup(groupId: string, additive: boolean): void {
   const memberIds = store.current.tracks.filter((track) => track.enabled && track.displayGroupId === groupId).map((track) => track.id)
   if (!memberIds.length) return
   const allSelected = memberIds.every((id) => selectedTrackIds.has(id))
-  if (!additive) selectedTrackIds.clear()
   for (const id of memberIds) {
     if (additive && allSelected) selectedTrackIds.delete(id)
     else selectedTrackIds.add(id)
@@ -1207,6 +1207,11 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const pairable = selected.length === 2 && selected.every((track) => track.kind === 'signal') && canPairSelectedStrands(selected as TrackSpec[])
   const matrixTracks = selected.filter((track) => track.kind === 'matrix')
   const matricesOnly = matrixTracks.length > 0 && matrixTracks.length === selected.length
+  const selectedGroupId = selected[0]?.displayGroupId
+  const exactExistingGroupSelection = Boolean(selectedGroupId)
+    && selected.every((track) => track.displayGroupId === selectedGroupId)
+    && store.current.tracks.filter((track) => track.displayGroupId === selectedGroupId).every((track) => selectedTrackIds.has(track.id))
+  const samePane = selected.every((track) => track.pane === target.pane)
   const signalScaleIds = signalsOnly ? selected.flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter((id): id is string => Boolean(id)) : []
   const signalScales = store.current.scales.filter((scale) => signalScaleIds.includes(scale.id))
   const scaleModeLabel = signalScales.length && signalScales.every((scale) => scale.mode === 'auto-visible') ? 'Automatic'
@@ -1225,6 +1230,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   }
   contextSubmenuItems.clear()
   const submenu = (id: string, label: string, detail: string, items: string) => {
+    if ((items.match(/data-context-action=/g) ?? []).length <= 1) return items
     contextSubmenuItems.set(id, items)
     return `<button class="context-item context-submenu-trigger" data-context-submenu="${id}" type="button" role="menuitem" aria-haspopup="menu" aria-expanded="false"><span>${label}</span><small>${detail}</small></button>`
   }
@@ -1235,7 +1241,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     allResizable ? action('height', one ? 'Set track height…' : 'Set selected track heights…') : '',
     allFittable ? action('height-lock', 'Lock track height', selected.every((track) => track.heightLocked) ? 'current' : '') : '',
   ].join('')
-  const groupingItems = action('group', 'Group selected…')
+  const groupingItems = (selected.length > 1 && !exactExistingGroupSelection ? action('group', 'Group selected…') : '')
     + (selected.every((track) => track.displayGroupId) ? action('remove-from-group', one ? 'Remove from group' : 'Remove selected tracks from groups') : '')
   let typeItems = ''
   if (signalsOnly) {
@@ -1310,9 +1316,10 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   }
   const sections = [
     one ? action('rename', 'Rename…') : '',
+    samePane ? action(target.pane === 'main' ? 'move-pane-bottom' : 'move-pane-main', target.pane === 'main' ? 'Move to lower area' : 'Move to upper area') : '',
     appearanceItems ? submenu('appearance', 'Appearance', '', appearanceItems) : '',
     typeItems,
-    submenu('grouping', 'Grouping', '', groupingItems),
+    groupingItems ? submenu('grouping', 'Grouping', '', groupingItems) : '',
     sourceItems ? submenu('source', 'Source', '', sourceItems) : '',
     dataOnly ? action('remove', one ? 'Remove track' : `Remove ${selected.length} selected tracks`, '', false, true) : '',
   ].filter(Boolean)
@@ -1415,7 +1422,7 @@ function validateMapq(value: string): string | undefined {
 
 function validateTrackHeight(value: string): string | undefined {
   const number = Number(value)
-  return Number.isFinite(number) && number >= 1 && number <= 100 ? undefined : 'Enter a number from 1 to 100.'
+  return Number.isFinite(number) && number >= 20 && number <= 4_000 ? undefined : 'Enter a pixel height from 20 to 4000.'
 }
 
 function commonValues<T>(sets: readonly (readonly T[])[]): T[] {
@@ -1475,6 +1482,7 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
   }
   contextSubmenuItems.clear()
   const submenu = (id: string, label: string, detail: string, items: string) => {
+    if ((items.match(/data-context-action=/g) ?? []).length <= 1) return items
     contextSubmenuItems.set(id, items)
     return `<button class="context-item context-submenu-trigger" data-context-submenu="${id}" type="button" role="menuitem" aria-haspopup="menu" aria-expanded="false"><span>${label}</span><small>${detail}</small></button>`
   }
@@ -1584,6 +1592,12 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
     openColorDialog(command === 'color-plus' ? 'Set positive-strand color' : command === 'color-minus' ? 'Set negative-strand color' : 'Set track color', initial ?? '#6d55e0')
   }
   if (command === 'height') await setTrackHeights(ids)
+  if (command === 'move-pane-main' || command === 'move-pane-bottom') {
+    const pane = command === 'move-pane-main' ? 'main' : 'bottom'
+    const insertionIndex = store.current.tracks.filter((track) => track.pane === pane && !ids.includes(track.id)).length
+    bottomPaneAutoFit = false
+    store.edit((draft) => reorderTracks(draft, ids, pane, insertionIndex))
+  }
   if (command === 'height-lock') store.edit((draft) => {
     const tracks = draft.tracks.filter((track) => ids.includes(track.id) && track.pane === 'main')
     const locked = !tracks.every((track) => track.heightLocked)
@@ -1870,19 +1884,18 @@ function addTracksToGroup(draft: TrackDocument, groupId: string, trackIds: reado
 }
 
 async function setTrackHeights(trackIds: readonly string[]): Promise<void> {
-  const resizableIds = store.current.tracks
+  const resizableTracks = store.current.tracks
     .filter((track) => trackIds.includes(track.id) && (track.kind !== 'genes' || track.pane !== 'bottom'))
-    .map((track) => track.id)
-  if (!resizableIds.length) return
-  const current = store.current.tracks.find((track) => resizableIds.includes(track.id))?.height ?? 1
-  const entered = await requestText({ title: resizableIds.length === 1 ? 'Set track height' : 'Set track heights', label: 'Height (1–100)', initial: String(Math.round(current)), submitLabel: 'Set height', validate: validateTrackHeight })
-  const height = Number(entered)
-  if (entered === undefined || !Number.isFinite(height) || height < 1 || height > 100) return
+  if (!resizableTracks.length) return
+  const current = browser.getRenderedTrackHeight(resizableTracks[0])
+  const entered = await requestText({ title: resizableTracks.length === 1 ? 'Set track height' : 'Set track heights', label: 'Height in pixels (20–4000)', initial: String(Math.round(current)), submitLabel: 'Set height', validate: validateTrackHeight })
+  const pixels = Number(entered)
+  if (entered === undefined || !Number.isFinite(pixels) || pixels < 20 || pixels > 4_000) return
   store.edit((draft) => {
-    for (const track of draft.tracks) if (resizableIds.includes(track.id)) {
-      track.height = Math.round(height)
+    for (const track of draft.tracks) if (resizableTracks.some((candidate) => candidate.id === track.id)) {
+      track.height = heightScoreForPixels(track.kind, pixels)
       delete track.fittedHeight
-      delete track.manualPixelHeight
+      track.manualPixelHeight = Math.round(pixels)
     }
   })
 }
@@ -2118,7 +2131,7 @@ function closeActionDialog(value: string | boolean | undefined): void {
 }
 
 function showInteractionGuide(): Promise<void> {
-  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click to select additional tracks and Shift+click to select a range. Drag a selected track to reorder it. The mouse wheel scrolls; Ctrl+wheel zooms. Right-click a track or group card for options.')
+  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click to select additional tracks and Shift+click to select a range; clicking a group card adds all of its tracks. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for half a second before dragging its height. The mouse wheel scrolls; Ctrl+wheel zooms. Right-click a track or group card for options.')
 }
 
 function showFirstRunInteractionHint(): void {
