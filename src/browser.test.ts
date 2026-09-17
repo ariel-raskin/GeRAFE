@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixBlueBlackPaletteColor, matrixGradientColor, matrixLegendValues, matrixPaletteIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixBlueBlackPaletteColor, matrixGradientColor, matrixLegendValues, matrixPaletteIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { InteractionFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 
@@ -52,12 +52,34 @@ describe('track layout and ruler formatting', () => {
     expect([...resizedTrackPixels(initial, minimums, -80)]).toEqual([['a', 80], ['b', 50]])
   })
 
-  it('places collapsed gene labels in two bounded lanes and shifts later labels', () => {
+  it('keeps collapsed gene labels in one bounded lane', () => {
     const placements = placeCollapsedGeneLabels([
       { preferredX: 10, width: 30 }, { preferredX: 12, width: 30 }, { preferredX: 14, width: 30 }, { preferredX: 50, width: 120 },
     ], 0, 100)
-    expect(placements.slice(0, 3)).toEqual([{ x: 15, lane: 0 }, { x: 15, lane: 1 }, undefined])
+    expect(placements.slice(0, 3)).toEqual([{ x: 15, lane: 0 }, undefined, undefined])
     expect(placements[3]).toBeUndefined()
+  })
+
+  it('uses one collapsed gene structure for each overlapping pixel interval', () => {
+    const genes = [
+      { name: 'first', geneX1: 10, geneX2: 40 },
+      { name: 'overlapping', geneX1: 35, geneX2: 55 },
+      { name: 'separate', geneX1: 60, geneX2: 80 },
+    ]
+    expect(selectNonOverlappingCollapsedGenes(genes).map((gene) => gene.name)).toEqual(['first', 'separate'])
+  })
+
+  it('uses most of the signal height with a small symmetric inset', () => {
+    expect(signalChartBounds(100, 220)).toEqual({ top: 107, bottom: 213 })
+    expect(signalChartBounds(0, 20)).toEqual({ top: 2, bottom: 18 })
+  })
+
+  it('assigns each resize line only to the track directly above it', () => {
+    expect(bottomTrackResizeBoundaries([
+      { id: 'first', height: 80, resizable: true },
+      { id: 'second', height: 60, resizable: true },
+      { id: 'genes', height: 44, resizable: false },
+    ])).toEqual([{ trackIds: ['first'], y: 80 }, { trackIds: ['second'], y: 140 }])
   })
 })
 

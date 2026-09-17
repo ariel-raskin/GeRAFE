@@ -79,7 +79,6 @@ export class GenomeBrowser {
   private trackResize?: {
     canvas: HTMLCanvasElement
     pane: 'main' | 'bottom'
-    edge: 'top' | 'bottom'
     trackIds: string[]
     startClientY: number
     boundaryY: number
@@ -301,7 +300,6 @@ export class GenomeBrowser {
         this.trackResize = {
           canvas,
           pane,
-          edge: resizeHit.edge,
           trackIds: resizeHit.trackIds,
           startClientY: event.clientY,
           boundaryY: resizeHit.y,
@@ -361,8 +359,7 @@ export class GenomeBrowser {
     canvas.addEventListener('pointermove', (event) => {
       if (this.trackResize?.canvas === canvas) {
         const dragPixels = event.clientY - this.trackResize.startClientY
-        const requestedDelta = this.trackResize.edge === 'bottom' ? dragPixels : -dragPixels
-        const resized = resizedTrackPixels(this.trackResize.initialPixels, this.trackResize.minimumPixels, requestedDelta)
+        const resized = resizedTrackPixels(this.trackResize.initialPixels, this.trackResize.minimumPixels, dragPixels)
         this.resizePreviewPixels.clear()
         for (const [id, pixels] of resized) this.resizePreviewPixels.set(id, pixels)
         this.trackResize.guideY = this.trackResize.boundaryY + dragPixels
@@ -721,7 +718,7 @@ export class GenomeBrowser {
     const span = this.region.end - this.region.start
     const chromosomeLength = this.chromosomes.get(this.region.chr)
     if (chromosomeLength) this.drawIdeogram(PLOT_LEFT + 4, Math.max(1, plotWidth - 8), chromosomeLength, palette)
-    const spanY = 30
+    const spanY = 36
     ctx.strokeStyle = palette.label
     ctx.beginPath()
     ctx.moveTo(PLOT_LEFT, spanY + 0.5)
@@ -832,7 +829,7 @@ export class GenomeBrowser {
         const labelWidth = ctx.measureText(band.name).width
         if (center - labelWidth / 2 <= lastLabelEnd + 5) continue
         ctx.fillStyle = palette.muted
-        ctx.fillText(band.name, center, 37)
+        ctx.fillText(band.name, center, 24)
         lastLabelEnd = center + labelWidth / 2
       }
       ctx.textAlign = 'start'
@@ -917,8 +914,7 @@ export class GenomeBrowser {
       max = Math.max(max, bin.max)
     }
     const amplitude = Math.max(1e-9, max - min)
-    const chartTop = top + 18
-    const chartBottom = bottom - 0.5
+    const { top: chartTop, bottom: chartBottom } = signalChartBounds(top, bottom)
     const chartHeight = chartBottom - chartTop
     const rawZeroY = chartBottom - ((0 - min) / amplitude) * chartHeight
     const zeroY = spec.signalStrand === 'minus' ? chartTop : Math.max(chartTop, Math.min(chartBottom, rawZeroY))
@@ -945,16 +941,18 @@ export class GenomeBrowser {
     const scaleValue = max !== 0 ? max : min !== 0 ? Math.abs(min) : 0
     if (scaleValue !== 0) {
       const maxLabel = formatScore(scaleValue)
-      ctx.font = '10px ui-monospace, SFMono-Regular, Consolas, monospace'
+      ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
       ctx.strokeStyle = palette.axisLine
       ctx.lineWidth = 1
       ctx.fillStyle = palette.axisInk
       ctx.textAlign = 'right'
       const scaleAtBottom = spec.signalStrand === 'minus' || (max === 0 && min < 0)
-      ctx.fillText(maxLabel, LABEL_WIDTH - 8, scaleAtBottom ? chartBottom - 3 : chartTop + 3)
+      const tickY = scaleAtBottom ? chartBottom - 0.5 : chartTop + 0.5
+      ctx.textBaseline = 'middle'
+      ctx.fillText(maxLabel, LABEL_WIDTH - 8, tickY)
+      ctx.textBaseline = 'alphabetic'
       ctx.textAlign = 'start'
       ctx.beginPath()
-      const tickY = scaleAtBottom ? chartBottom - 0.5 : chartTop + 0.5
       ctx.moveTo(LABEL_WIDTH - 7, tickY)
       ctx.lineTo(LABEL_WIDTH + 7, tickY)
       ctx.stroke()
@@ -1000,18 +998,19 @@ export class GenomeBrowser {
     const labelLayout = wrappedLines(ctx, spec.label, labelBounds.width, Math.max(1, Math.floor((height - 20) / 15)))
     drawCenteredTextLines(ctx, labelLayout, labelBounds.center, verticallyCenteredBaseline(top, height, labelLayout.length, 15), 15)
 
-    const chartTop = top + 12
-    const chartBottom = bottom - 10
+    const { top: chartTop, bottom: chartBottom } = signalChartBounds(top, bottom)
     const zeroY = chartTop + (chartBottom - chartTop) / 2
     ctx.strokeStyle = palette.zero
     ctx.beginPath(); ctx.moveTo(PLOT_LEFT, zeroY + 0.5); ctx.lineTo(width, zeroY + 0.5); ctx.stroke()
     if (scaleLaneWidth) {
       ctx.strokeStyle = palette.axisLine
-      ctx.font = '10px ui-monospace, SFMono-Regular, Consolas, monospace'
+      ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
       ctx.fillStyle = palette.axisInk
       ctx.textAlign = 'right'
-      if (plusMax > 0) ctx.fillText(formatScore(plusMax), LABEL_WIDTH - 8, chartTop + 3)
-      if (minusMax > 0) ctx.fillText(formatScore(minusMax), LABEL_WIDTH - 8, chartBottom)
+      ctx.textBaseline = 'middle'
+      if (plusMax > 0) ctx.fillText(formatScore(plusMax), LABEL_WIDTH - 8, chartTop + 0.5)
+      if (minusMax > 0) ctx.fillText(formatScore(minusMax), LABEL_WIDTH - 8, chartBottom - 0.5)
+      ctx.textBaseline = 'alphabetic'
       ctx.textAlign = 'start'
       ctx.beginPath()
       if (plusMax > 0) { ctx.moveTo(LABEL_WIDTH - 7, chartTop + 0.5); ctx.lineTo(LABEL_WIDTH + 7, chartTop + 0.5) }
@@ -1613,7 +1612,7 @@ export class GenomeBrowser {
       const { gene, transcripts, firstSlot } = block
       if (block.labelX !== undefined) {
         const labelY = mode === 'collapsed'
-          ? contentTop + 9 + (block.labelLane ?? 0) * 11
+          ? contentTop + 9
           : contentTop + firstSlot * layout.slotHeight + layout.slotHeight - 1
         ctx.fillStyle = palette.ink
         ctx.textAlign = 'center'
@@ -1623,7 +1622,7 @@ export class GenomeBrowser {
 
       transcripts.forEach((transcript, transcriptIndex) => {
         const centerY = mode === 'collapsed'
-          ? contentTop + 34
+          ? contentTop + 22
           : contentTop + (firstSlot + transcriptIndex + 1) * layout.slotHeight + layout.slotHeight / 2
         const rawTxX1 = PLOT_LEFT + (transcript.start - this.region.start) * scale
         const rawTxX2 = PLOT_LEFT + (transcript.end - this.region.start) * scale
@@ -1699,13 +1698,14 @@ export class GenomeBrowser {
         const geneX2 = Math.min(width, PLOT_LEFT + (gene.end - this.region.start) * scale)
         return [{ gene, transcript, geneX1, geneX2, labelWidth: ctx.measureText(gene.name).width }]
       }).sort((a, b) => a.geneX1 - b.geneX1 || a.geneX2 - b.geneX2)
-      const placements = placeCollapsedGeneLabels(candidates.map((candidate) => ({
+      const visibleCandidates = selectNonOverlappingCollapsedGenes(candidates)
+      const placements = placeCollapsedGeneLabels(visibleCandidates.map((candidate) => ({
         preferredX: (candidate.geneX1 + candidate.geneX2) / 2,
         width: candidate.labelWidth,
       })), PLOT_LEFT, width)
       ctx.restore()
       return {
-        blocks: candidates.map((candidate, index) => ({
+        blocks: visibleCandidates.map((candidate, index) => ({
           gene: candidate.gene,
           transcripts: [candidate.transcript],
           firstSlot: 0,
@@ -1715,7 +1715,7 @@ export class GenomeBrowser {
           labelLane: placements[index]?.lane,
         })),
         slotHeight,
-        contentHeight: 48,
+        contentHeight: 38,
         transcriptCount,
       }
     }
@@ -1884,29 +1884,12 @@ export class GenomeBrowser {
     return Math.max(MIN_BOTTOM_GENE_HEIGHT, Math.ceil(layoutHeight))
   }
 
-  private resizeBoundaryAt(pane: 'main' | 'bottom', pointerY: number): { trackIds: string[]; edge: 'top' | 'bottom'; y: number } | undefined {
-    const specs = this.visibleSpecs(pane)
-    let top = 0
-    const candidates: Array<{ trackIds: string[]; edge: 'top' | 'bottom'; y: number }> = []
-    for (let index = 0; index < specs.length;) {
-      const track = specs[index]
-      const height = this.trackHeight(track)
-      if (!this.selectedTrackIds.has(track.id) || (track.kind === 'genes' && track.pane === 'bottom')) {
-        top += height
-        index += 1
-        continue
-      }
-      const runTop = top
-      const trackIds: string[] = []
-      while (index < specs.length) {
-        const candidate = specs[index]
-        if (!this.selectedTrackIds.has(candidate.id) || (candidate.kind === 'genes' && candidate.pane === 'bottom')) break
-        trackIds.push(candidate.id)
-        top += this.trackHeight(candidate)
-        index += 1
-      }
-      candidates.push({ trackIds, edge: 'top', y: runTop }, { trackIds, edge: 'bottom', y: top })
-    }
+  private resizeBoundaryAt(pane: 'main' | 'bottom', pointerY: number): { trackIds: string[]; y: number } | undefined {
+    const candidates = bottomTrackResizeBoundaries(this.visibleSpecs(pane).map((track) => ({
+      id: track.id,
+      height: this.trackHeight(track),
+      resizable: !(track.kind === 'genes' && track.pane === 'bottom'),
+    })))
     return candidates
       .map((candidate) => ({ candidate, distance: Math.abs(candidate.y - pointerY) }))
       .filter(({ distance }) => distance <= 5)
@@ -2125,29 +2108,54 @@ export function interactionArcHeight(pixelSpan: number, trackHeight: number): nu
   return Math.min(Math.max(8, trackHeight - 14), Math.max(8, Math.sqrt(Math.max(0, pixelSpan)) * 4.2))
 }
 
+export function signalChartBounds(top: number, bottom: number): { top: number; bottom: number } {
+  const inset = Math.min(7, Math.max(2, (bottom - top) * 0.08))
+  return { top: top + inset, bottom: bottom - inset }
+}
+
+export function bottomTrackResizeBoundaries(
+  tracks: readonly { id: string; height: number; resizable: boolean }[],
+): Array<{ trackIds: string[]; y: number }> {
+  let bottom = 0
+  return tracks.flatMap((track) => {
+    bottom += track.height
+    return track.resizable ? [{ trackIds: [track.id], y: bottom }] : []
+  })
+}
+
+export function selectNonOverlappingCollapsedGenes<T extends { geneX1: number; geneX2: number }>(
+  candidates: readonly T[],
+  gap = 2,
+): T[] {
+  const selected: T[] = []
+  let occupiedThrough = Number.NEGATIVE_INFINITY
+  for (const candidate of candidates) {
+    if (candidate.geneX1 <= occupiedThrough + gap) continue
+    selected.push(candidate)
+    occupiedThrough = candidate.geneX2
+  }
+  return selected
+}
+
 export function placeCollapsedGeneLabels(
   labels: readonly { preferredX: number; width: number }[],
   left: number,
   right: number,
   gap = 6,
 ): Array<{ x: number; lane: number } | undefined> {
-  const laneEnds = [left - gap, left - gap]
+  let laneEnd = left - gap
   return labels.map((label) => {
     const halfWidth = Math.max(0, label.width) / 2
     const minimumCenter = left + halfWidth
     const maximumCenter = right - halfWidth
     if (minimumCenter > maximumCenter) return undefined
     const preferred = Math.max(minimumCenter, Math.min(maximumCenter, label.preferredX))
-    const choices = laneEnds.flatMap((laneEnd, lane) => {
-      const x = Math.max(preferred, laneEnd + gap + halfWidth)
-      const shift = Math.abs(x - preferred)
-      const maxShift = Math.max(18, label.width * 0.75)
-      return x <= maximumCenter && shift <= maxShift ? [{ x, lane, shift }] : []
-    }).sort((a, b) => a.shift - b.shift || a.lane - b.lane)
-    const choice = choices[0]
-    if (!choice) return undefined
-    laneEnds[choice.lane] = choice.x + halfWidth
-    return { x: choice.x, lane: choice.lane }
+    const x = Math.max(preferred, laneEnd + gap + halfWidth)
+    const shift = Math.abs(x - preferred)
+    const maxShift = Math.max(18, label.width * 0.75)
+    if (x > maximumCenter || shift > maxShift) return undefined
+    laneEnd = x + halfWidth
+    return { x, lane: 0 }
   })
 }
 
