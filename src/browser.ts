@@ -899,9 +899,11 @@ export class GenomeBrowser {
     }
 
     if (visible.length === 0) {
-      ctx.fillStyle = palette.muted
-      ctx.font = '12px Inter, system-ui, sans-serif'
-      ctx.fillText(track.status === 'loading' ? 'Loading indexed data…' : 'No signal in this window', PLOT_LEFT + 22, top + height / 2)
+      if (track.status === 'loading') {
+        ctx.fillStyle = palette.muted
+        ctx.font = '12px Inter, system-ui, sans-serif'
+        ctx.fillText('Loading indexed data…', PLOT_LEFT + 22, top + height / 2)
+      }
       return 0
     }
 
@@ -1025,10 +1027,10 @@ export class GenomeBrowser {
       ctx.fillStyle = palette.error
       ctx.font = '10px Inter, system-ui, sans-serif'
       ctx.fillText(problems.map((runtime) => `${runtime.channel === 'plus' ? '+' : '−'} ${runtime.error ?? 'source unavailable'}`).join(' · '), PLOT_LEFT + 12, bottom - 4)
-    } else if (!plusVisible.length && !minusVisible.length) {
+    } else if (!plusVisible.length && !minusVisible.length && (plus.status === 'loading' || minus.status === 'loading')) {
       ctx.fillStyle = palette.muted
       ctx.font = '12px Inter, system-ui, sans-serif'
-      ctx.fillText(plus.status === 'loading' || minus.status === 'loading' ? 'Loading stranded signal…' : 'No signal in this window', PLOT_LEFT + 22, zeroY - 8)
+      ctx.fillText('Loading stranded signal…', PLOT_LEFT + 22, zeroY - 8)
     }
     return plusVisible.length + minusVisible.length
   }
@@ -1174,9 +1176,11 @@ export class GenomeBrowser {
     }
     const inWindow = track.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) as InteractionFeature[]
     if (!inWindow.length) {
-      ctx.fillStyle = palette.muted
-      ctx.font = '12px Inter, system-ui, sans-serif'
-      ctx.fillText(track.status === 'loading' ? 'Loading interactions…' : 'No interactions in this window', PLOT_LEFT + 22, top + height / 2)
+      if (track.status === 'loading') {
+        ctx.fillStyle = palette.muted
+        ctx.font = '12px Inter, system-ui, sans-serif'
+        ctx.fillText('Loading interactions…', PLOT_LEFT + 22, top + height / 2)
+      }
       return 0
     }
 
@@ -1188,10 +1192,12 @@ export class GenomeBrowser {
         : []
     const visible = filterMode === 'all' ? inWindow : filterInteractionsForGenes(inWindow, geneTargets)
     if (!visible.length) {
-      ctx.fillStyle = palette.muted
-      ctx.font = '12px Inter, system-ui, sans-serif'
       const unavailable = filterMode === 'visible-genes' && !this.geneSource
-      ctx.fillText(unavailable ? 'No gene annotation is available for this reference' : 'No interactions match the gene filter', PLOT_LEFT + 22, top + height / 2)
+      if (unavailable) {
+        ctx.fillStyle = palette.error
+        ctx.font = '12px Inter, system-ui, sans-serif'
+        ctx.fillText('No gene annotation is available for this reference', PLOT_LEFT + 22, top + height / 2)
+      }
       return 0
     }
 
@@ -1385,9 +1391,11 @@ export class GenomeBrowser {
     const coverage = visible.filter((feature): feature is AlignmentCoverageFeature => 'featureType' in feature && feature.featureType === 'coverage')
     const alignments = visible.filter((feature): feature is AlignmentFeature => 'featureType' in feature && feature.featureType === 'alignment')
     if (!visible.length) {
-      ctx.fillStyle = palette.muted
-      ctx.font = '12px Inter, system-ui, sans-serif'
-      ctx.fillText(track.status === 'loading' ? 'Loading alignments…' : 'No passing reads in this window', PLOT_LEFT + 22, top + height / 2)
+      if (track.status === 'loading') {
+        ctx.fillStyle = palette.muted
+        ctx.font = '12px Inter, system-ui, sans-serif'
+        ctx.fillText('Loading alignments…', PLOT_LEFT + 22, top + height / 2)
+      }
       return 0
     }
     const viewMode = spec.bamViewMode ?? 'both'
@@ -1583,8 +1591,6 @@ export class GenomeBrowser {
 
     const layout = this.buildGeneLayout(spec, width, ctx)
     if (layout.blocks.length === 0) {
-      ctx.fillStyle = palette.muted
-      ctx.fillText('No annotated genes in this window', PLOT_LEFT + 22, top + height / 2)
       return 0
     }
     const mode = spec.geneDisplayMode ?? 'collapsed'

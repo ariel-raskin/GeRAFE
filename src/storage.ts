@@ -8,6 +8,7 @@ export const STORAGE_KEYS = {
   groupAutoscale: 'gerafe-autoscale-visual-groups',
   strandedAutoColors: 'gerafe-auto-color-stranded-signals',
   upperPaneAutoFit: 'gerafe-auto-fit-upper-tracks',
+  interactionGuideSeen: 'gerafe-interaction-guide-seen',
 } as const
 
 export const LEGACY_STORAGE_KEYS = {
@@ -20,6 +21,7 @@ export const LEGACY_STORAGE_KEYS = {
   groupAutoscale: 'locus-glide-autoscale-visual-groups',
   strandedAutoColors: 'locus-glide-auto-color-stranded-signals',
   upperPaneAutoFit: 'locus-glide-auto-fit-upper-tracks',
+  interactionGuideSeen: 'locus-glide-interaction-guide-seen',
 } as const
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>

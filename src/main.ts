@@ -47,6 +47,18 @@ import { AppUpdateController, createTauriUpdateBackend, updateProgressPercent } 
 import type { AppUpdateState } from './app-update.ts'
 
 type Theme = 'light' | 'dark'
+type ActionDialogRequest = {
+  mode: 'input' | 'confirm' | 'notice'
+  title: string
+  message?: string
+  label?: string
+  initial?: string
+  placeholder?: string
+  submitLabel: string
+  danger?: boolean
+  validate?: (value: string) => string | undefined
+  resolve: (value: string | boolean | undefined) => void
+}
 const {
   theme: THEME_KEY,
   reference: REFERENCE_KEY,
@@ -57,6 +69,7 @@ const {
   groupAutoscale: GROUP_AUTOSCALE_KEY,
   strandedAutoColors: STRANDED_AUTO_COLORS_KEY,
   upperPaneAutoFit: UPPER_PANE_AUTO_FIT_KEY,
+  interactionGuideSeen: INTERACTION_GUIDE_SEEN_KEY,
 } = STORAGE_KEYS
 migrateLegacyStorage(localStorage)
 applyTheme(savedTheme())
@@ -93,19 +106,21 @@ app.innerHTML = `
         <div class="app-menu" id="edit-menu-root">
           <button class="menu-trigger" type="button" aria-haspopup="menu" aria-expanded="false">Edit</button>
           <div class="menu-popover" role="menu" hidden>
-            <button class="menu-item" id="undo-menu-item" type="button" role="menuitem" title="Undo the last track or workspace edit"><span>Undo track change</span><kbd>Ctrl+Z</kbd></button>
-            <button class="menu-item" id="redo-menu-item" type="button" role="menuitem" title="Redo the last undone track or workspace edit"><span>Redo track change</span><kbd>Ctrl+Y</kbd></button>
+            <button class="menu-item" id="undo-menu-item" type="button" role="menuitem" title="Undo the last track or workspace edit"><span>Undo</span><kbd>Ctrl+Z</kbd></button>
+            <button class="menu-item" id="redo-menu-item" type="button" role="menuitem" title="Redo the last undone track or workspace edit"><span>Redo</span><kbd>Ctrl+Y</kbd></button>
           </div>
         </div>
         <div class="app-menu" id="settings-menu-root">
           <button class="menu-trigger" id="settings-menu-button" type="button" aria-haspopup="menu" aria-expanded="false">Settings</button>
           <div class="menu-popover" id="settings-menu-popup" role="menu" hidden>
-            <button class="menu-item" id="track-options-menu-item" type="button" role="menuitem"><span>Track options…</span></button>
+            <button class="menu-item" id="track-options-menu-item" type="button" role="menuitem"><span>Track behavior…</span></button>
           </div>
         </div>
         <div class="app-menu" id="help-menu-root">
           <button class="menu-trigger" id="help-menu-button" type="button" aria-haspopup="menu" aria-expanded="false">Help</button>
           <div class="menu-popover" id="help-menu-popup" role="menu" hidden>
+            <button class="menu-item" id="interaction-guide-menu-item" type="button" role="menuitem"><span>Track interactions…</span></button>
+            <span class="menu-separator"></span>
             <button class="menu-item" id="check-updates-menu-item" type="button" role="menuitem"><span>Check for updates…</span></button>
             <span class="menu-separator"></span>
             <button class="menu-item" id="about-menu-item" type="button" role="menuitem"><span>About GeRAFE</span><small>v${__GERAFE_VERSION__}</small></button>
@@ -118,7 +133,6 @@ app.innerHTML = `
           <button class="reference-trigger" id="reference-button" type="button" aria-haspopup="listbox" aria-expanded="false" title="Choose the default reference genome"><span id="reference-label"></span><i aria-hidden="true"></i></button>
           <div class="reference-popover" id="reference-popup" role="listbox" hidden></div>
         </div>
-        <button id="reference-import" type="button" title="Import .fai, .genome, or chromosome-sizes file">＋</button>
         <input id="reference-file-input" type="file" accept=".fai,.genome,.sizes,.txt" />
       </div>
       <span class="toolbar-divider"></span>
@@ -168,13 +182,12 @@ app.innerHTML = `
     </div>
 
     <footer class="browser-footer">
-      <div class="status-group"><span class="live-dot"></span><span id="track-status">No tracks loaded</span></div>
+      <div class="status-group"><span class="live-dot" data-state="idle"></span><span id="track-status">No tracks loaded</span></div>
       <div class="metrics" aria-label="Rendering performance">
         <span><b id="fps-value">60</b> fps</span>
         <span><b id="render-value">0.0</b> ms draw</span>
         <span><b id="feature-value">0</b> features</span>
       </div>
-      <div class="interaction-hint">Hold a track to select · Wheel scrolls · Ctrl+wheel zooms · Right-click labels for options</div>
     </footer>
   </main>
   <div class="track-context-menu" id="track-context-menu" role="menu" hidden></div>
@@ -215,12 +228,11 @@ app.innerHTML = `
   </div>
   <div class="track-options-dialog" id="track-options-dialog" role="dialog" aria-modal="true" aria-labelledby="track-options-title" hidden>
     <section class="track-options-card">
-      <header><strong id="track-options-title">Track options</strong><button class="update-dialog-close" id="track-options-close" type="button" aria-label="Close">×</button></header>
+      <header><strong id="track-options-title">Track behavior</strong><button class="update-dialog-close" id="track-options-close" type="button" aria-label="Close">×</button></header>
       <div class="track-options-content">
-        <label><span><strong>Show TSS elbow arrows</strong><small>Draw transcription start site indicators in gene tracks.</small></span><input id="tss-indicators-toggle" type="checkbox" /></label>
-        <label><span><strong>Auto-link stranded signals</strong><small>Pair matching positive and negative signal files when opened.</small></span><input id="stranded-auto-link-toggle" type="checkbox" /></label>
-        <label><span><strong>Autoscale new visual groups</strong><small>Link compatible signal or matrix scales whenever tracks are added to a new group.</small></span><input id="group-autoscale-toggle" type="checkbox" /></label>
-        <label><span><strong>Color linked strands red and blue</strong><small>Use red for positive and blue for negative strands when pairs are linked.</small></span><input id="stranded-auto-colors-toggle" type="checkbox" /></label>
+        <section><h3>Gene tracks</h3><label><span><strong>Show TSS indicators</strong><small>Draw transcription start site elbow arrows in gene tracks.</small></span><input id="tss-indicators-toggle" type="checkbox" /></label></section>
+        <section><h3>Stranded signals</h3><label><span><strong>Automatically pair plus/minus tracks</strong><small>Pair matching positive- and negative-strand signal files when opened.</small></span><input id="stranded-auto-link-toggle" type="checkbox" /></label><label><span><strong>Apply red and blue strand colors</strong><small>Use red for positive and blue for negative strands when pairs are linked.</small></span><input id="stranded-auto-colors-toggle" type="checkbox" /></label></section>
+        <section><h3>Groups</h3><label><span><strong>Share scales when tracks are grouped</strong><small>Link compatible signal or matrix scales when tracks are added to a group.</small></span><input id="group-autoscale-toggle" type="checkbox" /></label></section>
       </div>
     </section>
   </div>
@@ -232,7 +244,7 @@ app.innerHTML = `
           <label><span>Intensity range</span><select id="matrix-scale-mode"><option value="auto">Automatic z-max</option><option value="fixed">Fixed z-max</option></select></label>
           <label><span>Fixed z-max</span><input id="matrix-scale-maximum" type="number" min="0.000001" step="any" /></label>
           <label><span>Intensity transform</span><select id="matrix-transform"><option value="log1p">Log</option><option value="linear">Linear</option></select></label>
-          <label><span>Color palette</span><select id="matrix-palette"><option value="warm">Figure warm</option><option value="blue-black">Light blue → dark blue → black</option><option value="monochrome">Track color</option><option value="custom">Custom colors</option></select></label>
+          <label><span>Color palette</span><select id="matrix-palette"><option value="warm">Warm · yellow → red → black</option><option value="blue-black">Light blue → dark blue → black</option><option value="monochrome">Single-color gradient</option><option value="custom">Custom colors</option></select></label>
           <label id="matrix-group-scaling-row"><span>Matrix group scaling</span><select id="matrix-group-scaling"><option value="linked">Shared automatic scale</option><option value="independent">Independent automatic scales</option></select></label>
         </div>
         <section class="matrix-palette-editor" id="matrix-palette-editor" hidden>
@@ -240,10 +252,20 @@ app.innerHTML = `
           <div id="matrix-palette-colors"></div>
           <small>Stops are interpolated in this low-to-high order.</small>
         </section>
-        <label class="matrix-range-row"><span><strong>Final-color transition</strong><small>Start blending toward the highest color only above this fraction of z-max.</small></span><input id="matrix-high-color-start" type="range" min="50" max="99" step="1" /><output id="matrix-high-color-output"></output></label>
+        <label class="matrix-range-row"><span><strong>High-color threshold</strong><small>Start blending toward the highest color only above this fraction of z-max.</small></span><input id="matrix-high-color-start" type="range" min="50" max="99" step="1" /><output id="matrix-high-color-output"></output></label>
         <label class="matrix-check-row"><span><strong>Reverse score colors</strong><small>Map high scores to the low end of the selected palette.</small></span><input id="matrix-palette-reversed" type="checkbox" /></label>
       </div>
-      <footer><button class="dialog-button secondary" id="matrix-settings-cancel" type="button">Cancel</button><button class="dialog-button primary" type="submit">Apply to tracks</button></footer>
+      <footer><button class="dialog-button secondary" id="matrix-settings-cancel" type="button">Cancel</button><button class="dialog-button primary" id="matrix-settings-apply" type="submit">Apply</button></footer>
+    </form>
+  </div>
+  <div class="action-dialog" id="action-dialog" role="dialog" aria-modal="true" aria-labelledby="action-dialog-title" hidden>
+    <form class="action-dialog-card" id="action-dialog-form">
+      <header><strong id="action-dialog-title"></strong><button class="update-dialog-close" id="action-dialog-close" type="button" aria-label="Close">×</button></header>
+      <div class="action-dialog-content">
+        <p id="action-dialog-message" hidden></p>
+        <label id="action-dialog-field"><span id="action-dialog-label"></span><input id="action-dialog-input" type="text" spellcheck="false" /><small id="action-dialog-error" role="alert"></small></label>
+      </div>
+      <footer><button class="dialog-button secondary" id="action-dialog-cancel" type="button">Cancel</button><button class="dialog-button primary" id="action-dialog-submit" type="submit">Apply</button></footer>
     </form>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -271,6 +293,7 @@ const relinkFileInput = document.querySelector<HTMLInputElement>('#relink-file-i
 const dropZone = document.querySelector<HTMLElement>('#drop-zone')!
 const toast = document.querySelector<HTMLElement>('#toast')!
 const trackStatus = document.querySelector<HTMLElement>('#track-status')!
+const liveDot = document.querySelector<HTMLElement>('.live-dot')!
 const trackContextMenu = document.querySelector<HTMLElement>('#track-context-menu')!
 const trackContextFlyout = document.querySelector<HTMLElement>('#track-context-flyout')!
 const trackColorInput = document.querySelector<HTMLInputElement>('#track-color-input')!
@@ -311,6 +334,18 @@ const matrixPaletteColors = document.querySelector<HTMLElement>('#matrix-palette
 const matrixHighColorStart = document.querySelector<HTMLInputElement>('#matrix-high-color-start')!
 const matrixHighColorOutput = document.querySelector<HTMLOutputElement>('#matrix-high-color-output')!
 const matrixPaletteReversed = document.querySelector<HTMLInputElement>('#matrix-palette-reversed')!
+const matrixSettingsApply = document.querySelector<HTMLButtonElement>('#matrix-settings-apply')!
+const actionDialog = document.querySelector<HTMLElement>('#action-dialog')!
+const actionDialogForm = document.querySelector<HTMLFormElement>('#action-dialog-form')!
+const actionDialogTitle = document.querySelector<HTMLElement>('#action-dialog-title')!
+const actionDialogMessage = document.querySelector<HTMLElement>('#action-dialog-message')!
+const actionDialogField = document.querySelector<HTMLElement>('#action-dialog-field')!
+const actionDialogLabel = document.querySelector<HTMLElement>('#action-dialog-label')!
+const actionDialogInput = document.querySelector<HTMLInputElement>('#action-dialog-input')!
+const actionDialogError = document.querySelector<HTMLElement>('#action-dialog-error')!
+const actionDialogClose = document.querySelector<HTMLButtonElement>('#action-dialog-close')!
+const actionDialogCancel = document.querySelector<HTMLButtonElement>('#action-dialog-cancel')!
+const actionDialogSubmit = document.querySelector<HTMLButtonElement>('#action-dialog-submit')!
 const zoomLevel = document.querySelector<HTMLInputElement>('#zoom-level')!
 const fitTracksAuto = document.querySelector<HTMLButtonElement>('#fit-tracks-auto')!
 
@@ -327,6 +362,7 @@ let pendingColorChannel: SignalScaleChannel | undefined
 let pendingMatrixTrackIds: string[] = []
 let pendingMatrixGroupId: string | undefined
 let matrixDialogColors: string[] = []
+let pendingActionDialog: ActionDialogRequest | undefined
 let bottomPaneAutoFit = true
 let upperPaneAutoFit = savedUpperPaneAutoFit()
 let upperAutoFitFrame: number | undefined
@@ -369,6 +405,7 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
     const attention = visualTracks.filter((track) => runtimeByTrack.get(track.id)?.some((runtime) => runtime.status === 'error' || runtime.status === 'offline')).length
     const ready = visualTracks.filter((track) => runtimeByTrack.get(track.id)?.length && runtimeByTrack.get(track.id)!.every((runtime) => runtime.status === 'ready')).length
     trackStatus.textContent = attention ? `${attention} track${attention === 1 ? ' needs' : 's need'} reopening or attention` : loading ? `Reading ${loading} track${loading === 1 ? '' : 's'}…` : `${ready} track${ready === 1 ? '' : 's'} loaded`
+    liveDot.dataset.state = attention ? 'attention' : loading ? 'loading' : ready ? 'ready' : 'idle'
   },
   onTrackSelection(trackId, additive, extend) {
     selectTrack(trackId, additive, extend)
@@ -412,6 +449,7 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
 browser.setShowTssIndicators(savedTssIndicators())
 updateTrackOptionsControls()
 updateZoomLevel(initialRegion)
+window.setTimeout(showFirstRunInteractionHint, 450)
 
 let persistTimer: number | undefined
 store.subscribe((document, reason) => {
@@ -455,12 +493,17 @@ document.querySelector<HTMLFormElement>('#locus-form')!.addEventListener('submit
 
 referenceButton.addEventListener('click', () => setReferenceMenu(referencePopup.hasAttribute('hidden')))
 referencePopup.addEventListener('click', (event) => {
+  const importOption = (event.target as Element).closest<HTMLButtonElement>('[data-reference-import]')
+  if (importOption) {
+    setReferenceMenu(false)
+    referenceFileInput.click()
+    return
+  }
   const option = (event.target as Element).closest<HTMLButtonElement>('[data-reference-id]')
   if (!option) return
   setReferenceMenu(false)
   void switchReference(option.dataset.referenceId!)
 })
-document.querySelector<HTMLButtonElement>('#reference-import')!.addEventListener('click', () => referenceFileInput.click())
 referenceFileInput.addEventListener('change', () => void importReference(referenceFileInput.files?.[0]))
 chromosomeButton.addEventListener('click', () => setChromosomeMenu(chromosomePopup.hasAttribute('hidden')))
 chromosomePopup.addEventListener('click', (event) => {
@@ -475,8 +518,15 @@ document.querySelector<HTMLButtonElement>('#open-tracks-menu-item')!.addEventLis
   pendingOpenGroupId = undefined
   void openTrackPicker()
 })
-document.querySelector<HTMLButtonElement>('#new-workspace-menu-item')!.addEventListener('click', () => {
+document.querySelector<HTMLButtonElement>('#new-workspace-menu-item')!.addEventListener('click', async () => {
   closeMenus()
+  const loadedTracks = store.current.tracks.filter((track) => track.kind !== 'genes')
+  if (loadedTracks.length && !await confirmAction({
+    title: 'Start a new workspace?',
+    message: `This will remove ${loadedTracks.length} loaded track${loadedTracks.length === 1 ? '' : 's'} from the current workspace. You can undo this change afterward.`,
+    submitLabel: 'Start new workspace',
+    danger: true,
+  })) return
   bottomPaneAutoFit = true
   runtimeSources.clear()
   selectedTrackIds.clear()
@@ -494,6 +544,10 @@ document.querySelector<HTMLButtonElement>('#save-workspace-menu-item')!.addEvent
 document.querySelector<HTMLButtonElement>('#undo-menu-item')!.addEventListener('click', () => { closeMenus(); store.undo() })
 document.querySelector<HTMLButtonElement>('#redo-menu-item')!.addEventListener('click', () => { closeMenus(); store.redo() })
 document.querySelector<HTMLButtonElement>('#track-options-menu-item')!.addEventListener('click', () => { closeMenus(); openTrackOptionsDialog() })
+document.querySelector<HTMLButtonElement>('#interaction-guide-menu-item')!.addEventListener('click', () => {
+  closeMenus()
+  void showInteractionGuide()
+})
 tssIndicatorsToggle.addEventListener('change', () => {
   localStorage.setItem(TSS_INDICATORS_KEY, String(tssIndicatorsToggle.checked))
   browser.setShowTssIndicators(tssIndicatorsToggle.checked)
@@ -541,6 +595,10 @@ matrixSettingsForm.addEventListener('submit', (event) => {
   applyMatrixSettingsDialog()
 })
 matrixSettingsDialog.addEventListener('pointerdown', (event) => { if (event.target === matrixSettingsDialog) closeMatrixSettingsDialog() })
+actionDialogForm.addEventListener('submit', handleActionDialogSubmit)
+actionDialogClose.addEventListener('click', () => closeActionDialog(undefined))
+actionDialogCancel.addEventListener('click', () => closeActionDialog(undefined))
+actionDialog.addEventListener('pointerdown', (event) => { if (event.target === actionDialog) closeActionDialog(undefined) })
 document.querySelector<HTMLButtonElement>('#check-updates-menu-item')!.addEventListener('click', () => {
   closeMenus()
   openUpdateDialog()
@@ -559,10 +617,10 @@ document.addEventListener('pointerdown', (event) => {
   if (!(event.target as Element).closest?.('#reference-picker')) setReferenceMenu(false)
   if (!(event.target as Element).closest?.('#chromosome-picker')) setChromosomeMenu(false)
   if (!(event.target as Element).closest?.('.track-context-menu')) closeTrackContextMenu()
-  if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog, #track-options-dialog, #matrix-settings-dialog')) clearTrackSelection()
+  if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog, #track-options-dialog, #matrix-settings-dialog, #action-dialog')) clearTrackSelection()
 })
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') { closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeMatrixSettingsDialog() }
+  if (event.key === 'Escape') { closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeMatrixSettingsDialog(); closeActionDialog(undefined) }
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'o') {
     event.preventDefault()
     closeMenus()
@@ -1009,7 +1067,7 @@ function setActiveChromosome(chr: string): void {
 
 function populateReferences(): void {
   referenceLabel.textContent = activeReference.name
-  referencePopup.replaceChildren(...[...references.values()].map((reference) => {
+  const options = [...references.values()].map((reference) => {
     const option = document.createElement('button')
     option.type = 'button'
     option.className = 'reference-option'
@@ -1018,7 +1076,18 @@ function populateReferences(): void {
     option.setAttribute('aria-selected', String(reference.id === activeReference.id))
     option.textContent = reference.name
     return option
-  }))
+  })
+  const separator = document.createElement('span')
+  separator.className = 'reference-option-separator'
+  const importOption = document.createElement('button')
+  importOption.type = 'button'
+  importOption.className = 'reference-option reference-import-option'
+  importOption.dataset.referenceImport = 'true'
+  importOption.setAttribute('role', 'option')
+  importOption.setAttribute('aria-selected', 'false')
+  importOption.textContent = 'Add reference…'
+  importOption.title = 'Import .fai, .genome, or chromosome-sizes file'
+  referencePopup.replaceChildren(...options, separator, importOption)
 }
 
 function setReferenceMenu(open: boolean): void {
@@ -1123,13 +1192,14 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const selected = store.current.tracks.filter((track) => selectedTrackIds.has(track.id))
   const target = store.current.tracks.find((track) => track.id === trackId)
   if (!target || !selected.length) return
-  const signals = selected.filter((track) => track.kind === 'signal' || track.kind === 'stranded')
-  const ordinarySignals = selected.filter((track) => track.kind === 'signal' && !track.signalStrand)
-  const dataTracks = selected.filter((track) => track.kind !== 'genes')
-  const resizableTracks = selected.filter((track) => track.kind !== 'genes' || track.pane !== 'bottom')
-  const fittableTracks = selected.filter((track) => track.pane === 'main')
   const one = selected.length === 1
   const sameKind = selected.every((track) => track.kind === target.kind)
+  const signalsOnly = selected.every((track) => track.kind === 'signal' || track.kind === 'stranded')
+  const ordinarySignalsOnly = selected.every((track) => track.kind === 'signal' && !track.signalStrand)
+  const strandedOnly = selected.every((track) => track.kind === 'stranded')
+  const dataOnly = selected.every((track) => track.kind !== 'genes')
+  const allResizable = selected.every((track) => track.kind !== 'genes' || track.pane !== 'bottom')
+  const allFittable = selected.every((track) => track.pane === 'main')
   const intervalTracks = sameKind && target.kind === 'interval' ? selected : []
   const interactionTracks = sameKind && target.kind === 'interaction' ? selected : []
   const alignmentTracks = sameKind && target.kind === 'alignment' ? selected : []
@@ -1137,6 +1207,13 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const pairable = selected.length === 2 && selected.every((track) => track.kind === 'signal') && canPairSelectedStrands(selected as TrackSpec[])
   const matrixTracks = selected.filter((track) => track.kind === 'matrix')
   const matricesOnly = matrixTracks.length > 0 && matrixTracks.length === selected.length
+  const signalScaleIds = signalsOnly ? selected.flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter((id): id is string => Boolean(id)) : []
+  const signalScales = store.current.scales.filter((scale) => signalScaleIds.includes(scale.id))
+  const scaleModeLabel = signalScales.length && signalScales.every((scale) => scale.mode === 'auto-visible') ? 'Automatic'
+    : signalScales.length && signalScales.every((scale) => scale.mode === 'fixed') ? 'Fixed' : 'Mixed'
+  const canShareSignalScales = signalsOnly && signalTracksCanShareScales(selected)
+  const sharedSignalScales = signalsOnly && selected.length > 1 && signalTracksShareScales(selected)
+  const selectedTrackSharesOutsideSelection = one && signalsOnly && signalScaleIds.some((scaleId) => store.current.tracks.some((track) => track.id !== target.id && [track.scaleBindingId, track.negativeScaleBindingId].includes(scaleId)))
   const interactionGeneDetail = interactionTracks.length && interactionTracks.every((track) => track.interactionFilterMode === 'genes')
     && sameValue(interactionTracks.map((track) => (track.interactionFilterGenes ?? []).join(', ')))
     ? escapeHtml((interactionTracks[0].interactionFilterGenes ?? []).join(', '))
@@ -1151,74 +1228,97 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     contextSubmenuItems.set(id, items)
     return `<button class="context-item context-submenu-trigger" data-context-submenu="${id}" type="button" role="menuitem" aria-haspopup="menu" aria-expanded="false"><span>${label}</span><small>${detail}</small></button>`
   }
+  const appearanceItems = [
+    strandedOnly
+      ? action('color-plus', 'Set positive-strand color…') + action('color-minus', 'Set negative-strand color…')
+      : selected.every((track) => track.kind !== 'stranded') ? action('color', one ? 'Set color…' : 'Set color for selected tracks…') : '',
+    allResizable ? action('height', one ? 'Set track height…' : 'Set selected track heights…') : '',
+    allFittable ? action('height-lock', 'Lock track height', selected.every((track) => track.heightLocked) ? 'current' : '') : '',
+  ].join('')
+  const groupingItems = action('group', 'Group selected…')
+    + (selected.every((track) => track.displayGroupId) ? action('remove-from-group', one ? 'Remove from group' : 'Remove selected tracks from groups') : '')
+  let typeItems = ''
+  if (signalsOnly) {
+    const scaleItems = action('scale-auto', 'Autoscale to visible data', signalScales.every((scale) => scale.mode === 'auto-visible') ? 'current' : '')
+      + action('scale-fixed', 'Set fixed range…', signalScales.length > 0 && signalScales.every((scale) => scale.mode === 'fixed') ? 'current' : '')
+      + (canShareSignalScales ? action('scale-toggle-sharing', 'Share y-axis scale', sharedSignalScales ? 'current' : '') : '')
+      + (selectedTrackSharesOutsideSelection ? action('unlink-scales', 'Unlink from shared scale') : '')
+      + (ordinarySignalsOnly ? action('prevent-negative', 'Clamp negative values to zero', selected.every((track) => track.allowNegativeValues === false) ? 'current' : '') : '')
+    typeItems += submenu('signal-scale', 'Y-axis scale', scaleModeLabel, scaleItems)
+    if (pairable) typeItems += action('strand-link', 'Link as stranded track')
+    if (strandedOnly) typeItems += action('strand-unlink', one ? 'Separate stranded pair' : 'Separate stranded pairs')
+  }
+  if (intervalTracks.length) {
+    const mode = sameValue(intervalTracks.map((track) => track.intervalDisplayMode ?? 'collapsed')) ? intervalTracks[0].intervalDisplayMode ?? 'collapsed' : 'mixed'
+    typeItems += submenu('interval-display', 'Display mode', capitalize(mode),
+      action('interval-collapsed', 'Collapsed', intervalTracks.every((track) => track.intervalDisplayMode === 'collapsed' || !track.intervalDisplayMode) ? 'current' : '')
+      + action('interval-expanded', 'Expanded', intervalTracks.every((track) => track.intervalDisplayMode === 'expanded') ? 'current' : '')
+      + action('interval-squished', 'Squished', intervalTracks.every((track) => track.intervalDisplayMode === 'squished') ? 'current' : ''))
+  }
+  if (interactionTracks.length) {
+    typeItems += action('interaction-flip', 'Draw arcs downward', interactionTracks.every((track) => track.interactionDirection === 'down') ? 'current' : '')
+    const filterLabel = interactionTracks.every((track) => track.interactionFilterMode === 'visible-genes') ? 'Visible genes'
+      : interactionTracks.every((track) => track.interactionFilterMode === 'genes') ? 'Gene symbols'
+        : interactionTracks.every((track) => !track.interactionFilterMode || track.interactionFilterMode === 'all') ? 'All' : 'Mixed'
+    typeItems += submenu('interaction-filter', 'Interactions shown', filterLabel,
+      action('interaction-filter-all', 'All interactions', interactionTracks.every((track) => !track.interactionFilterMode || track.interactionFilterMode === 'all') ? 'current' : '')
+      + action('interaction-filter-genes', 'Matching gene symbols…', interactionGeneDetail)
+      + action('interaction-filter-visible', 'Interactions involving visible genes', interactionTracks.every((track) => track.interactionFilterMode === 'visible-genes') ? 'current' : ''))
+  }
+  if (matricesOnly) typeItems += matrixContextMenuMarkup(matrixTracks, action, submenu)
+  if (alignmentTracks.length) {
+    const viewMode = sameValue(alignmentTracks.map((track) => track.bamViewMode ?? 'both')) ? alignmentTracks[0].bamViewMode ?? 'both' : 'mixed'
+    const displayMode = sameValue(alignmentTracks.map((track) => track.alignmentDisplayMode ?? 'expanded')) ? alignmentTracks[0].alignmentDisplayMode ?? 'expanded' : 'mixed'
+    const colorMode = sameValue(alignmentTracks.map((track) => track.bamColorMode ?? 'track')) ? alignmentTracks[0].bamColorMode ?? 'track' : 'mixed'
+    typeItems += submenu('bam-content', 'Content', bamViewModeLabel(viewMode),
+      action('bam-view-both', 'Coverage and alignments', alignmentTracks.every((track) => track.bamViewMode === 'both' || !track.bamViewMode) ? 'current' : '')
+      + action('bam-view-coverage', 'Coverage only', alignmentTracks.every((track) => track.bamViewMode === 'coverage') ? 'current' : '')
+      + action('bam-view-alignments', 'Alignments only', alignmentTracks.every((track) => track.bamViewMode === 'alignments') ? 'current' : ''))
+    typeItems += submenu('bam-layout', 'Read layout', capitalize(displayMode),
+      action('bam-display-expanded', 'Expanded', alignmentTracks.every((track) => track.alignmentDisplayMode === 'expanded' || !track.alignmentDisplayMode) ? 'current' : '')
+      + action('bam-display-collapsed', 'Collapsed', alignmentTracks.every((track) => track.alignmentDisplayMode === 'collapsed') ? 'current' : '')
+      + action('bam-display-squished', 'Squished', alignmentTracks.every((track) => track.alignmentDisplayMode === 'squished') ? 'current' : ''))
+    typeItems += action('bam-pairs', 'View as pairs', alignmentTracks.every((track) => track.bamViewAsPairs) ? 'current' : '')
+      + action('bam-mismatches', 'Show mismatches', alignmentTracks.every((track) => track.bamShowMismatches !== false) ? 'current' : '')
+    typeItems += submenu('bam-color', 'Color by', bamColorModeLabel(colorMode),
+      action('bam-color-track', 'Track', alignmentTracks.every((track) => track.bamColorMode === 'track' || !track.bamColorMode) ? 'current' : '')
+      + action('bam-color-strand', 'Strand', alignmentTracks.every((track) => track.bamColorMode === 'strand') ? 'current' : '')
+      + action('bam-color-pair-orientation', 'Pair orientation', alignmentTracks.every((track) => track.bamColorMode === 'pair-orientation') ? 'current' : '')
+      + action('bam-color-mapping-quality', 'Mapping quality', alignmentTracks.every((track) => track.bamColorMode === 'mapping-quality') ? 'current' : ''))
+    typeItems += submenu('bam-filters', 'Read filters', sameValue(alignmentTracks.map((track) => track.bamMinMapq ?? 0)) ? `MAPQ ≥ ${alignmentTracks[0].bamMinMapq ?? 0}` : 'Mixed',
+      action('bam-mapq', 'Minimum mapping quality…', sameValue(alignmentTracks.map((track) => track.bamMinMapq ?? 0)) ? String(alignmentTracks[0].bamMinMapq ?? 0) : 'Mixed')
+      + action('bam-duplicates', 'Include duplicate reads', alignmentTracks.every((track) => track.bamIncludeDuplicates) ? 'current' : '')
+      + action('bam-secondary', 'Include secondary alignments', alignmentTracks.every((track) => track.bamIncludeSecondary) ? 'current' : '')
+      + action('bam-supplementary', 'Include supplementary alignments', alignmentTracks.every((track) => track.bamIncludeSupplementary) ? 'current' : ''))
+  }
+  if (geneTracks.length) {
+    const mode = sameValue(geneTracks.map((track) => track.geneDisplayMode ?? 'collapsed')) ? geneTracks[0].geneDisplayMode ?? 'collapsed' : 'mixed'
+    typeItems += submenu('genes-display', 'Display mode', capitalize(mode),
+      action('genes-collapsed', 'Collapsed', geneTracks.every((track) => track.geneDisplayMode === 'collapsed' || !track.geneDisplayMode) ? 'current' : '')
+      + action('genes-expanded', 'Expanded transcripts', geneTracks.every((track) => track.geneDisplayMode === 'expanded') ? 'current' : '')
+      + action('genes-squished', 'Squished transcripts', geneTracks.every((track) => track.geneDisplayMode === 'squished') ? 'current' : ''))
+  }
+  let sourceItems = ''
+  if (one && target.kind !== 'genes') {
+    sourceItems = action('duplicate', 'Duplicate track')
+    if (target.kind === 'stranded') {
+      sourceItems += action('relink-plus', runtimeSources.has(target.sourceIds[0]) ? 'Replace positive-strand source…' : 'Relink positive-strand source…')
+        + action('relink-minus', runtimeSources.has(target.sourceIds[1]) ? 'Replace negative-strand source…' : 'Relink negative-strand source…')
+    } else sourceItems += action('relink', target.kind === 'alignment'
+      ? runtimeSources.has(target.sourceIds[0]) ? 'Replace BAM and index…' : 'Relink BAM and index…'
+      : runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…')
+  }
+  const sections = [
+    one ? action('rename', 'Rename…') : '',
+    appearanceItems ? submenu('appearance', 'Appearance', '', appearanceItems) : '',
+    typeItems,
+    submenu('grouping', 'Grouping', '', groupingItems),
+    sourceItems ? submenu('source', 'Source', '', sourceItems) : '',
+    dataOnly ? action('remove', one ? 'Remove track' : `Remove ${selected.length} selected tracks`, '', false, true) : '',
+  ].filter(Boolean)
   trackContextMenu.innerHTML = `
-    <div class="context-heading"><strong>${one ? escapeHtml(target.label) : `${selected.length} tracks selected`}</strong><span>${one ? (target.kind === 'genes' ? 'Gene annotation' : target.kind === 'interval' ? 'Interval track' : target.kind === 'interaction' ? 'BEDPE interactions' : target.kind === 'matrix' ? 'Contact matrix' : target.kind === 'alignment' ? 'BAM alignments' : target.kind === 'stranded' ? 'Linked stranded signal' : target.signalStrand ? `${target.signalStrand === 'plus' ? 'Positive' : 'Negative'}-strand signal` : 'Signal track') : 'Shared actions'}</span></div>
-    ${one ? action('rename', 'Rename…') : ''}
-    ${one && target.kind === 'stranded' ? action('color-plus', 'Set positive-strand color…') + action('color-minus', 'Set negative-strand color…') : action('color', one ? 'Set color…' : 'Set selected colors…')}
-    ${resizableTracks.length ? action('height', one ? 'Set track height…' : 'Set selected heights…') : ''}
-    ${fittableTracks.length ? action('height-lock', 'Lock track height', fittableTracks.every((track) => track.heightLocked) ? 'current' : '') : ''}
-    ${action('group', 'Group selected')}
-    ${selected.some((track) => track.displayGroupId) ? action('remove-from-group', selected.length > 1 ? 'Remove selected tracks from groups' : 'Remove from group') : ''}
-    <span class="context-separator"></span>
-    ${signals.length ? action('scale-auto', 'Scale automatically', 'visible window') : ''}
-    ${ordinarySignals.length ? action('prevent-negative', 'Prevent negative values', ordinarySignals.every((track) => track.allowNegativeValues === false) ? 'current' : '') : ''}
-    ${signals.length ? action('scale-fixed', 'Set fixed scale…') : ''}
-    ${signals.length >= 2 ? action('link-scales', 'Link selected scales') : ''}
-    ${signals.length ? action('unlink-scales', 'Unlink selected scales') : ''}
-    ${pairable ? '<span class="context-separator"></span>' + action('strand-link', 'Link as stranded track') : ''}
-    ${one && target.kind === 'stranded' ? '<span class="context-separator"></span>' + action('strand-unlink', 'Unlink stranded sources') : ''}
-    ${one && (target.kind === 'signal' || target.kind === 'stranded') ? '<span class="context-separator"></span>' : ''}
-    ${one && (target.kind === 'signal' || target.kind === 'stranded') ? action('duplicate', 'Duplicate track') : ''}
-    ${one && target.kind === 'signal' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
-    ${one && target.kind === 'stranded' ? action('relink-plus', runtimeSources.has(target.sourceIds[0]) ? 'Replace positive source…' : 'Relink positive source…') : ''}
-    ${one && target.kind === 'stranded' ? action('relink-minus', runtimeSources.has(target.sourceIds[1]) ? 'Replace negative source…' : 'Relink negative source…') : ''}
-    ${intervalTracks.length ? '<span class="context-separator"></span>' : ''}
-    ${intervalTracks.length ? action('interval-collapsed', 'Collapsed interval view', intervalTracks.every((track) => track.intervalDisplayMode === 'collapsed' || !track.intervalDisplayMode) ? 'current' : '') : ''}
-    ${intervalTracks.length ? action('interval-expanded', 'Expanded interval view', intervalTracks.every((track) => track.intervalDisplayMode === 'expanded') ? 'current' : '') : ''}
-    ${intervalTracks.length ? action('interval-squished', 'Squished interval view', intervalTracks.every((track) => track.intervalDisplayMode === 'squished') ? 'current' : '') : ''}
-    ${one && target.kind === 'interval' ? action('duplicate', 'Duplicate track') : ''}
-    ${one && target.kind === 'interval' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
-    ${interactionTracks.length ? '<span class="context-separator"></span>' : ''}
-    ${interactionTracks.length ? action('interaction-flip', 'Flip arcs upside down', interactionTracks.every((track) => track.interactionDirection === 'down') ? 'current' : '') : ''}
-    ${interactionTracks.length ? '<span class="context-separator"></span>' : ''}
-    ${interactionTracks.length ? action('interaction-filter-all', 'Show all interactions', interactionTracks.every((track) => !track.interactionFilterMode || track.interactionFilterMode === 'all') ? 'current' : '') : ''}
-    ${interactionTracks.length ? action('interaction-filter-genes', 'Filter by gene symbols…', interactionGeneDetail) : ''}
-    ${interactionTracks.length ? action('interaction-filter-visible', 'Show interactions involving visible genes', interactionTracks.every((track) => track.interactionFilterMode === 'visible-genes') ? 'current' : '') : ''}
-    ${interactionTracks.length ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'interaction' ? action('duplicate', 'Duplicate track') : ''}
-    ${one && target.kind === 'interaction' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
-    ${matricesOnly ? '<span class="context-separator"></span>' : ''}
-    ${matricesOnly ? matrixContextMenuMarkup(matrixTracks, action, submenu) : ''}
-    ${matricesOnly ? '<span class="context-separator"></span>' : ''}
-    ${one && target.kind === 'matrix' ? action('duplicate', 'Duplicate track') : ''}
-    ${one && target.kind === 'matrix' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…') : ''}
-    ${alignmentTracks.length ? '<span class="context-separator"></span>' : ''}
-    ${alignmentTracks.length ? action('bam-view-both', 'Coverage and alignments', alignmentTracks.every((track) => track.bamViewMode === 'both' || !track.bamViewMode) ? 'current' : '') : ''}
-    ${alignmentTracks.length ? action('bam-view-coverage', 'Coverage only', alignmentTracks.every((track) => track.bamViewMode === 'coverage') ? 'current' : '') : ''}
-    ${alignmentTracks.length ? action('bam-view-alignments', 'Alignments only', alignmentTracks.every((track) => track.bamViewMode === 'alignments') ? 'current' : '') : ''}
-    ${alignmentTracks.length ? '<span class="context-separator"></span>' : ''}
-    ${alignmentTracks.length ? action('bam-display-expanded', 'Expanded reads', alignmentTracks.every((track) => track.alignmentDisplayMode === 'expanded' || !track.alignmentDisplayMode) ? 'current' : '') : ''}
-    ${alignmentTracks.length ? action('bam-display-collapsed', 'Collapsed reads', alignmentTracks.every((track) => track.alignmentDisplayMode === 'collapsed') ? 'current' : '') : ''}
-    ${alignmentTracks.length ? action('bam-display-squished', 'Squished reads', alignmentTracks.every((track) => track.alignmentDisplayMode === 'squished') ? 'current' : '') : ''}
-    ${alignmentTracks.length ? action('bam-pairs', 'View as pairs', alignmentTracks.every((track) => track.bamViewAsPairs) ? 'on' : '') : ''}
-    ${alignmentTracks.length ? action('bam-mismatches', 'Show mismatches', alignmentTracks.every((track) => track.bamShowMismatches !== false) ? 'on' : '') : ''}
-    ${alignmentTracks.length ? '<span class="context-separator"></span>' : ''}
-    ${alignmentTracks.length ? action('bam-color-track', 'Color by track', alignmentTracks.every((track) => track.bamColorMode === 'track' || !track.bamColorMode) ? 'current' : '') : ''}
-    ${alignmentTracks.length ? action('bam-color-strand', 'Color by strand', alignmentTracks.every((track) => track.bamColorMode === 'strand') ? 'current' : '') : ''}
-    ${alignmentTracks.length ? action('bam-color-pair-orientation', 'Color by pair orientation', alignmentTracks.every((track) => track.bamColorMode === 'pair-orientation') ? 'current' : '') : ''}
-    ${alignmentTracks.length ? action('bam-color-mapping-quality', 'Color by mapping quality', alignmentTracks.every((track) => track.bamColorMode === 'mapping-quality') ? 'current' : '') : ''}
-    ${alignmentTracks.length ? '<span class="context-separator"></span>' : ''}
-    ${alignmentTracks.length ? action('bam-mapq', 'Minimum mapping quality…', sameValue(alignmentTracks.map((track) => track.bamMinMapq ?? 0)) ? String(alignmentTracks[0].bamMinMapq ?? 0) : 'Mixed') : ''}
-    ${alignmentTracks.length ? action('bam-duplicates', 'Include duplicate reads', alignmentTracks.every((track) => track.bamIncludeDuplicates) ? 'on' : '') : ''}
-    ${alignmentTracks.length ? action('bam-secondary', 'Include secondary alignments', alignmentTracks.every((track) => track.bamIncludeSecondary) ? 'on' : '') : ''}
-    ${alignmentTracks.length ? action('bam-supplementary', 'Include supplementary alignments', alignmentTracks.every((track) => track.bamIncludeSupplementary) ? 'on' : '') : ''}
-    ${one && target.kind === 'alignment' ? action('duplicate', 'Duplicate track') : ''}
-    ${one && target.kind === 'alignment' ? action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace BAM and index…' : 'Relink BAM and index…') : ''}
-    ${geneTracks.length ? '<span class="context-separator"></span>' : ''}
-    ${geneTracks.length ? action('genes-collapsed', 'Collapsed gene view', geneTracks.every((track) => track.geneDisplayMode === 'collapsed' || !track.geneDisplayMode) ? 'current' : '') : ''}
-    ${geneTracks.length ? action('genes-expanded', 'Expanded transcript view', geneTracks.every((track) => track.geneDisplayMode === 'expanded') ? 'current' : '') : ''}
-    ${geneTracks.length ? action('genes-squished', 'Squished transcript view', geneTracks.every((track) => track.geneDisplayMode === 'squished') ? 'current' : '') : ''}
-    ${dataTracks.length ? '<span class="context-separator"></span>' + action('remove', dataTracks.length > 1 ? `Remove ${dataTracks.length} selected tracks` : 'Remove track', '', false, true) : ''}
+    <div class="context-heading"><strong>${one ? escapeHtml(target.label) : `${selected.length} tracks selected`}</strong><span>${one ? trackKindLabel(target) : 'Actions shared by the selection'}</span></div>
+    ${sections.join('<span class="context-separator"></span>')}
   `
   trackContextMenu.dataset.trackId = trackId
   delete trackContextMenu.dataset.groupId
@@ -1232,8 +1332,90 @@ function canPairSelectedStrands(tracks: readonly TrackSpec[]): boolean {
   return Boolean(roles[0] && roles[1] && roles[0] !== roles[1] && bases[0] && bases[0] === bases[1])
 }
 
+function trackKindLabel(track: TrackSpec): string {
+  if (track.kind === 'genes') return 'Gene annotation'
+  if (track.kind === 'interval') return 'Interval track'
+  if (track.kind === 'interaction') return 'BEDPE interactions'
+  if (track.kind === 'matrix') return 'Contact matrix'
+  if (track.kind === 'alignment') return 'BAM alignments'
+  if (track.kind === 'stranded') return 'Stranded signal pair'
+  if (track.signalStrand) return `${track.signalStrand === 'plus' ? 'Positive' : 'Negative'}-strand signal`
+  return 'Signal track'
+}
+
+function capitalize(value: string): string {
+  return value ? value[0].toLocaleUpperCase() + value.slice(1) : value
+}
+
+function bamViewModeLabel(mode: string): string {
+  if (mode === 'both') return 'Coverage + alignments'
+  if (mode === 'coverage') return 'Coverage only'
+  if (mode === 'alignments') return 'Alignments only'
+  return capitalize(mode)
+}
+
+function bamColorModeLabel(mode: string): string {
+  if (mode === 'pair-orientation') return 'Pair orientation'
+  if (mode === 'mapping-quality') return 'Mapping quality'
+  return capitalize(mode)
+}
+
+function signalTracksShareScales(tracks: readonly TrackSpec[]): boolean {
+  let comparableChannel = false
+  for (const channel of ['ordinary', 'plus', 'minus'] as const) {
+    const ids = tracks.flatMap((track) => {
+      if (track.kind === 'stranded') return channel === 'plus' ? [track.scaleBindingId] : channel === 'minus' ? [track.negativeScaleBindingId] : []
+      if (track.kind !== 'signal' || (track.signalStrand ?? 'ordinary') !== channel) return []
+      return [track.scaleBindingId]
+    }).filter((id): id is string => Boolean(id))
+    if (ids.length < 2) continue
+    comparableChannel = true
+    if (!ids.every((id) => id === ids[0])) return false
+  }
+  return comparableChannel
+}
+
+function signalTracksCanShareScales(tracks: readonly TrackSpec[]): boolean {
+  for (const channel of ['ordinary', 'plus', 'minus'] as const) {
+    const count = tracks.filter((track) => track.kind === 'stranded'
+      ? channel !== 'ordinary'
+      : track.kind === 'signal' && (track.signalStrand ?? 'ordinary') === channel).length
+    if (count >= 2) return true
+  }
+  return false
+}
+
 function sameValue<T>(values: readonly T[]): boolean {
   return values.length > 0 && values.every((value) => Object.is(value, values[0]))
+}
+
+function requiredName(value: string): string | undefined {
+  return value.trim() ? undefined : 'Enter a name.'
+}
+
+function parseRange(value: string): { min: number; max: number } | undefined {
+  const parts = value.split(',').map((item) => Number(item.trim()))
+  if (parts.length !== 2 || !parts.every(Number.isFinite) || parts[0] === parts[1]) return undefined
+  return { min: Math.min(parts[0], parts[1]), max: Math.max(parts[0], parts[1]) }
+}
+
+function validateRange(value: string): string | undefined {
+  return parseRange(value) ? undefined : 'Enter two different numbers separated by a comma.'
+}
+
+function validatePositiveNumber(value: string): string | undefined {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? undefined : 'Enter a number greater than zero.'
+}
+
+function validateMapq(value: string): string | undefined {
+  const number = Number(value)
+  return Number.isInteger(number) && number >= 0 && number <= 255 ? undefined : 'Enter a whole number from 0 to 255.'
+}
+
+function validateTrackHeight(value: string): string | undefined {
+  const number = Number(value)
+  return Number.isFinite(number) && number >= 1 && number <= 100 ? undefined : 'Enter a number from 1 to 100.'
 }
 
 function commonValues<T>(sets: readonly (readonly T[])[]): T[] {
@@ -1263,7 +1445,7 @@ function matrixContextMenuMarkup(
     ? matrixTracks[0].matrixNormalization ?? metadata[0]?.defaultNormalization ?? 'raw'
     : 'Mixed'
   return [
-    action('matrix-flip', 'Flip matrix upside down', matrixTracks.every((track) => track.matrixDirection === 'down') ? 'current' : ''),
+    action('matrix-flip', 'Draw matrix downward', matrixTracks.every((track) => track.matrixDirection === 'down') ? 'current' : ''),
     submenu('matrix-resolution', 'Resolution', resolutionLabel,
       action('matrix-resolution-auto', 'Automatic', matrixTracks.every((track) => track.matrixResolution === undefined) ? 'current' : '')
       + commonResolutions.map((resolution) => action(`matrix-resolution-value-${resolution}`, formatBases(resolution), matrixTracks.every((track) => track.matrixResolution === resolution) ? 'current' : '')).join('')),
@@ -1298,22 +1480,24 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
   }
   trackContextMenu.innerHTML = `
     <div class="context-heading"><strong>${escapeHtml(group.label)}</strong><span>${members.length} track${members.length === 1 ? '' : 's'} · group options</span></div>
-    ${action('group-select', 'Select tracks in group')}
-    ${action('group-open', 'Open tracks into group…')}
-    ${action('group-add-selected', 'Add selected tracks', selectedOutside.length ? `${selectedOutside.length} selected` : '', selectedOutside.length === 0)}
-    <span class="context-separator"></span>
-    ${hasOrdinaryColor ? action(hasLinkedStranded ? 'group-color-ordinary' : 'group-color-all', hasLinkedStranded ? 'Set unstranded track color…' : 'Set group track color…') : ''}
-    ${hasPlusColor ? action('group-color-plus', 'Set positive-strand color…') : ''}
-    ${hasMinusColor ? action('group-color-minus', 'Set negative-strand color…') : ''}
-    ${action('group-height', 'Set group track height…')}
-    ${signalIds.length ? action('group-auto-linked', 'Autoscale group together', group.scaleBehavior === 'linked' ? 'current' : '') : ''}
-    ${signalIds.length ? action('group-auto-independent', 'Use independent autoscaling', group.scaleBehavior === 'independent' ? 'current' : '') : ''}
-    ${signalIds.length ? action('group-fixed', 'Set fixed group scale…') : ''}
-    ${matricesOnly ? '<span class="context-separator"></span>' + matrixContextMenuMarkup(matrixTracks, action, submenu) : ''}
-    <span class="context-separator"></span>
-    ${action('group-rename', 'Rename group…')}
-    ${action('group-remove', 'Ungroup tracks')}
-    ${action('group-remove-tracks', 'Remove all group tracks', `${members.length} track${members.length === 1 ? '' : 's'}`, false, true)}
+    ${[
+      submenu('group-add', 'Add tracks', '',
+        action('group-open', 'Add files…')
+        + action('group-add-selected', 'Add selected tracks', selectedOutside.length ? `${selectedOutside.length} selected` : '', selectedOutside.length === 0)),
+      submenu('group-appearance', 'Appearance', '',
+        (hasOrdinaryColor ? action(hasLinkedStranded ? 'group-color-ordinary' : 'group-color-all', hasLinkedStranded ? 'Set unstranded track color…' : 'Set group track color…') : '')
+        + (hasPlusColor ? action('group-color-plus', 'Set positive-strand color…') : '')
+        + (hasMinusColor ? action('group-color-minus', 'Set negative-strand color…') : '')
+        + action('group-height', 'Set group track height…')),
+      signalIds.length ? submenu('group-scaling', 'Signal scaling', group.scaleBehavior === 'independent' ? 'Independent' : 'Shared',
+        action('group-auto-linked', 'Share automatic scales', group.scaleBehavior === 'linked' ? 'current' : '')
+        + action('group-auto-independent', 'Scale tracks independently', group.scaleBehavior === 'independent' ? 'current' : '')
+        + action('group-fixed', 'Set shared fixed range…')) : '',
+      matricesOnly ? matrixContextMenuMarkup(matrixTracks, action, submenu) : '',
+      action('group-rename', 'Rename group…'),
+      action('group-remove', 'Ungroup tracks'),
+      action('group-remove-tracks', 'Remove all tracks in group', `${members.length} track${members.length === 1 ? '' : 's'}`, false, true),
+    ].filter(Boolean).join('<span class="context-separator"></span>')}
   `
   trackContextMenu.dataset.groupId = groupId
   delete trackContextMenu.dataset.trackId
@@ -1366,7 +1550,7 @@ function closeTrackContextMenu(): void {
   closeContextSubmenu()
 }
 
-function handleTrackContextAction(event: MouseEvent): void {
+async function handleTrackContextAction(event: MouseEvent): Promise<void> {
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-context-action]')
   const groupId = trackContextMenu.dataset.groupId
   const targetId = trackContextMenu.dataset.trackId
@@ -1374,7 +1558,7 @@ function handleTrackContextAction(event: MouseEvent): void {
   const command = button.dataset.contextAction
   if (groupId) {
     closeTrackContextMenu()
-    handleGroupContextAction(command, groupId)
+    await handleGroupContextAction(command, groupId)
     return
   }
   if (!targetId) return
@@ -1389,7 +1573,7 @@ function handleTrackContextAction(event: MouseEvent): void {
   closeTrackContextMenu()
   if (command === 'rename') {
     const track = store.current.tracks.find((item) => item.id === targetId)
-    const label = window.prompt('Track name:', track?.label ?? '')?.trim()
+    const label = (await requestText({ title: 'Rename track', label: 'Track name', initial: track?.label ?? '', submitLabel: 'Rename', validate: requiredName }))?.trim()
     if (label) store.edit((draft) => { const item = draft.tracks.find((track) => track.id === targetId); if (item) item.label = label })
   }
   if (command === 'color' || command === 'color-plus' || command === 'color-minus') {
@@ -1399,7 +1583,7 @@ function handleTrackContextAction(event: MouseEvent): void {
     const initial = command === 'color-minus' ? colorTrack?.negativeColor : colorTrack?.color
     openColorDialog(command === 'color-plus' ? 'Set positive-strand color' : command === 'color-minus' ? 'Set negative-strand color' : 'Set track color', initial ?? '#6d55e0')
   }
-  if (command === 'height') setTrackHeights(ids)
+  if (command === 'height') await setTrackHeights(ids)
   if (command === 'height-lock') store.edit((draft) => {
     const tracks = draft.tracks.filter((track) => ids.includes(track.id) && track.pane === 'main')
     const locked = !tracks.every((track) => track.heightLocked)
@@ -1408,8 +1592,8 @@ function handleTrackContextAction(event: MouseEvent): void {
   if (command === 'group') {
     const first = store.current.tracks.find((track) => ids.includes(track.id))
     const current = store.current.groups.find((group) => group.id === first?.displayGroupId)?.label ?? ''
-    const label = window.prompt('Visual group name (leave blank to remove grouping):', current)
-    if (label !== null) store.edit((draft) => assignDisplayGroup(draft, ids, label, { autoScale: savedGroupAutoscale() }))
+    const label = await requestText({ title: 'Group selected tracks', label: 'Group name', initial: current, submitLabel: 'Group tracks', validate: requiredName })
+    if (label !== undefined) store.edit((draft) => assignDisplayGroup(draft, ids, label, { autoScale: savedGroupAutoscale() }))
   }
   if (command === 'remove-from-group') store.edit((draft) => {
     const groupedIds = draft.tracks.filter((track) => ids.includes(track.id) && track.displayGroupId).map((track) => track.id)
@@ -1426,16 +1610,21 @@ function handleTrackContextAction(event: MouseEvent): void {
   })
   if (command === 'scale-fixed') {
     const suggested = visibleLimits(targetId)
-    const entered = window.prompt('Fixed y-axis range as min,max:', `${suggested.min},${suggested.max}`)
-    const [min, max] = entered?.split(',').map((value) => Number(value.trim())) ?? []
-    if (Number.isFinite(min) && Number.isFinite(max) && min !== max) store.edit((draft) => {
+    const entered = await requestText({ title: 'Set fixed y-axis range', label: 'Minimum, maximum', initial: `${suggested.min}, ${suggested.max}`, placeholder: '0, 100', submitLabel: 'Set range', validate: validateRange })
+    const range = entered === undefined ? undefined : parseRange(entered)
+    if (range) store.edit((draft) => {
       const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
       for (const scale of draft.scales) if (scaleIds.has(scale.id)) {
         scale.mode = 'fixed'
-        scale.limits = { min: Math.min(min, max), max: Math.max(min, max) }
+        scale.limits = range
       }
     })
   }
+  if (command === 'scale-toggle-sharing') store.edit((draft) => {
+    const tracks = draft.tracks.filter((track) => signalIds.includes(track.id))
+    if (signalTracksShareScales(tracks)) unlinkScales(draft, signalIds)
+    else linkScales(draft, signalIds)
+  })
   if (command === 'link-scales') store.edit((draft) => linkScales(draft, signalIds))
   if (command === 'unlink-scales') store.edit((draft) => unlinkScales(draft, signalIds))
   if (command === 'strand-link') {
@@ -1474,8 +1663,8 @@ function handleTrackContextAction(event: MouseEvent): void {
   if (command === 'interaction-filter-genes') {
     const tracks = store.current.tracks.filter((item) => interactionIds.includes(item.id) && item.kind === 'interaction')
     const initial = sameValue(tracks.map((track) => (track.interactionFilterGenes ?? []).join(', '))) ? (tracks[0]?.interactionFilterGenes ?? []).join(', ') : ''
-    const entered = window.prompt('Gene symbols, separated by commas or spaces:', initial)
-    if (entered !== null) {
+    const entered = await requestText({ title: 'Filter interactions by gene', label: 'Gene symbols', initial, placeholder: 'RUNX1, MYC', submitLabel: 'Apply filter', message: 'Separate multiple symbols with commas or spaces. Leave blank to clear the filter.' })
+    if (entered !== undefined) {
       const genes = [...new Set(entered.split(/[\s,;]+/).map((gene) => gene.trim().toLocaleUpperCase()).filter(Boolean))].slice(0, 100)
       store.edit((draft) => {
         for (const track of draft.tracks) if (interactionIds.includes(track.id) && track.kind === 'interaction') {
@@ -1487,7 +1676,7 @@ function handleTrackContextAction(event: MouseEvent): void {
       if (unresolved.length) showToast(`${unresolved.join(', ')} ${unresolved.length === 1 ? 'was' : 'were'} not found in the active annotation; matching BEDPE names instead.`)
     }
   }
-  applyMatrixContextAction(command, matrixIds)
+  await applyMatrixContextAction(command, matrixIds)
   if (command?.startsWith('bam-view-')) {
     const mode = command.slice(9) as 'coverage' | 'alignments' | 'both'
     store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamViewMode = mode })
@@ -1513,9 +1702,9 @@ function handleTrackContextAction(event: MouseEvent): void {
   if (command === 'bam-mapq') {
     const tracks = store.current.tracks.filter((item) => alignmentIds.includes(item.id) && item.kind === 'alignment')
     const initial = sameValue(tracks.map((track) => track.bamMinMapq ?? 0)) ? tracks[0]?.bamMinMapq ?? 0 : 0
-    const entered = window.prompt('Minimum mapping quality (0–255):', String(initial))
+    const entered = await requestText({ title: 'Minimum mapping quality', label: 'MAPQ threshold (0–255)', initial: String(initial), submitLabel: 'Apply filter', validate: validateMapq })
     const minimum = Number(entered)
-    if (entered !== null && Number.isFinite(minimum) && minimum >= 0 && minimum <= 255) store.edit((draft) => {
+    if (entered !== undefined && Number.isFinite(minimum) && minimum >= 0 && minimum <= 255) store.edit((draft) => {
       for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamMinMapq = Math.round(minimum)
     })
   }
@@ -1554,7 +1743,7 @@ function handleTrackContextAction(event: MouseEvent): void {
   }
 }
 
-function applyMatrixContextAction(command: string | undefined, matrixIds: readonly string[]): void {
+async function applyMatrixContextAction(command: string | undefined, matrixIds: readonly string[]): Promise<void> {
   if (!command?.startsWith('matrix-') || !matrixIds.length) return
   if (command === 'matrix-settings') {
     openMatrixSettingsDialog(matrixIds)
@@ -1589,9 +1778,9 @@ function applyMatrixContextAction(command: string | undefined, matrixIds: readon
   if (command === 'matrix-scale-fixed') {
     const tracks = store.current.tracks.filter((item) => matrixIds.includes(item.id) && item.kind === 'matrix')
     const initial = sameValue(tracks.map((track) => track.matrixScaleMax)) ? tracks[0]?.matrixScaleMax : undefined
-    const entered = window.prompt('Maximum contact intensity:', initial ? String(initial) : '')
+    const entered = await requestText({ title: 'Set matrix intensity maximum', label: 'Maximum contact intensity (z-max)', initial: initial ? String(initial) : '', submitLabel: 'Set maximum', validate: validatePositiveNumber })
     const maximum = Number(entered)
-    if (entered !== null && Number.isFinite(maximum) && maximum > 0) store.edit((draft) => {
+    if (entered !== undefined && Number.isFinite(maximum) && maximum > 0) store.edit((draft) => {
       for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixScaleMax = maximum
     })
   }
@@ -1607,7 +1796,7 @@ function applyMatrixContextAction(command: string | undefined, matrixIds: readon
   })
 }
 
-function handleGroupContextAction(command: string | undefined, groupId: string): void {
+async function handleGroupContextAction(command: string | undefined, groupId: string): Promise<void> {
   const group = store.current.groups.find((item) => item.id === groupId)
   if (!group) return
   const members = store.current.tracks.filter((track) => track.displayGroupId === groupId)
@@ -1616,12 +1805,6 @@ function handleGroupContextAction(command: string | undefined, groupId: string):
   const matricesOnly = matrixIds.length > 0 && matrixIds.length === memberIds.length
   const hasLinkedStranded = store.current.tracks.some((track) => track.displayGroupId === groupId && track.kind === 'stranded')
   const signalIds = store.current.tracks.filter((track) => (track.kind === 'signal' || track.kind === 'stranded') && track.displayGroupId === groupId).map((track) => track.id)
-  if (command === 'group-select') {
-    selectedTrackIds.clear()
-    for (const id of memberIds) selectedTrackIds.add(id)
-    lastSelectedTrackId = memberIds.at(-1)
-    browser.setSelectedTracks(selectedTrackIds)
-  }
   if (command === 'group-open') {
     pendingOpenGroupId = groupId
     void openTrackPicker()
@@ -1641,8 +1824,8 @@ function handleGroupContextAction(command: string | undefined, groupId: string):
       : `Set ${channel}-strand group color`
     openColorDialog(title, initial ?? '#6d55e0')
   }
-  if (command === 'group-height') setTrackHeights(memberIds)
-  if (matricesOnly) applyMatrixContextAction(command, matrixIds)
+  if (command === 'group-height') await setTrackHeights(memberIds)
+  if (matricesOnly) await applyMatrixContextAction(command, matrixIds)
   if (command === 'group-auto-linked') store.edit((draft) => {
     const draftGroup = draft.groups.find((item) => item.id === groupId)
     if (draftGroup) draftGroup.scaleBehavior = 'linked'
@@ -1659,18 +1842,18 @@ function handleGroupContextAction(command: string | undefined, groupId: string):
   })
   if (command === 'group-fixed') {
     const suggested = groupVisibleLimits(signalIds)
-    const entered = window.prompt('Fixed group y-axis range as min,max:', `${suggested.min},${suggested.max}`)
-    const [min, max] = entered?.split(',').map((value) => Number(value.trim())) ?? []
-    if (Number.isFinite(min) && Number.isFinite(max) && min !== max) store.edit((draft) => {
+    const entered = await requestText({ title: 'Set shared group range', label: 'Minimum, maximum', initial: `${suggested.min}, ${suggested.max}`, placeholder: '0, 100', submitLabel: 'Set range', validate: validateRange })
+    const range = entered === undefined ? undefined : parseRange(entered)
+    if (range) store.edit((draft) => {
       const draftGroup = draft.groups.find((item) => item.id === groupId)
       if (draftGroup) draftGroup.scaleBehavior = 'linked'
       linkScales(draft, signalIds)
       const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
-      for (const scale of draft.scales) if (scaleIds.has(scale.id)) { scale.mode = 'fixed'; scale.limits = { min: Math.min(min, max), max: Math.max(min, max) } }
+      for (const scale of draft.scales) if (scaleIds.has(scale.id)) { scale.mode = 'fixed'; scale.limits = range }
     })
   }
   if (command === 'group-rename') {
-    const label = window.prompt('Group name:', group.label)?.trim()
+    const label = (await requestText({ title: 'Rename group', label: 'Group name', initial: group.label, submitLabel: 'Rename', validate: requiredName }))?.trim()
     if (label) store.edit((draft) => { const item = draft.groups.find((group) => group.id === groupId); if (item) item.label = label })
   }
   if (command === 'group-remove') store.edit((draft) => assignDisplayGroup(draft, memberIds, ''))
@@ -1686,15 +1869,15 @@ function addTracksToGroup(draft: TrackDocument, groupId: string, trackIds: reado
   assignDisplayGroup(draft, trackIds, group.label, { autoScale: savedGroupAutoscale() })
 }
 
-function setTrackHeights(trackIds: readonly string[]): void {
+async function setTrackHeights(trackIds: readonly string[]): Promise<void> {
   const resizableIds = store.current.tracks
     .filter((track) => trackIds.includes(track.id) && (track.kind !== 'genes' || track.pane !== 'bottom'))
     .map((track) => track.id)
   if (!resizableIds.length) return
   const current = store.current.tracks.find((track) => resizableIds.includes(track.id))?.height ?? 1
-  const entered = window.prompt('Track height (1–100):', String(Math.round(current)))
+  const entered = await requestText({ title: resizableIds.length === 1 ? 'Set track height' : 'Set track heights', label: 'Height (1–100)', initial: String(Math.round(current)), submitLabel: 'Set height', validate: validateTrackHeight })
   const height = Number(entered)
-  if (!Number.isFinite(height) || height < 1 || height > 100) return
+  if (entered === undefined || !Number.isFinite(height) || height < 1 || height > 100) return
   store.edit((draft) => {
     for (const track of draft.tracks) if (resizableIds.includes(track.id)) {
       track.height = Math.round(height)
@@ -1760,7 +1943,8 @@ function scheduleUpperAutoFit(): void {
 function updateUpperAutoFitControl(): void {
   fitTracksAuto.classList.toggle('is-active', upperPaneAutoFit)
   fitTracksAuto.setAttribute('aria-pressed', String(upperPaneAutoFit))
-  fitTracksAuto.title = upperPaneAutoFit ? 'Automatic track fitting is on' : 'Automatically keep upper tracks fitted'
+  fitTracksAuto.title = upperPaneAutoFit ? 'Auto-fit is on · click to turn off' : 'Auto-fit is off · click to keep upper tracks fitted'
+  fitTracksAuto.setAttribute('aria-label', fitTracksAuto.title)
 }
 
 function openMatrixSettingsDialog(trackIds: readonly string[]): void {
@@ -1775,6 +1959,7 @@ function openMatrixSettingsDialog(trackIds: readonly string[]): void {
     : undefined
   const first = tracks[0]
   matrixSettingsScope.textContent = tracks.length === 1 ? first.label : `${tracks.length} matrix tracks`
+  matrixSettingsApply.textContent = tracks.length === 1 ? 'Apply' : `Apply to ${tracks.length} tracks`
   matrixScaleMode.value = first.matrixScaleMax === undefined ? 'auto' : 'fixed'
   matrixScaleMaximum.value = first.matrixScaleMax === undefined ? '' : String(first.matrixScaleMax)
   matrixTransform.value = first.matrixTransform ?? 'log1p'
@@ -1854,6 +2039,92 @@ function openColorDialog(title: string, initialColor: string): void {
   setColorPickerHex(initialColor)
   colorDialog.hidden = false
   window.setTimeout(() => trackColorInput.focus(), 0)
+}
+
+function requestText(options: {
+  title: string
+  label: string
+  initial?: string
+  placeholder?: string
+  submitLabel?: string
+  message?: string
+  validate?: (value: string) => string | undefined
+}): Promise<string | undefined> {
+  return new Promise((resolve) => openActionDialog({
+    mode: 'input',
+    submitLabel: options.submitLabel ?? 'Apply',
+    ...options,
+    resolve: (value) => resolve(typeof value === 'string' ? value : undefined),
+  }))
+}
+
+function confirmAction(options: { title: string; message: string; submitLabel: string; danger?: boolean }): Promise<boolean> {
+  return new Promise((resolve) => openActionDialog({
+    mode: 'confirm',
+    ...options,
+    resolve: (value) => resolve(value === true),
+  }))
+}
+
+function showNotice(title: string, message: string): Promise<void> {
+  return new Promise((resolve) => openActionDialog({
+    mode: 'notice',
+    title,
+    message,
+    submitLabel: 'Close',
+    resolve: () => resolve(),
+  }))
+}
+
+function openActionDialog(request: ActionDialogRequest): void {
+  if (pendingActionDialog) closeActionDialog(undefined)
+  pendingActionDialog = request
+  actionDialogTitle.textContent = request.title
+  actionDialogMessage.textContent = request.message ?? ''
+  actionDialogMessage.hidden = !request.message
+  actionDialogField.hidden = request.mode !== 'input'
+  actionDialogLabel.textContent = request.label ?? ''
+  actionDialogInput.value = request.initial ?? ''
+  actionDialogInput.placeholder = request.placeholder ?? ''
+  actionDialogError.textContent = ''
+  actionDialogCancel.hidden = request.mode === 'notice'
+  actionDialogSubmit.textContent = request.submitLabel
+  actionDialogSubmit.classList.toggle('danger', request.danger === true)
+  actionDialog.hidden = false
+  window.setTimeout(() => request.mode === 'input' ? actionDialogInput.select() : actionDialogSubmit.focus(), 0)
+}
+
+function handleActionDialogSubmit(event: SubmitEvent): void {
+  event.preventDefault()
+  const request = pendingActionDialog
+  if (!request) return
+  if (request.mode === 'input') {
+    const error = request.validate?.(actionDialogInput.value)
+    actionDialogError.textContent = error ?? ''
+    if (error) return actionDialogInput.focus()
+    closeActionDialog(actionDialogInput.value)
+    return
+  }
+  closeActionDialog(true)
+}
+
+function closeActionDialog(value: string | boolean | undefined): void {
+  const request = pendingActionDialog
+  if (!request) return
+  pendingActionDialog = undefined
+  actionDialog.hidden = true
+  actionDialogSubmit.classList.remove('danger')
+  request.resolve(value)
+}
+
+function showInteractionGuide(): Promise<void> {
+  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click to select additional tracks and Shift+click to select a range. Drag a selected track to reorder it. The mouse wheel scrolls; Ctrl+wheel zooms. Right-click a track or group card for options.')
+}
+
+function showFirstRunInteractionHint(): void {
+  if (localStorage.getItem(INTERACTION_GUIDE_SEEN_KEY) === 'true') return
+  localStorage.setItem(INTERACTION_GUIDE_SEEN_KEY, 'true')
+  showToast('Tip: hold a track to select it, Ctrl+click to select more, and right-click track labels for options.', false, 8_000)
 }
 
 function setTrackChannelColor(track: TrackSpec, channel: SignalScaleChannel | undefined, color: string): void {
