@@ -1,6 +1,7 @@
 import './style.css'
 import { ungzip } from 'pako-esm2'
 import { distributeFittedPixels, GenomeBrowser, heightScoreForPixels, MATRIX_BLUE_BLACK_COLORS, MATRIX_WARM_COLORS, trackPixelHeight } from './browser.ts'
+import type { MatrixDisplayPreferences } from './browser.ts'
 import { BedGraphSource, MAX_BEDGRAPH_BYTES } from './data/bedgraph.ts'
 import { gzipText } from './data/gzip.ts'
 import { BedSource } from './data/bed.ts'
@@ -73,6 +74,12 @@ const {
   strandedAutoColors: STRANDED_AUTO_COLORS_KEY,
   upperPaneAutoFit: UPPER_PANE_AUTO_FIT_KEY,
   interactionGuideSeen: INTERACTION_GUIDE_SEEN_KEY,
+  matrixInspector: MATRIX_INSPECTOR_KEY,
+  matrixInspectorValue: MATRIX_INSPECTOR_VALUE_KEY,
+  matrixInspectorBins: MATRIX_INSPECTOR_BINS_KEY,
+  matrixInspectorDetails: MATRIX_INSPECTOR_DETAILS_KEY,
+  matrixLegend: MATRIX_LEGEND_KEY,
+  matrixMetadata: MATRIX_METADATA_KEY,
 } = STORAGE_KEYS
 migrateLegacyStorage(localStorage)
 applyTheme(savedTheme())
@@ -236,6 +243,16 @@ app.innerHTML = `
         <section><h3>Gene tracks</h3><label><span><strong>Show TSS indicators</strong><small>Draw transcription start site elbow arrows in gene tracks.</small></span><input id="tss-indicators-toggle" type="checkbox" /></label></section>
         <section><h3>Stranded signals</h3><label><span><strong>Automatically pair plus/minus tracks</strong><small>Pair matching positive- and negative-strand signal files when opened.</small></span><input id="stranded-auto-link-toggle" type="checkbox" /></label><label><span><strong>Apply red and blue strand colors</strong><small>Use red for positive and blue for negative strands when pairs are linked.</small></span><input id="stranded-auto-colors-toggle" type="checkbox" /></label></section>
         <section><h3>Groups</h3><label><span><strong>Share scales when tracks are grouped</strong><small>Link compatible signal or matrix scales when tracks are added to a group.</small></span><input id="group-autoscale-toggle" type="checkbox" /></label></section>
+        <section><h3>Matrix tracks</h3>
+          <label><span><strong>Show matrix inspector</strong><small>Show a crosshair and floating information box while hovering over matrix contacts.</small></span><input id="matrix-inspector-toggle" type="checkbox" /></label>
+          <div class="track-options-subsection" id="matrix-inspector-fields">
+            <label><span><strong>Value</strong><small>Show the contact value or cell state.</small></span><input id="matrix-inspector-value-toggle" type="checkbox" /></label>
+            <label><span><strong>Interacting bins</strong><small>Show the two genomic intervals represented by the cell.</small></span><input id="matrix-inspector-bins-toggle" type="checkbox" /></label>
+            <label><span><strong>Details</strong><small>Show separation, resolution, normalization, and transform.</small></span><input id="matrix-inspector-details-toggle" type="checkbox" /></label>
+          </div>
+          <label><span><strong>Show color scales</strong><small>Draw each matrix track's gradient legend and scale values.</small></span><input id="matrix-legend-toggle" type="checkbox" /></label>
+          <label><span><strong>Show track metadata</strong><small>Show matrix resolution and normalization below track names.</small></span><input id="matrix-metadata-toggle" type="checkbox" /></label>
+        </section>
       </div>
     </section>
   </div>
@@ -273,12 +290,6 @@ app.innerHTML = `
             <label><span>Masked custom color</span><input id="matrix-masked-color" type="color" value="#777d89" /></label>
           </div>
           <p class="matrix-settings-note">Sparse omitted contacts are zero. Missing marks explicit non-finite source pixels. Masked bins are shown only when the active file reader exposes them.</p>
-        </section>
-        <section class="matrix-display-settings">
-          <header><strong>Inspection and labels</strong><small>Presentation-only controls do not reload matrix data.</small></header>
-          <label class="matrix-check-row"><span><strong>Show matrix cursor</strong><small>Inspect genomic bins and values with a crosshair and hover card.</small></span><input id="matrix-show-inspector" type="checkbox" /></label>
-          <label class="matrix-check-row"><span><strong>Show color scale</strong><small>Draw the gradient legend and scale values in the track card.</small></span><input id="matrix-show-legend" type="checkbox" /></label>
-          <label class="matrix-check-row"><span><strong>Show track metadata</strong><small>Show matrix resolution and normalization below the track name.</small></span><input id="matrix-show-metadata" type="checkbox" /></label>
         </section>
       </div>
       <footer><button class="dialog-button secondary" id="matrix-settings-cancel" type="button">Cancel</button><button class="dialog-button primary" id="matrix-settings-apply" type="submit">Apply</button></footer>
@@ -345,6 +356,13 @@ const tssIndicatorsToggle = document.querySelector<HTMLInputElement>('#tss-indic
 const strandedAutoLinkToggle = document.querySelector<HTMLInputElement>('#stranded-auto-link-toggle')!
 const groupAutoscaleToggle = document.querySelector<HTMLInputElement>('#group-autoscale-toggle')!
 const strandedAutoColorsToggle = document.querySelector<HTMLInputElement>('#stranded-auto-colors-toggle')!
+const matrixInspectorToggle = document.querySelector<HTMLInputElement>('#matrix-inspector-toggle')!
+const matrixInspectorFields = document.querySelector<HTMLElement>('#matrix-inspector-fields')!
+const matrixInspectorValueToggle = document.querySelector<HTMLInputElement>('#matrix-inspector-value-toggle')!
+const matrixInspectorBinsToggle = document.querySelector<HTMLInputElement>('#matrix-inspector-bins-toggle')!
+const matrixInspectorDetailsToggle = document.querySelector<HTMLInputElement>('#matrix-inspector-details-toggle')!
+const matrixLegendToggle = document.querySelector<HTMLInputElement>('#matrix-legend-toggle')!
+const matrixMetadataToggle = document.querySelector<HTMLInputElement>('#matrix-metadata-toggle')!
 const matrixSettingsDialog = document.querySelector<HTMLElement>('#matrix-settings-dialog')!
 const matrixSettingsContent = matrixSettingsDialog.querySelector<HTMLElement>('.matrix-settings-content')!
 const matrixSettingsForm = document.querySelector<HTMLFormElement>('#matrix-settings-form')!
@@ -369,9 +387,6 @@ const matrixMissingStyle = document.querySelector<HTMLSelectElement>('#matrix-mi
 const matrixMissingColor = document.querySelector<HTMLInputElement>('#matrix-missing-color')!
 const matrixMaskedStyle = document.querySelector<HTMLSelectElement>('#matrix-masked-style')!
 const matrixMaskedColor = document.querySelector<HTMLInputElement>('#matrix-masked-color')!
-const matrixShowInspector = document.querySelector<HTMLInputElement>('#matrix-show-inspector')!
-const matrixShowLegend = document.querySelector<HTMLInputElement>('#matrix-show-legend')!
-const matrixShowMetadata = document.querySelector<HTMLInputElement>('#matrix-show-metadata')!
 const matrixSettingsApply = document.querySelector<HTMLButtonElement>('#matrix-settings-apply')!
 const actionDialog = document.querySelector<HTMLElement>('#action-dialog')!
 const actionDialogForm = document.querySelector<HTMLFormElement>('#action-dialog-form')!
@@ -486,6 +501,7 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
   },
 })
 browser.setShowTssIndicators(savedTssIndicators())
+browser.setMatrixDisplayPreferences(savedMatrixDisplayPreferences())
 updateTrackOptionsControls()
 updateZoomLevel(initialRegion)
 window.setTimeout(showFirstRunInteractionHint, 450)
@@ -601,6 +617,9 @@ strandedAutoColorsToggle.addEventListener('change', () => {
   localStorage.setItem(STRANDED_AUTO_COLORS_KEY, String(strandedAutoColorsToggle.checked))
   if (strandedAutoColorsToggle.checked) store.edit(applyAutomaticStrandedColors)
 })
+for (const toggle of [matrixInspectorToggle, matrixInspectorValueToggle, matrixInspectorBinsToggle, matrixInspectorDetailsToggle, matrixLegendToggle, matrixMetadataToggle]) {
+  toggle.addEventListener('change', saveMatrixDisplayPreferences)
+}
 trackOptionsClose.addEventListener('click', closeTrackOptionsDialog)
 document.querySelector<HTMLButtonElement>('#matrix-settings-close')!.addEventListener('click', closeMatrixSettingsDialog)
 document.querySelector<HTMLButtonElement>('#matrix-settings-cancel')!.addEventListener('click', closeMatrixSettingsDialog)
@@ -2044,9 +2063,6 @@ function openMatrixSettingsDialog(trackIds: readonly string[]): void {
   matrixMissingColor.value = normalizedHexColor(first.matrixMissingColor ?? '#9197a3') ?? '#9197a3'
   matrixMaskedStyle.value = first.matrixMaskedStyle ?? 'hatch'
   matrixMaskedColor.value = normalizedHexColor(first.matrixMaskedColor ?? '#777d89') ?? '#777d89'
-  matrixShowInspector.checked = first.matrixShowInspector !== false
-  matrixShowLegend.checked = first.matrixShowLegend !== false
-  matrixShowMetadata.checked = first.matrixShowMetadata !== false
   matrixGroupScalingRow.hidden = !pendingMatrixGroupId
   const group = store.current.groups.find((item) => item.id === pendingMatrixGroupId)
   matrixGroupScaling.value = group?.scaleBehavior === 'independent' ? 'independent' : 'linked'
@@ -2134,9 +2150,6 @@ function applyMatrixSettingsDialog(): void {
       track.matrixMissingColor = matrixMissingStyle.value === 'custom' ? matrixMissingColor.value : undefined
       track.matrixMaskedStyle = matrixMaskedStyle.value === 'custom' ? 'custom' : matrixMaskedStyle.value === 'background' ? 'background' : 'hatch'
       track.matrixMaskedColor = matrixMaskedStyle.value === 'custom' ? matrixMaskedColor.value : undefined
-      track.matrixShowInspector = matrixShowInspector.checked
-      track.matrixShowLegend = matrixShowLegend.checked
-      track.matrixShowMetadata = matrixShowMetadata.checked
     }
     const group = draft.groups.find((item) => item.id === pendingMatrixGroupId)
     if (group) group.scaleBehavior = matrixGroupScaling.value === 'independent' ? 'independent' : 'linked'
@@ -2695,11 +2708,64 @@ function savedUpperPaneAutoFit(): boolean {
   return localStorage.getItem(UPPER_PANE_AUTO_FIT_KEY) === 'true'
 }
 
+function savedBoolean(key: string, defaultValue: boolean): boolean {
+  const saved = localStorage.getItem(key)
+  return saved === null ? defaultValue : saved === 'true'
+}
+
+function savedMatrixDisplayPreferences(): MatrixDisplayPreferences {
+  return {
+    inspector: savedBoolean(MATRIX_INSPECTOR_KEY, true),
+    inspectorValue: savedBoolean(MATRIX_INSPECTOR_VALUE_KEY, true),
+    inspectorBins: savedBoolean(MATRIX_INSPECTOR_BINS_KEY, false),
+    inspectorDetails: savedBoolean(MATRIX_INSPECTOR_DETAILS_KEY, false),
+    legend: savedBoolean(MATRIX_LEGEND_KEY, true),
+    metadata: savedBoolean(MATRIX_METADATA_KEY, true),
+  }
+}
+
+function matrixDisplayPreferencesFromControls(): MatrixDisplayPreferences {
+  return {
+    inspector: matrixInspectorToggle.checked,
+    inspectorValue: matrixInspectorValueToggle.checked,
+    inspectorBins: matrixInspectorBinsToggle.checked,
+    inspectorDetails: matrixInspectorDetailsToggle.checked,
+    legend: matrixLegendToggle.checked,
+    metadata: matrixMetadataToggle.checked,
+  }
+}
+
+function updateMatrixInspectorFieldControls(): void {
+  const disabled = !matrixInspectorToggle.checked
+  matrixInspectorFields.classList.toggle('is-disabled', disabled)
+  for (const toggle of [matrixInspectorValueToggle, matrixInspectorBinsToggle, matrixInspectorDetailsToggle]) toggle.disabled = disabled
+}
+
+function saveMatrixDisplayPreferences(): void {
+  const preferences = matrixDisplayPreferencesFromControls()
+  localStorage.setItem(MATRIX_INSPECTOR_KEY, String(preferences.inspector))
+  localStorage.setItem(MATRIX_INSPECTOR_VALUE_KEY, String(preferences.inspectorValue))
+  localStorage.setItem(MATRIX_INSPECTOR_BINS_KEY, String(preferences.inspectorBins))
+  localStorage.setItem(MATRIX_INSPECTOR_DETAILS_KEY, String(preferences.inspectorDetails))
+  localStorage.setItem(MATRIX_LEGEND_KEY, String(preferences.legend))
+  localStorage.setItem(MATRIX_METADATA_KEY, String(preferences.metadata))
+  updateMatrixInspectorFieldControls()
+  browser.setMatrixDisplayPreferences(preferences)
+}
+
 function updateTrackOptionsControls(): void {
   tssIndicatorsToggle.checked = savedTssIndicators()
   strandedAutoLinkToggle.checked = savedStrandedAutoLink()
   groupAutoscaleToggle.checked = savedGroupAutoscale()
   strandedAutoColorsToggle.checked = savedStrandedAutoColors()
+  const matrix = savedMatrixDisplayPreferences()
+  matrixInspectorToggle.checked = matrix.inspector
+  matrixInspectorValueToggle.checked = matrix.inspectorValue
+  matrixInspectorBinsToggle.checked = matrix.inspectorBins
+  matrixInspectorDetailsToggle.checked = matrix.inspectorDetails
+  matrixLegendToggle.checked = matrix.legend
+  matrixMetadataToggle.checked = matrix.metadata
+  updateMatrixInspectorFieldControls()
 }
 
 function openTrackOptionsDialog(): void {

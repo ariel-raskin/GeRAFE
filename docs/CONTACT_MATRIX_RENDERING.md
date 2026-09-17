@@ -54,7 +54,7 @@ The renderer clips every contact diamond to the inside of its track and redraws 
 
 ## Inspection and empty-cell states
 
-Matrix hover inspection is presentation-only. The browser converts the pointer from the rotated triangular canvas coordinates back into the two source bins, then uses cached sparse lookups to classify the cell and report its value, genomic separation, resolution, normalization, and transform. The crosshair and hover card do not trigger source queries.
+Matrix hover inspection is presentation-only. The browser converts the pointer from the rotated triangular canvas coordinates back into the two source bins, then uses cached sparse lookups to classify the cell and report its value, genomic separation, resolution, normalization, and transform. The crosshair and hover card do not trigger source queries. Inspector visibility and content are global app preferences under **Settings → Track behavior → Matrix tracks**. The inspector defaults to on with only its value or cell-state line shown; interacting bins and the lower details line are independently optional. The same global section controls matrix color-scale legends and track-card metadata.
 
 The renderer keeps three non-value states distinct:
 

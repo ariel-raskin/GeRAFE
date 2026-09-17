@@ -60,6 +60,15 @@ export interface MatrixCellInspection {
   value?: number
 }
 
+export interface MatrixDisplayPreferences {
+  inspector: boolean
+  inspectorValue: boolean
+  inspectorBins: boolean
+  inspectorDetails: boolean
+  legend: boolean
+  metadata: boolean
+}
+
 interface MatrixHover extends MatrixCellInspection {
   trackId: string
   pane: 'main' | 'bottom'
@@ -117,6 +126,14 @@ export class GenomeBrowser {
   private selectedTrackIds = new Set<string>()
   private geneScrollOffsets = new Map<string, number>()
   private showTssIndicators = true
+  private matrixDisplayPreferences: MatrixDisplayPreferences = {
+    inspector: true,
+    inspectorValue: true,
+    inspectorBins: false,
+    inspectorDetails: false,
+    legend: true,
+    metadata: true,
+  }
   private trackBodyHold?: { canvas: HTMLCanvasElement; startX: number; startY: number; timer: number }
   private matrixHover?: MatrixHover
 
@@ -197,6 +214,12 @@ export class GenomeBrowser {
     this.scheduleRender()
   }
 
+  setMatrixDisplayPreferences(preferences: MatrixDisplayPreferences): void {
+    this.matrixDisplayPreferences = { ...preferences }
+    if (!preferences.inspector) this.clearMatrixHover()
+    else this.scheduleRender()
+  }
+
   setCytobands(cytobands: ReadonlyMap<string, readonly Cytoband[]> | undefined): void {
     this.cytobands = cytobands
     this.resize()
@@ -251,7 +274,7 @@ export class GenomeBrowser {
     this.document = document
     if (this.matrixHover) {
       const hovered = document.tracks.find((track) => track.id === this.matrixHover?.trackId)
-      if (hovered?.kind !== 'matrix' || hovered.matrixShowInspector === false) this.clearMatrixHover()
+      if (hovered?.kind !== 'matrix' || !this.matrixDisplayPreferences.inspector) this.clearMatrixHover()
     }
     const descriptors = document.tracks.flatMap(runtimeDescriptors)
     const validIds = new Set(descriptors.map((descriptor) => descriptor.id))
@@ -582,7 +605,7 @@ export class GenomeBrowser {
     }
     const hit = this.itemAt(canvas, pane, event.offsetX, event.offsetY)
     const spec = hit?.kind === 'track' ? this.document.tracks.find((track) => track.id === hit.id && track.kind === 'matrix') : undefined
-    if (!spec || spec.matrixShowInspector === false) {
+    if (!spec || !this.matrixDisplayPreferences.inspector) {
       this.clearMatrixHover()
       return
     }
@@ -627,11 +650,19 @@ export class GenomeBrowser {
     bins.textContent = `${formatLocus({ chr: this.region.chr, start: inspection.bin1, end: inspection.bin1 + matrix.resolution })} × ${formatLocus({ chr: this.region.chr, start: inspection.bin2, end: inspection.bin2 + matrix.resolution })}`
     const details = document.createElement('small')
     details.textContent = `${formatBases(inspection.separation)} separation · ${formatBases(matrix.resolution)} bins · ${spec.matrixNormalization ?? 'raw'} · ${spec.matrixTransform === 'linear' ? 'linear' : 'log'}`
-    this.matrixInspector.replaceChildren(heading, bins, details)
+    const content: HTMLElement[] = []
+    if (this.matrixDisplayPreferences.inspectorValue) content.push(heading)
+    if (this.matrixDisplayPreferences.inspectorBins) content.push(bins)
+    if (this.matrixDisplayPreferences.inspectorDetails) content.push(details)
+    this.matrixInspector.replaceChildren(...content)
+    if (!content.length) {
+      this.matrixInspector.hidden = true
+      return
+    }
     this.matrixInspector.hidden = false
     const width = 340
     const left = Math.max(8, Math.min(window.innerWidth - width - 8, clientX + 15))
-    const top = Math.max(8, Math.min(window.innerHeight - 88, clientY + 15))
+    const top = Math.max(8, Math.min(window.innerHeight - this.matrixInspector.offsetHeight - 8, clientY + 15))
     this.matrixInspector.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`
   }
 
@@ -1419,7 +1450,7 @@ export class GenomeBrowser {
     const maximum = Math.max(minimum + minimumRange, matrixMaximum
       ?? (spec.matrixScaleMode === 'fixed' ? spec.matrixScaleMax : undefined)
       ?? matrixAutomaticMaximum(matrix, automaticPercentile, spec.matrixIgnoreDiagonals ?? 3))
-    const legendValues = matrix && spec.matrixShowLegend !== false ? matrixLegendValues(minimum, maximum, spec.matrixTransform ?? 'log1p') : []
+    const legendValues = matrix && this.matrixDisplayPreferences.legend ? matrixLegendValues(minimum, maximum, spec.matrixTransform ?? 'log1p') : []
     ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
     const legendLabels = legendValues.map(formatScore)
     const scaleLaneWidth = legendLabels.length
@@ -1434,7 +1465,7 @@ export class GenomeBrowser {
     ctx.fillStyle = palette.muted
     ctx.font = '9px Inter, system-ui, sans-serif'
     ctx.textAlign = 'center'
-    if (spec.matrixShowMetadata !== false) {
+    if (this.matrixDisplayPreferences.metadata) {
       const resolution = matrix?.resolution ?? spec.matrixResolution
       const normalization = spec.matrixNormalization ?? 'raw'
       const metadata = ellipsize(ctx, `${resolution ? formatBases(resolution) : 'auto resolution'} · ${normalization}`, labelBounds.width)

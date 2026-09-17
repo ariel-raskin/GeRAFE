@@ -174,6 +174,14 @@ const settingsMenuActiveElement = await page.locator(':focus').getAttribute('id'
 await page.locator('#track-options-menu-item').click()
 await page.screenshot({ path: 'dist/smoke-track-behavior.png', fullPage: true })
 const tssBeforeToggle = await page.locator('#tss-indicators-toggle').isChecked()
+const matrixDisplayDefaults = {
+  inspector: await page.locator('#matrix-inspector-toggle').isChecked(),
+  value: await page.locator('#matrix-inspector-value-toggle').isChecked(),
+  bins: await page.locator('#matrix-inspector-bins-toggle').isChecked(),
+  details: await page.locator('#matrix-inspector-details-toggle').isChecked(),
+}
+await page.locator('#matrix-inspector-bins-toggle').check()
+await page.locator('#matrix-metadata-toggle').uncheck()
 await page.locator('#tss-indicators-toggle').click()
 const tssAfterToggle = await page.locator('#tss-indicators-toggle').isChecked()
 await page.keyboard.press('Escape')
@@ -339,6 +347,10 @@ const themeAfterReload = await page.locator('html').getAttribute('data-theme')
 await page.locator('#settings-menu-button').click()
 await page.locator('#track-options-menu-item').click()
 const tssAfterReload = await page.locator('#tss-indicators-toggle').isChecked()
+const matrixDisplayAfterReload = {
+  bins: await page.locator('#matrix-inspector-bins-toggle').isChecked(),
+  metadata: await page.locator('#matrix-metadata-toggle').isChecked(),
+}
 const autoFitAfterReload = await page.locator('#fit-tracks-auto').getAttribute('aria-pressed')
 await page.keyboard.press('Escape')
 const offlineTrackStatus = await page.locator('#track-status').textContent()
@@ -417,9 +429,6 @@ await page.locator('#matrix-zero-style').selectOption('low-color')
 await page.locator('#matrix-missing-style').selectOption('custom')
 await page.locator('#matrix-missing-color').fill('#8a8f99')
 await page.locator('#matrix-masked-style').selectOption('background')
-await page.locator('#matrix-show-inspector').uncheck()
-await page.locator('#matrix-show-legend').uncheck()
-await page.locator('#matrix-show-metadata').uncheck()
 await page.locator('#matrix-group-scaling').selectOption('independent')
 await page.locator('.matrix-settings-content').evaluate((element) => { element.scrollTop = element.scrollHeight })
 await page.locator('#matrix-settings-form button[type="submit"]').click()
@@ -431,8 +440,7 @@ const matrixGroupSettingsApplied = await page.evaluate(() => {
     && track.matrixScaleMode === 'percentile' && track.matrixScalePercentile === 0.985
     && track.matrixDepthMode === 'fixed' && track.matrixMaxDistance === 250000
     && track.matrixZeroStyle === 'low-color' && track.matrixMissingStyle === 'custom' && track.matrixMissingColor === '#8a8f99'
-    && track.matrixMaskedStyle === 'background' && track.matrixShowInspector === false
-    && track.matrixShowLegend === false && track.matrixShowMetadata === false
+    && track.matrixMaskedStyle === 'background'
   ))
     && document.groups?.find((group) => group.id === 'matrix-group')?.scaleBehavior === 'independent'
 })
@@ -500,7 +508,7 @@ for (const submenu of ['bam-content', 'bam-layout', 'bam-color', 'bam-filters'])
 await page.screenshot({ path: 'dist/smoke-bam-menu.png', fullPage: true })
 await browser.close()
 
-console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
 if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button' || helpMenuActiveElement !== 'help-menu-button') process.exitCode = 1
@@ -517,6 +525,7 @@ if (!(Number(spanAfterSlider) < Number(spanBeforeSlider)) || !chromosomeMenuVisi
 if (!geneMenuText?.includes('Expanded transcripts')) process.exitCode = 1
 if (!settingsMenuText?.includes('Track behavior')) process.exitCode = 1
 if (tssBeforeToggle === tssAfterToggle || tssAfterToggle !== tssAfterReload) process.exitCode = 1
+if (!matrixDisplayDefaults.inspector || !matrixDisplayDefaults.value || matrixDisplayDefaults.bins || matrixDisplayDefaults.details || !matrixDisplayAfterReload.bins || matrixDisplayAfterReload.metadata) process.exitCode = 1
 if (autoFitBeforeToggle === autoFitAfterToggle || autoFitAfterToggle !== autoFitAfterReload) process.exitCode = 1
 if (Math.abs(initialBottomPaneHeight - initialBottomCanvasHeight - 1) > 2 || Math.abs(expandedBottomPaneHeight - expandedBottomCanvasHeight - 1) > 2) process.exitCode = 1
 if (testGene === 'RUNX1' && testGeneMode === 'expanded' && expandedBottomPaneHeight <= initialBottomPaneHeight) process.exitCode = 1

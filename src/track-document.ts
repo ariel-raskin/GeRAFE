@@ -97,9 +97,6 @@ export interface TrackSpec {
   matrixMissingColor?: string
   matrixMaskedStyle?: MatrixMaskedStyle
   matrixMaskedColor?: string
-  matrixShowInspector?: boolean
-  matrixShowLegend?: boolean
-  matrixShowMetadata?: boolean
   alignmentDisplayMode?: 'collapsed' | 'expanded' | 'squished'
   bamViewMode?: 'coverage' | 'alignments' | 'both'
   bamColorMode?: 'track' | 'strand' | 'pair-orientation' | 'mapping-quality'
@@ -437,9 +434,6 @@ export function addMatrixTrack(
     matrixZeroStyle: 'background',
     matrixMissingStyle: 'background',
     matrixMaskedStyle: 'hatch',
-    matrixShowInspector: true,
-    matrixShowLegend: true,
-    matrixShowMetadata: true,
   }
   draft.sources.push(source)
   const bottomIndex = draft.tracks.findIndex((item) => item.pane === 'bottom')
@@ -768,9 +762,6 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     matrixMaskedColor: track.kind === 'matrix' && typeof track.matrixMaskedColor === 'string' && /^#[0-9a-f]{6}$/i.test(track.matrixMaskedColor)
       ? track.matrixMaskedColor
       : undefined,
-    matrixShowInspector: track.kind === 'matrix' ? track.matrixShowInspector !== false : undefined,
-    matrixShowLegend: track.kind === 'matrix' ? track.matrixShowLegend !== false : undefined,
-    matrixShowMetadata: track.kind === 'matrix' ? track.matrixShowMetadata !== false : undefined,
     alignmentDisplayMode: track.kind === 'alignment' && (track.alignmentDisplayMode === 'collapsed' || track.alignmentDisplayMode === 'expanded' || track.alignmentDisplayMode === 'squished')
       ? track.alignmentDisplayMode
       : track.kind === 'alignment' ? 'expanded' : undefined,

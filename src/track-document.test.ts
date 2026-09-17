@@ -175,7 +175,7 @@ describe('track document', () => {
       matrixDepthMode: 'fixed', matrixMaxDistance: 250_000,
       matrixPalette: 'custom', matrixPaletteColors: ['#ffffff', '#ff0000', '#111111'], matrixPaletteReversed: true,
       matrixZeroStyle: 'custom', matrixZeroColor: '#eeeeee', matrixMissingStyle: 'custom', matrixMissingColor: '#999999',
-      matrixMaskedStyle: 'custom', matrixMaskedColor: '#777777', matrixShowInspector: false, matrixShowLegend: false, matrixShowMetadata: false,
+      matrixMaskedStyle: 'custom', matrixMaskedColor: '#777777',
     })
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
     expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
@@ -186,7 +186,7 @@ describe('track document', () => {
       matrixScalePercentile: 0.98, matrixIgnoreDiagonals: 4, matrixDepthMode: 'fixed', matrixMaxDistance: 250_000, matrixPalette: 'custom',
       matrixPaletteColors: ['#ffffff', '#ff0000', '#111111'], matrixPaletteReversed: true,
       matrixZeroStyle: 'custom', matrixZeroColor: '#eeeeee', matrixMissingStyle: 'custom', matrixMissingColor: '#999999',
-      matrixMaskedStyle: 'custom', matrixMaskedColor: '#777777', matrixShowInspector: false, matrixShowLegend: false, matrixShowMetadata: false,
+      matrixMaskedStyle: 'custom', matrixMaskedColor: '#777777',
     })
   })
 
@@ -221,19 +221,15 @@ describe('track document', () => {
     })
   })
 
-  it('migrates version 16 matrices to explicit cell-state and inspection defaults', () => {
+  it('migrates version 16 matrices to explicit cell-state defaults', () => {
     const legacy = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 1_000_000 }) as any
     const track = addMatrixTrack(legacy, { id: 'matrix-source', name: 'contacts.cool', format: 'cool', files: [] })
     legacy.schemaVersion = 16
     delete track.matrixZeroStyle
     delete track.matrixMissingStyle
     delete track.matrixMaskedStyle
-    delete track.matrixShowInspector
-    delete track.matrixShowLegend
-    delete track.matrixShowMetadata
     expect(normalizeTrackDocument(legacy).tracks[0]).toMatchObject({
       matrixZeroStyle: 'background', matrixMissingStyle: 'background', matrixMaskedStyle: 'hatch',
-      matrixShowInspector: true, matrixShowLegend: true, matrixShowMetadata: true,
     })
   })
 
@@ -241,8 +237,8 @@ describe('track document', () => {
     const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 1_000_000 })
     const cooler = addMatrixTrack(document, { id: 'cool', name: 'contacts.cool', format: 'cool', files: [] })
     const hic = addMatrixTrack(document, { id: 'hic', name: 'contacts.hic', format: 'hic', files: [] }, { defaultNormalization: 'NONE' })
-    expect(cooler).toMatchObject({ matrixNormalization: 'raw', matrixPalette: 'warm', matrixDepthMode: 'full', matrixZeroStyle: 'background', matrixMaskedStyle: 'hatch', matrixShowInspector: true })
-    expect(hic).toMatchObject({ matrixNormalization: 'NONE', matrixPalette: 'warm', matrixDepthMode: 'full', matrixZeroStyle: 'background', matrixMaskedStyle: 'hatch', matrixShowInspector: true })
+    expect(cooler).toMatchObject({ matrixNormalization: 'raw', matrixPalette: 'warm', matrixDepthMode: 'full', matrixZeroStyle: 'background', matrixMaskedStyle: 'hatch' })
+    expect(hic).toMatchObject({ matrixNormalization: 'NONE', matrixPalette: 'warm', matrixDepthMode: 'full', matrixZeroStyle: 'background', matrixMaskedStyle: 'hatch' })
   })
 
   it('migrates version 10 matrix tracks to the monochrome palette', () => {
