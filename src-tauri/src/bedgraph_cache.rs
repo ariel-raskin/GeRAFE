@@ -335,17 +335,37 @@ fn cache_result(path: PathBuf, reused: bool) -> Result<PreparedBedGraphCache, St
 mod tests {
     use super::*;
     use flate2::{write::GzEncoder, Compression};
-    use std::io::Write;
+    use std::{
+        collections::HashSet,
+        io::Write,
+        sync::atomic::{AtomicU64, Ordering},
+        thread,
+    };
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     fn unique_test_directory() -> PathBuf {
         std::env::temp_dir().join(format!(
-            "gerafe-bedgraph-cache-{}-{}",
+            "gerafe-bedgraph-cache-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed),
         ))
+    }
+
+    #[test]
+    fn allocates_unique_test_directories_in_parallel() {
+        let handles = (0..64)
+            .map(|_| thread::spawn(unique_test_directory))
+            .collect::<Vec<_>>();
+        let paths = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(paths.iter().collect::<HashSet<_>>().len(), paths.len());
     }
 
     #[test]
