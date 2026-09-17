@@ -315,7 +315,7 @@ button, label { -webkit-tap-highlight-color: transparent; }
 #genome-header {
   display: block;
   min-width: 100%;
-  cursor: grab;
+  cursor: pointer;
   touch-action: none;
   user-select: none;
 }
@@ -359,14 +359,14 @@ button, label { -webkit-tap-highlight-color: transparent; }
 html[data-theme='dark'] .corner-brand img {
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, .42));
 }
-#genome-canvas, #bottom-canvas { display: block; min-width: 100%; cursor: url('/cursors/grab.svg') 8 8, grab; touch-action: none; user-select: none; }
+#genome-canvas, #bottom-canvas { display: block; min-width: 100%; cursor: pointer; touch-action: none; user-select: none; }
 #genome-header.is-dragging,
-#genome-canvas.is-dragging, #bottom-canvas.is-dragging { cursor: url('/cursors/grabbing.svg') 8 8, grabbing; }
-#genome-canvas.is-track-dragging, #bottom-canvas.is-track-dragging { cursor: url('/cursors/grabbing.svg') 8 8, grabbing; }
-body.is-track-dragging, body.is-track-dragging * { cursor: url('/cursors/grabbing.svg') 8 8, grabbing !important; }
+#genome-canvas.is-dragging, #bottom-canvas.is-dragging { cursor: pointer; }
+#genome-canvas.is-track-dragging, #bottom-canvas.is-track-dragging { cursor: pointer; }
+body.is-track-dragging, body.is-track-dragging * { cursor: pointer !important; }
 #genome-canvas.is-track-resize-hover, #bottom-canvas.is-track-resize-hover,
 #genome-canvas.is-track-resizing, #bottom-canvas.is-track-resizing,
-body.is-track-resizing, body.is-track-resizing * { cursor: url('/cursors/vertical-resize.svg') 7 7, ns-resize !important; }
+body.is-track-resizing, body.is-track-resizing * { cursor: row-resize !important; }
 
 .bottom-pane {
   position: absolute;
@@ -394,7 +394,7 @@ body.is-track-resizing, body.is-track-resizing * { cursor: url('/cursors/vertica
   right: 0;
   left: 0;
   height: 12px;
-  cursor: url('/cursors/vertical-resize.svg') 7 7, ns-resize;
+  cursor: row-resize;
 }
 .pane-resizer::after {
   content: '';
