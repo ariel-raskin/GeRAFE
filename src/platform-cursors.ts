@@ -2,10 +2,8 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 
 type WindowsCursorKind = 'action' | 'resize-x' | 'resize-y'
 
-const CURSOR_DENSITY = 2
-
-function cursorValue(url: string, fallback: string): string {
-  return `image-set(url("${url}") ${CURSOR_DENSITY}x), ${fallback}`
+function cursorValue(url: string, fallback: string, density: number): string {
+  return `image-set(url("${url}") ${density.toFixed(2)}x), ${fallback}`
 }
 
 async function windowsCursorUrl(kind: WindowsCursorKind): Promise<string> {
@@ -27,19 +25,21 @@ async function chromiumCursorUrl(fileName: string): Promise<string> {
 export async function installWindowsCursorScaleCorrection(): Promise<void> {
   if (!isTauri() || !navigator.userAgent.includes('Windows')) return
   try {
-    const [action, resizeX, resizeY, grab, grabbing] = await Promise.all([
+    const [action, resizeX, resizeY, grab, grabbing, textScalePercent] = await Promise.all([
       windowsCursorUrl('action'),
       windowsCursorUrl('resize-x'),
       windowsCursorUrl('resize-y'),
       chromiumCursorUrl('chromium-hand-grab.cur'),
       chromiumCursorUrl('chromium-hand-grabbing.cur'),
+      invoke<number>('windows_text_scale_percent'),
     ])
+    const density = Math.max(1, Math.min(2.25, textScalePercent / 100))
     const style = document.documentElement.style
-    style.setProperty('--cursor-action', cursorValue(action, 'pointer'))
-    style.setProperty('--cursor-grab', cursorValue(grab, 'grab'))
-    style.setProperty('--cursor-grabbing', cursorValue(grabbing, 'grabbing'))
-    style.setProperty('--cursor-resize-y', cursorValue(resizeY, 'ns-resize'))
-    style.setProperty('--cursor-resize-x', cursorValue(resizeX, 'ew-resize'))
+    style.setProperty('--cursor-action', cursorValue(action, 'pointer', density))
+    style.setProperty('--cursor-grab', cursorValue(grab, 'grab', density))
+    style.setProperty('--cursor-grabbing', cursorValue(grabbing, 'grabbing', density))
+    style.setProperty('--cursor-resize-y', cursorValue(resizeY, 'ns-resize', density))
+    style.setProperty('--cursor-resize-x', cursorValue(resizeX, 'ew-resize', density))
   } catch (error) {
     console.warn('Could not apply the Windows cursor scale correction', error)
   }
