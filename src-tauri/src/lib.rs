@@ -64,6 +64,128 @@ fn read_file_range(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+fn cursor_dimension(value: u8) -> u16 {
+    if value == 0 {
+        256
+    } else {
+        value as u16
+    }
+}
+
+fn extract_cursor_frame(bytes: &[u8], requested_size: u16) -> Result<Vec<u8>, String> {
+    if bytes.len() < 6 || u16::from_le_bytes([bytes[2], bytes[3]]) != 2 {
+        return Err("Windows cursor data has an invalid header".to_string());
+    }
+    let count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+    let directory_end = 6usize
+        .checked_add(count.saturating_mul(16))
+        .ok_or_else(|| "Windows cursor directory is too large".to_string())?;
+    if bytes.len() < directory_end {
+        return Err("Windows cursor directory is truncated".to_string());
+    }
+
+    let (_, entry_start) = (0..count)
+        .filter_map(|index| {
+            let start = 6 + index * 16;
+            let width = cursor_dimension(bytes[start]);
+            let height = cursor_dimension(bytes[start + 1]);
+            (width == height).then_some((width.abs_diff(requested_size), start))
+        })
+        .min_by_key(|(distance, _)| *distance)
+        .ok_or_else(|| "Windows cursor does not contain a square image".to_string())?;
+    let data_size = u32::from_le_bytes(
+        bytes[entry_start + 8..entry_start + 12]
+            .try_into()
+            .map_err(|_| "Windows cursor image size is invalid")?,
+    ) as usize;
+    let data_offset = u32::from_le_bytes(
+        bytes[entry_start + 12..entry_start + 16]
+            .try_into()
+            .map_err(|_| "Windows cursor image offset is invalid")?,
+    ) as usize;
+    let data_end = data_offset
+        .checked_add(data_size)
+        .filter(|end| *end <= bytes.len())
+        .ok_or_else(|| "Windows cursor image is truncated".to_string())?;
+
+    let mut result = Vec::with_capacity(22 + data_size);
+    result.extend_from_slice(&bytes[..4]);
+    result.extend_from_slice(&1u16.to_le_bytes());
+    result.extend_from_slice(&bytes[entry_start..entry_start + 12]);
+    result.extend_from_slice(&22u32.to_le_bytes());
+    result.extend_from_slice(&bytes[data_offset..data_end]);
+    Ok(result)
+}
+
+#[cfg(windows)]
+fn windows_registry_dword(subkey: &str, name: &str) -> Option<u32> {
+    use std::{ffi::c_void, iter, ptr};
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+
+    let subkey: Vec<u16> = subkey.encode_utf16().chain(iter::once(0)).collect();
+    let name: Vec<u16> = name.encode_utf16().chain(iter::once(0)).collect();
+    let mut value = 0u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            name.as_ptr(),
+            RRF_RT_REG_DWORD,
+            ptr::null_mut(),
+            (&mut value as *mut u32).cast::<c_void>(),
+            &mut size,
+        )
+    };
+    (status == 0 && size == std::mem::size_of::<u32>() as u32).then_some(value)
+}
+
+#[tauri::command]
+fn windows_cursor_asset(kind: String) -> Result<tauri::ipc::Response, String> {
+    #[cfg(windows)]
+    {
+        let file_name = match kind.as_str() {
+            "action" => "aero_link.cur",
+            "resize-x" => "aero_ew.cur",
+            "resize-y" => "aero_ns.cur",
+            _ => return Err(format!("Unknown Windows cursor asset: {kind}")),
+        };
+        let windows_directory = std::env::var_os("WINDIR")
+            .ok_or_else(|| "Windows did not provide its installation directory".to_string())?;
+        let path = Path::new(&windows_directory)
+            .join("Cursors")
+            .join(file_name);
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
+        let cursor_size = windows_registry_dword("Control Panel\\Cursors", "CursorBaseSize")
+            .unwrap_or(32)
+            .clamp(32, 128) as u16;
+        return Ok(tauri::ipc::Response::new(extract_cursor_frame(
+            &bytes,
+            cursor_size,
+        )?));
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = kind;
+        Err("Windows cursor assets are only available on Windows".to_string())
+    }
+}
+
+#[tauri::command]
+fn windows_text_scale_percent() -> u32 {
+    #[cfg(windows)]
+    {
+        return windows_registry_dword("Software\\Microsoft\\Accessibility", "TextScaleFactor")
+            .unwrap_or(100)
+            .clamp(100, 225);
+    }
+
+    #[cfg(not(windows))]
+    100
+}
+
 #[tauri::command]
 async fn prepare_bedgraph_cache(
     path: String,
@@ -216,6 +338,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             stat_file,
             read_file_range,
+            windows_cursor_asset,
+            windows_text_scale_percent,
             prepare_bedgraph_cache,
             contact_matrix_metadata,
             query_contact_matrix
@@ -259,5 +383,30 @@ mod tests {
         assert!(!migrate_legacy_app_data_at(&root).unwrap());
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exposes_only_known_windows_cursor_assets() {
+        assert!(windows_cursor_asset("action".to_string()).is_ok());
+        assert!(windows_cursor_asset("resize-x".to_string()).is_ok());
+        assert!(windows_cursor_asset("resize-y".to_string()).is_ok());
+        assert!(windows_cursor_asset("arrow".to_string()).is_err());
+        assert!((100..=225).contains(&windows_text_scale_percent()));
+    }
+
+    #[test]
+    fn extracts_one_requested_cursor_frame() {
+        let image = [7u8, 8, 9, 10];
+        let mut source = vec![0, 0, 2, 0, 1, 0, 32, 32, 0, 0, 6, 0, 0, 0];
+        source.extend_from_slice(&(image.len() as u32).to_le_bytes());
+        source.extend_from_slice(&22u32.to_le_bytes());
+        source.extend_from_slice(&image);
+
+        let extracted = extract_cursor_frame(&source, 32).unwrap();
+        assert_eq!(&extracted[..6], &[0, 0, 2, 0, 1, 0]);
+        assert_eq!(cursor_dimension(extracted[6]), 32);
+        assert_eq!(cursor_dimension(extracted[7]), 32);
+        assert_eq!(&extracted[22..], &image);
     }
 }

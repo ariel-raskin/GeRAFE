@@ -731,7 +731,9 @@ export class GenomeBrowser {
     for (const spec of specs) {
       if (spec.kind !== 'matrix') continue
       const matrix = this.runtimes.get(spec.id)?.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
-      maxima.set(spec.id, spec.matrixScaleMax ?? matrixAutomaticMaximum(matrix))
+      const automaticPercentile = spec.matrixScaleMode === 'maximum' ? 1 : spec.matrixScalePercentile ?? 0.99
+      const automaticMaximum = matrixAutomaticMaximum(matrix, automaticPercentile, spec.matrixIgnoreDiagonals ?? 3)
+      maxima.set(spec.id, spec.matrixScaleMode === 'fixed' && spec.matrixScaleMax !== undefined ? spec.matrixScaleMax : automaticMaximum)
     }
     return resolveMatrixMaximums(specs, this.document.groups, maxima)
   }
@@ -1309,8 +1311,13 @@ export class GenomeBrowser {
     ctx.beginPath(); ctx.moveTo(0, bottom - 0.5); ctx.lineTo(width, bottom - 0.5); ctx.stroke()
 
     const matrix = track.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
-    const maximum = Math.max(Number.EPSILON, matrixMaximum ?? spec.matrixScaleMax ?? matrixAutomaticMaximum(matrix))
-    const legendValues = matrix?.cells.length ? matrixLegendValues(maximum, spec.matrixTransform ?? 'log1p') : []
+    const minimum = Math.max(0, spec.matrixScaleMin ?? 0)
+    const minimumRange = Math.max(1e-9, Math.abs(minimum) * 1e-9)
+    const automaticPercentile = spec.matrixScaleMode === 'maximum' ? 1 : spec.matrixScalePercentile ?? 0.99
+    const maximum = Math.max(minimum + minimumRange, matrixMaximum
+      ?? (spec.matrixScaleMode === 'fixed' ? spec.matrixScaleMax : undefined)
+      ?? matrixAutomaticMaximum(matrix, automaticPercentile, spec.matrixIgnoreDiagonals ?? 3))
+    const legendValues = matrix?.cells.length ? matrixLegendValues(minimum, maximum, spec.matrixTransform ?? 'log1p') : []
     ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
     const legendLabels = legendValues.map(formatScore)
     const scaleLaneWidth = legendLabels.length
@@ -1327,8 +1334,8 @@ export class GenomeBrowser {
     ctx.textAlign = 'center'
     const resolution = matrix?.resolution ?? spec.matrixResolution
     const normalization = spec.matrixNormalization ?? 'raw'
-    const scaleLabel = spec.matrixScaleMax ? `z≤${formatScore(spec.matrixScaleMax)}` : 'auto z'
-    ctx.fillText(`${resolution ? formatBases(resolution) : 'auto'} · ${normalization} · ${spec.matrixTransform === 'linear' ? 'linear' : 'log'} · ${scaleLabel}`, labelBounds.center, Math.min(bottom - 7, labelTop + labelLines.length * 15 + 3))
+    const metadata = ellipsize(ctx, `${resolution ? formatBases(resolution) : 'auto resolution'} · ${normalization}`, labelBounds.width)
+    ctx.fillText(metadata, labelBounds.center, Math.min(bottom - 7, labelTop + labelLines.length * 15 + 3))
     ctx.textAlign = 'start'
     if (track.status === 'error' || track.status === 'offline') {
       ctx.fillStyle = palette.error
@@ -1345,15 +1352,12 @@ export class GenomeBrowser {
       return 0
     }
 
-    const transform = spec.matrixTransform === 'linear'
-      ? (value: number) => value / maximum
-      : (value: number) => Math.log1p(value) / Math.log1p(maximum)
     const scale = plotWidth / Math.max(1, this.region.end - this.region.start)
     const direction = spec.matrixDirection === 'down' ? 1 : -1
     const geometry = matrixVerticalGeometry(top, bottom, spec.matrixDirection ?? 'up')
     const baseline = geometry.baseline
     const halfCell = Math.max(0.55, matrix.resolution * scale / 2)
-    drawMatrixLegend(ctx, spec, maximum, top, bottom, scaleLaneWidth, palette)
+    drawMatrixLegend(ctx, spec, minimum, maximum, top, bottom, scaleLaneWidth, palette)
     ctx.save()
     ctx.beginPath(); ctx.rect(PLOT_LEFT, geometry.clipTop, plotWidth, Math.max(0, geometry.clipBottom - geometry.clipTop)); ctx.clip()
     for (const cell of matrix.cells) {
@@ -1363,8 +1367,8 @@ export class GenomeBrowser {
       const x = PLOT_LEFT + (((firstCenter + secondCenter) / 2) - this.region.start) * scale
       const y = baseline + direction * ((secondCenter - firstCenter) / 2) * scale
       if (x + halfCell < PLOT_LEFT || x - halfCell > width || y + halfCell < top || y - halfCell > bottom) continue
-      const scoreIntensity = Math.max(0, Math.min(1, transform(cell.value)))
-      if (!Number.isFinite(scoreIntensity) || scoreIntensity <= 0) continue
+      const scoreIntensity = matrixValueIntensity(cell.value, minimum, maximum, spec.matrixTransform ?? 'log1p')
+      if (!Number.isFinite(scoreIntensity)) continue
       const intensity = matrixPaletteIntensity(scoreIntensity, spec.matrixPaletteReversed === true)
       const style = matrixPaletteStyle(spec, intensity)
       ctx.fillStyle = style.color
@@ -1883,7 +1887,7 @@ export class GenomeBrowser {
       } : spec?.kind === 'matrix' ? {
         matrixResolution: spec.matrixResolution,
         matrixNormalization: spec.matrixNormalization,
-        matrixMaxDistance: Math.ceil(2 * (this.trackHeight(spec) + 6) * (queryRegion.end - queryRegion.start) / Math.max(1, plotWidth * (1 + overscanFactor * 2))),
+        matrixMaxDistance: matrixQueryMaximumDistance(span, spec.matrixDepthMode ?? 'full', spec.matrixMaxDistance),
       } : undefined
       const queryPixelWidth = plotWidth * (1 + overscanFactor * 2)
       const features = await source.getFeatures(queryRegion, queryPixelWidth, controller.signal, options)
@@ -2206,20 +2210,39 @@ export function placeCollapsedGeneLabels(
   })
 }
 
-export const MATRIX_WARM_COLORS = ['#fffdf2', '#fff7bc', '#fdae61', '#d7191c', '#111111'] as const
+export const MATRIX_WARM_COLORS = ['#fffdf2', '#fff7bc', '#fdae61', '#d7191c', '#700d1a'] as const
 export const MATRIX_BLUE_BLACK_COLORS = ['#daf0ff', '#4d97cf', '#14437a', '#040609'] as const
+const matrixAutomaticMaximumCache = new WeakMap<MatrixFeature, Map<string, number>>()
 
 /** Visible-cell z-max used by automatic matrix scaling. */
-export function matrixAutomaticMaximum(matrix: MatrixFeature | undefined): number {
+export function matrixAutomaticMaximum(matrix: MatrixFeature | undefined, percentile = 0.99, ignoredDiagonals = 3): number {
   if (!matrix?.cells.length) return 1
-  const offDiagonalValues = matrix.cells
-    .filter((cell) => cell.bin2 - cell.bin1 > matrix.resolution * 2)
+  const diagonalCount = Math.max(0, Math.round(ignoredDiagonals))
+  const quantile = Math.max(0.5, Math.min(1, percentile))
+  const cacheKey = `${quantile}:${diagonalCount}`
+  const cached = matrixAutomaticMaximumCache.get(matrix)?.get(cacheKey)
+  if (cached !== undefined) return cached
+  const minimumSeparation = diagonalCount * matrix.resolution
+  const values = matrix.cells
+    .filter((cell) => Math.abs(cell.bin2 - cell.bin1) >= minimumSeparation)
     .map((cell) => cell.value)
     .filter((value) => Number.isFinite(value) && value > 0)
-  const values = (offDiagonalValues.length >= 20
-    ? offDiagonalValues
-    : matrix.cells.map((cell) => cell.value).filter((value) => Number.isFinite(value) && value > 0)).sort((a, b) => a - b)
-  return values[Math.min(values.length - 1, Math.floor(values.length * 0.99))] ?? 1
+  if (quantile < 1) values.sort((a, b) => a - b)
+  const maximum = quantile === 1
+    ? values.reduce((largest, value) => Math.max(largest, value), 0) || 1
+    : values[Math.min(values.length - 1, Math.max(0, Math.ceil(values.length * quantile) - 1))] ?? 1
+  const cache = matrixAutomaticMaximumCache.get(matrix) ?? new Map<string, number>()
+  cache.set(cacheKey, maximum)
+  matrixAutomaticMaximumCache.set(matrix, cache)
+  return maximum
+}
+
+/** Query depth is based on the visible genomic span, never on presentation height. */
+export function matrixQueryMaximumDistance(visibleSpan: number, mode: 'auto' | 'full' | 'fixed', fixedDistance?: number): number {
+  const span = Math.max(1, Math.ceil(visibleSpan))
+  if (mode === 'full') return span
+  if (mode === 'fixed' && Number.isFinite(fixedDistance) && fixedDistance! > 0) return Math.max(1, Math.round(fixedDistance!))
+  return Math.max(1, Math.ceil(span * 0.2))
 }
 
 export function matrixVerticalGeometry(top: number, bottom: number, direction: 'up' | 'down'): { baseline: number; clipTop: number; clipBottom: number } {
@@ -2246,16 +2269,14 @@ export function resolveMatrixMaximums(
   return resolved
 }
 
-/** Interpolates palette colors while reserving a configurable high-score tail for the final color. */
-export function matrixGradientColor(colors: readonly string[], intensity: number, highColorStart = 0.9): string {
+/** Interpolates evenly spaced low-to-high palette colors. */
+export function matrixGradientColor(colors: readonly string[], intensity: number): string {
   const valid = colors.filter((color) => /^#[0-9a-f]{6}$/i.test(color))
   if (!valid.length) return '#000000'
   if (valid.length === 1) return valid[0].toLocaleLowerCase()
   const value = Math.max(0, Math.min(1, intensity))
-  const tailStart = Math.max(0.5, Math.min(0.99, highColorStart))
-  const penultimateIndex = valid.length - 2
   const stops = valid.map((color, index) => ({
-    at: index === valid.length - 1 ? 1 : penultimateIndex === 0 ? 0 : tailStart * index / penultimateIndex,
+    at: index / (valid.length - 1),
     color,
   }))
   const upperIndex = Math.max(1, stops.findIndex((stop) => value <= stop.at))
@@ -2269,19 +2290,33 @@ export function matrixGradientColor(colors: readonly string[], intensity: number
 }
 
 /** Low-to-high publication palette adapted from the earlier figure workflow. */
-export function matrixWarmPaletteColor(intensity: number, highColorStart = 0.9): string {
-  return matrixGradientColor(MATRIX_WARM_COLORS, intensity, highColorStart)
+export function matrixWarmPaletteColor(intensity: number): string {
+  return matrixGradientColor(MATRIX_WARM_COLORS, intensity)
 }
 
 /** Dark-mode contact palette: low scores are light blue and high scores approach black. */
-export function matrixBlueBlackPaletteColor(intensity: number, highColorStart = 0.9): string {
-  return matrixGradientColor(MATRIX_BLUE_BLACK_COLORS, intensity, highColorStart)
+export function matrixBlueBlackPaletteColor(intensity: number): string {
+  return matrixGradientColor(MATRIX_BLUE_BLACK_COLORS, intensity)
 }
 
 /** Legend values at the high, visual midpoint, and low ends of a matrix scale. */
-export function matrixLegendValues(maximum: number, transform: 'linear' | 'log1p'): [number, number, number] {
-  const max = Math.max(Number.EPSILON, maximum)
-  return [max, transform === 'linear' ? max / 2 : Math.expm1(Math.log1p(max) / 2), 0]
+export function matrixLegendValues(minimum: number, maximum: number, transform: 'linear' | 'log1p'): [number, number, number] {
+  const min = Math.max(0, minimum)
+  const max = Math.max(min + Math.max(1e-9, Math.abs(min) * 1e-9), maximum)
+  const midpoint = transform === 'linear'
+    ? min + (max - min) / 2
+    : Math.expm1((Math.log1p(min) + Math.log1p(max)) / 2)
+  return [max, midpoint, min]
+}
+
+export function matrixValueIntensity(value: number, minimum: number, maximum: number, transform: 'linear' | 'log1p'): number {
+  if (!Number.isFinite(value)) return Number.NaN
+  const min = Math.max(0, minimum)
+  const max = Math.max(min + Math.max(1e-9, Math.abs(min) * 1e-9), maximum)
+  const transformedMinimum = transform === 'linear' ? min : Math.log1p(min)
+  const transformedMaximum = transform === 'linear' ? max : Math.log1p(max)
+  const transformedValue = transform === 'linear' ? value : Math.log1p(Math.max(0, value))
+  return Math.max(0, Math.min(1, (transformedValue - transformedMinimum) / Math.max(Number.EPSILON, transformedMaximum - transformedMinimum)))
 }
 
 export function matrixPaletteIntensity(scoreIntensity: number, reversed: boolean): number {
@@ -2291,11 +2326,10 @@ export function matrixPaletteIntensity(scoreIntensity: number, reversed: boolean
 
 function matrixPaletteStyle(spec: TrackSpec, intensity: number): { color: string; alpha: number } {
   const value = Math.max(0, Math.min(1, intensity))
-  const highColorStart = spec.matrixHighColorStart ?? 0.9
-  if (spec.matrixPalette === 'warm') return { color: matrixWarmPaletteColor(value, highColorStart), alpha: 1 }
-  if (spec.matrixPalette === 'blue-black') return { color: matrixBlueBlackPaletteColor(value, highColorStart), alpha: 1 }
+  if (spec.matrixPalette === 'warm') return { color: matrixWarmPaletteColor(value), alpha: 1 }
+  if (spec.matrixPalette === 'blue-black') return { color: matrixBlueBlackPaletteColor(value), alpha: 1 }
   if (spec.matrixPalette === 'custom' && (spec.matrixPaletteColors?.length ?? 0) >= 2) {
-    return { color: matrixGradientColor(spec.matrixPaletteColors!, value, highColorStart), alpha: 1 }
+    return { color: matrixGradientColor(spec.matrixPaletteColors!, value), alpha: 1 }
   }
   return { color: spec.color, alpha: 0.08 + Math.pow(value, 0.72) * 0.92 }
 }
@@ -2316,6 +2350,7 @@ function colorWithAlpha(color: string, alpha: number): string {
 function drawMatrixLegend(
   ctx: CanvasRenderingContext2D,
   spec: TrackSpec,
+  minimum: number,
   maximum: number,
   top: number,
   bottom: number,
@@ -2340,7 +2375,7 @@ function drawMatrixLegend(
   ctx.fillRect(gradientX, legendTop, gradientWidth, Math.max(1, legendBottom - legendTop))
   ctx.strokeRect(gradientX + 0.5, legendTop + 0.5, gradientWidth - 1, Math.max(1, legendBottom - legendTop - 1))
 
-  const labels = matrixLegendValues(maximum, spec.matrixTransform ?? 'log1p').map(formatScore)
+  const labels = matrixLegendValues(minimum, maximum, spec.matrixTransform ?? 'log1p').map(formatScore)
   ctx.fillStyle = palette.axisInk
   ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
   ctx.textAlign = 'right'
@@ -2535,9 +2570,8 @@ function alignmentQueryChanged(previous: TrackSpec, next: TrackSpec): boolean {
 export function matrixQueryChanged(previous: TrackSpec, next: TrackSpec): boolean {
   return previous.matrixResolution !== next.matrixResolution
     || previous.matrixNormalization !== next.matrixNormalization
-    || previous.height !== next.height
-    || previous.fittedHeight !== next.fittedHeight
-    || previous.manualPixelHeight !== next.manualPixelHeight
+    || previous.matrixDepthMode !== next.matrixDepthMode
+    || previous.matrixMaxDistance !== next.matrixMaxDistance
 }
 
 function canvasPalette(): CanvasPalette {

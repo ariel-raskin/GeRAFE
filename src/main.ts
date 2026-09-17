@@ -45,6 +45,9 @@ import { SUPPORTED_TRACK_DIALOG_EXTENSIONS, SUPPORTED_TRACK_EXTENSION_LABEL } fr
 import { migrateLegacyStorage, STORAGE_KEYS } from './storage.ts'
 import { AppUpdateController, createTauriUpdateBackend, updateProgressPercent } from './app-update.ts'
 import type { AppUpdateState } from './app-update.ts'
+import { installWindowsCursorScaleCorrection } from './platform-cursors.ts'
+
+void installWindowsCursorScaleCorrection()
 
 type Theme = 'light' | 'dark'
 type ActionDialogRequest = {
@@ -241,18 +244,23 @@ app.innerHTML = `
       <header><div><strong id="matrix-settings-title">Matrix settings</strong><small id="matrix-settings-scope"></small></div><button class="update-dialog-close" id="matrix-settings-close" type="button" aria-label="Close">×</button></header>
       <div class="matrix-settings-content">
         <div class="matrix-settings-grid">
-          <label><span>Intensity range</span><select id="matrix-scale-mode"><option value="auto">Automatic z-max</option><option value="fixed">Fixed z-max</option></select></label>
-          <label><span>Fixed z-max</span><input id="matrix-scale-maximum" type="number" min="0.000001" step="any" /></label>
+          <label><span>Intensity range</span><select id="matrix-scale-mode"><option value="maximum">Automatic maximum</option><option value="percentile">Robust percentile</option><option value="fixed">Fixed range</option></select></label>
+          <label><span>Scale minimum (z-min)</span><input id="matrix-scale-minimum" type="number" min="0" step="any" /></label>
+          <label><span>Robust percentile</span><input id="matrix-scale-percentile" type="number" min="50" max="100" step="0.1" /></label>
+          <label><span>Fixed maximum (z-max)</span><input id="matrix-scale-maximum" type="number" min="0.000001" step="any" /></label>
+          <label><span>Autoscale diagonal exclusion</span><input id="matrix-ignore-diagonals" type="number" min="0" max="100" step="1" title="Number of diagonals, including the main diagonal, excluded from automatic scaling" /></label>
+          <label><span>Genomic depth</span><select id="matrix-depth"><option value="auto">Automatic · 20% of view</option><option value="full">Full visible span</option><option value="50000">50 kb</option><option value="100000">100 kb</option><option value="250000">250 kb</option><option value="500000">500 kb</option><option value="1000000">1 Mb</option><option value="custom">Custom</option></select></label>
+          <label><span>Custom depth (kb)</span><input id="matrix-depth-distance" type="number" min="0.001" step="any" /></label>
           <label><span>Intensity transform</span><select id="matrix-transform"><option value="log1p">Log</option><option value="linear">Linear</option></select></label>
-          <label><span>Color palette</span><select id="matrix-palette"><option value="warm">Warm · yellow → red → black</option><option value="blue-black">Light blue → dark blue → black</option><option value="monochrome">Single-color gradient</option><option value="custom">Custom colors</option></select></label>
+          <label><span>Color palette</span><select id="matrix-palette"><option value="warm">Warm · yellow → red → deep red</option><option value="blue-black">Light blue → dark blue → black</option><option value="monochrome">Single-color gradient</option><option value="custom">Custom colors</option></select></label>
           <label id="matrix-group-scaling-row"><span>Matrix group scaling</span><select id="matrix-group-scaling"><option value="linked">Shared automatic scale</option><option value="independent">Independent automatic scales</option></select></label>
         </div>
+        <p class="matrix-settings-note">Diagonal exclusion affects automatic scale calculation only; it does not hide contacts. A value of 3 ignores the main diagonal and its first two neighboring diagonals when finding z-max.</p>
         <section class="matrix-palette-editor" id="matrix-palette-editor" hidden>
           <header><span>Low-to-high colors</span><button id="matrix-add-color" type="button">Add color</button></header>
           <div id="matrix-palette-colors"></div>
           <small>Stops are interpolated in this low-to-high order.</small>
         </section>
-        <label class="matrix-range-row"><span><strong>High-color threshold</strong><small>Start blending toward the highest color only above this fraction of z-max.</small></span><input id="matrix-high-color-start" type="range" min="50" max="99" step="1" /><output id="matrix-high-color-output"></output></label>
         <label class="matrix-check-row"><span><strong>Reverse score colors</strong><small>Map high scores to the low end of the selected palette.</small></span><input id="matrix-palette-reversed" type="checkbox" /></label>
       </div>
       <footer><button class="dialog-button secondary" id="matrix-settings-cancel" type="button">Cancel</button><button class="dialog-button primary" id="matrix-settings-apply" type="submit">Apply</button></footer>
@@ -324,15 +332,18 @@ const matrixSettingsContent = matrixSettingsDialog.querySelector<HTMLElement>('.
 const matrixSettingsForm = document.querySelector<HTMLFormElement>('#matrix-settings-form')!
 const matrixSettingsScope = document.querySelector<HTMLElement>('#matrix-settings-scope')!
 const matrixScaleMode = document.querySelector<HTMLSelectElement>('#matrix-scale-mode')!
+const matrixScaleMinimum = document.querySelector<HTMLInputElement>('#matrix-scale-minimum')!
+const matrixScalePercentile = document.querySelector<HTMLInputElement>('#matrix-scale-percentile')!
 const matrixScaleMaximum = document.querySelector<HTMLInputElement>('#matrix-scale-maximum')!
+const matrixIgnoreDiagonals = document.querySelector<HTMLInputElement>('#matrix-ignore-diagonals')!
+const matrixDepth = document.querySelector<HTMLSelectElement>('#matrix-depth')!
+const matrixDepthDistance = document.querySelector<HTMLInputElement>('#matrix-depth-distance')!
 const matrixTransform = document.querySelector<HTMLSelectElement>('#matrix-transform')!
 const matrixPalette = document.querySelector<HTMLSelectElement>('#matrix-palette')!
 const matrixGroupScalingRow = document.querySelector<HTMLElement>('#matrix-group-scaling-row')!
 const matrixGroupScaling = document.querySelector<HTMLSelectElement>('#matrix-group-scaling')!
 const matrixPaletteEditor = document.querySelector<HTMLElement>('#matrix-palette-editor')!
 const matrixPaletteColors = document.querySelector<HTMLElement>('#matrix-palette-colors')!
-const matrixHighColorStart = document.querySelector<HTMLInputElement>('#matrix-high-color-start')!
-const matrixHighColorOutput = document.querySelector<HTMLOutputElement>('#matrix-high-color-output')!
 const matrixPaletteReversed = document.querySelector<HTMLInputElement>('#matrix-palette-reversed')!
 const matrixSettingsApply = document.querySelector<HTMLButtonElement>('#matrix-settings-apply')!
 const actionDialog = document.querySelector<HTMLElement>('#action-dialog')!
@@ -567,12 +578,12 @@ trackOptionsClose.addEventListener('click', closeTrackOptionsDialog)
 document.querySelector<HTMLButtonElement>('#matrix-settings-close')!.addEventListener('click', closeMatrixSettingsDialog)
 document.querySelector<HTMLButtonElement>('#matrix-settings-cancel')!.addEventListener('click', closeMatrixSettingsDialog)
 matrixScaleMode.addEventListener('change', updateMatrixSettingsVisibility)
+matrixDepth.addEventListener('change', updateMatrixSettingsVisibility)
 matrixPalette.addEventListener('change', () => {
   if (matrixPalette.value === 'custom' && matrixDialogColors.length < 2) matrixDialogColors = [...MATRIX_WARM_COLORS]
   updateMatrixSettingsVisibility()
   renderMatrixPaletteColors()
 })
-matrixHighColorStart.addEventListener('input', updateMatrixHighColorOutput)
 document.querySelector<HTMLButtonElement>('#matrix-add-color')!.addEventListener('click', () => {
   if (matrixDialogColors.length >= 8) return
   matrixDialogColors.push(matrixDialogColors.at(-1) ?? '#111111')
@@ -1788,7 +1799,10 @@ async function applyMatrixContextAction(command: string | undefined, matrixIds: 
     for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixTransform = command === 'matrix-transform-linear' ? 'linear' : 'log1p'
   })
   if (command === 'matrix-scale-auto') store.edit((draft) => {
-    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixScaleMax = undefined
+    for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') {
+      track.matrixScaleMode = 'percentile'
+      track.matrixScaleMax = undefined
+    }
   })
   if (command === 'matrix-scale-fixed') {
     const tracks = store.current.tracks.filter((item) => matrixIds.includes(item.id) && item.kind === 'matrix')
@@ -1796,7 +1810,10 @@ async function applyMatrixContextAction(command: string | undefined, matrixIds: 
     const entered = await requestText({ title: 'Set matrix intensity maximum', label: 'Maximum contact intensity (z-max)', initial: initial ? String(initial) : '', submitLabel: 'Set maximum', validate: validatePositiveNumber })
     const maximum = Number(entered)
     if (entered !== undefined && Number.isFinite(maximum) && maximum > 0) store.edit((draft) => {
-      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixScaleMax = maximum
+      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') {
+        track.matrixScaleMode = 'fixed'
+        track.matrixScaleMax = maximum
+      }
     })
   }
   if (command === 'matrix-palette-monochrome' || command === 'matrix-palette-warm' || command === 'matrix-palette-blue-black') store.edit((draft) => {
@@ -1974,21 +1991,28 @@ function openMatrixSettingsDialog(trackIds: readonly string[]): void {
   const first = tracks[0]
   matrixSettingsScope.textContent = tracks.length === 1 ? first.label : `${tracks.length} matrix tracks`
   matrixSettingsApply.textContent = tracks.length === 1 ? 'Apply' : `Apply to ${tracks.length} tracks`
-  matrixScaleMode.value = first.matrixScaleMax === undefined ? 'auto' : 'fixed'
+  matrixScaleMode.value = first.matrixScaleMode ?? (first.matrixScaleMax === undefined ? 'percentile' : 'fixed')
+  matrixScaleMinimum.value = String(first.matrixScaleMin ?? 0)
+  matrixScalePercentile.value = String((first.matrixScalePercentile ?? 0.99) * 100)
   matrixScaleMaximum.value = first.matrixScaleMax === undefined ? '' : String(first.matrixScaleMax)
+  matrixIgnoreDiagonals.value = String(first.matrixIgnoreDiagonals ?? 3)
+  const depth = first.matrixMaxDistance
+  const presetDepths = [50_000, 100_000, 250_000, 500_000, 1_000_000]
+  matrixDepth.value = first.matrixDepthMode === 'full' ? 'full'
+    : first.matrixDepthMode === 'fixed' && depth && presetDepths.includes(depth) ? String(depth)
+      : first.matrixDepthMode === 'fixed' ? 'custom' : 'full'
+  matrixDepthDistance.value = first.matrixDepthMode === 'fixed' && depth ? String(depth / 1_000) : ''
   matrixTransform.value = first.matrixTransform ?? 'log1p'
   matrixPalette.value = first.matrixPalette ?? 'monochrome'
   matrixDialogColors = first.matrixPalette === 'custom' && (first.matrixPaletteColors?.length ?? 0) >= 2
     ? [...first.matrixPaletteColors!]
     : [...matrixPresetColors(first.matrixPalette ?? 'monochrome', first.color)]
-  matrixHighColorStart.value = String(Math.round((first.matrixHighColorStart ?? 0.9) * 100))
   matrixPaletteReversed.checked = first.matrixPaletteReversed === true
   matrixGroupScalingRow.hidden = !pendingMatrixGroupId
   const group = store.current.groups.find((item) => item.id === pendingMatrixGroupId)
   matrixGroupScaling.value = group?.scaleBehavior === 'independent' ? 'independent' : 'linked'
   renderMatrixPaletteColors()
   updateMatrixSettingsVisibility()
-  updateMatrixHighColorOutput()
   matrixSettingsContent.scrollTop = 0
   matrixSettingsDialog.hidden = false
   window.setTimeout(() => matrixScaleMode.focus(), 0)
@@ -2007,33 +2031,60 @@ function renderMatrixPaletteColors(): void {
 }
 
 function updateMatrixSettingsVisibility(): void {
+  matrixScalePercentile.disabled = matrixScaleMode.value !== 'percentile'
   matrixScaleMaximum.disabled = matrixScaleMode.value !== 'fixed'
+  matrixIgnoreDiagonals.disabled = matrixScaleMode.value === 'fixed'
+  matrixDepthDistance.disabled = matrixDepth.value !== 'custom'
   matrixPaletteEditor.hidden = matrixPalette.value !== 'custom'
-  matrixHighColorStart.disabled = matrixPalette.value === 'monochrome'
-}
-
-function updateMatrixHighColorOutput(): void {
-  matrixHighColorOutput.value = `${matrixHighColorStart.value}%`
 }
 
 function applyMatrixSettingsDialog(): void {
+  const fixedMinimum = Number(matrixScaleMinimum.value)
   const fixedMaximum = Number(matrixScaleMaximum.value)
-  if (matrixScaleMode.value === 'fixed' && (!Number.isFinite(fixedMaximum) || fixedMaximum <= 0)) {
+  const percentile = Number(matrixScalePercentile.value)
+  const ignoredDiagonals = Number(matrixIgnoreDiagonals.value)
+  if (!Number.isFinite(fixedMinimum) || fixedMinimum < 0) {
+    matrixScaleMinimum.focus()
+    return
+  }
+  if (matrixScaleMode.value === 'fixed' && (!Number.isFinite(fixedMaximum) || fixedMaximum <= fixedMinimum)) {
     matrixScaleMaximum.focus()
     return
   }
+  if (matrixScaleMode.value === 'percentile' && (!Number.isFinite(percentile) || percentile < 50 || percentile > 100)) {
+    matrixScalePercentile.focus()
+    return
+  }
+  if (!Number.isInteger(ignoredDiagonals) || ignoredDiagonals < 0 || ignoredDiagonals > 100) {
+    matrixIgnoreDiagonals.focus()
+    return
+  }
+  const presetDepth = Number(matrixDepth.value)
+  const customDepthKb = Number(matrixDepthDistance.value)
+  if (matrixDepth.value === 'custom' && (!Number.isFinite(customDepthKb) || customDepthKb <= 0)) {
+    matrixDepthDistance.focus()
+    return
+  }
+  const depthMode = matrixDepth.value === 'auto' ? 'auto' : matrixDepth.value === 'full' ? 'full' : 'fixed'
+  const maximumDistance = depthMode === 'fixed'
+    ? Math.max(1, Math.round((matrixDepth.value === 'custom' ? customDepthKb * 1_000 : presetDepth)))
+    : undefined
   const palette = matrixPalette.value as MatrixPalette
   const colors = matrixDialogColors.map((color) => normalizedHexColor(color)).filter((color): color is string => Boolean(color)).slice(0, 8)
   if (palette === 'custom' && colors.length < 2) return
-  const highColorStart = Math.max(0.5, Math.min(0.99, Number(matrixHighColorStart.value) / 100))
   store.edit((draft) => {
     for (const track of draft.tracks) {
       if (!pendingMatrixTrackIds.includes(track.id) || track.kind !== 'matrix') continue
+      track.matrixScaleMode = matrixScaleMode.value === 'maximum' ? 'maximum' : matrixScaleMode.value === 'fixed' ? 'fixed' : 'percentile'
+      track.matrixScaleMin = fixedMinimum
       track.matrixScaleMax = matrixScaleMode.value === 'fixed' ? fixedMaximum : undefined
+      track.matrixScalePercentile = Math.max(0.5, Math.min(1, percentile / 100))
+      track.matrixIgnoreDiagonals = ignoredDiagonals
+      track.matrixDepthMode = depthMode
+      track.matrixMaxDistance = maximumDistance
       track.matrixTransform = matrixTransform.value === 'linear' ? 'linear' : 'log1p'
       track.matrixPalette = palette
       track.matrixPaletteColors = palette === 'custom' ? [...colors] : undefined
-      track.matrixHighColorStart = highColorStart
       track.matrixPaletteReversed = matrixPaletteReversed.checked || undefined
     }
     const group = draft.groups.find((item) => item.id === pendingMatrixGroupId)

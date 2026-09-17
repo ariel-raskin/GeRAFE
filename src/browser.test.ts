@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixBlueBlackPaletteColor, matrixGradientColor, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
-import type { InteractionFeature } from './types.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import type { InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
 
@@ -120,27 +120,52 @@ describe('interaction rendering helpers', () => {
 })
 
 describe('contact-matrix rendering helpers', () => {
-  it('reloads matrix data only after a committed height change', () => {
+  it('reloads matrix data for depth changes but not presentation height changes', () => {
     const original: TrackSpec = { id: 'matrix', kind: 'matrix', sourceIds: [], label: 'Matrix', color: '#000000', enabled: true, height: 40, manualPixelHeight: 160, pane: 'main' }
-    expect(matrixQueryChanged(original, { ...original, manualPixelHeight: 240 })).toBe(true)
+    expect(matrixQueryChanged(original, { ...original, manualPixelHeight: 240 })).toBe(false)
+    expect(matrixQueryChanged(original, { ...original, matrixDepthMode: 'fixed', matrixMaxDistance: 250_000 })).toBe(true)
     expect(matrixQueryChanged(original, { ...original })).toBe(false)
   })
 
-  it('maps low contacts through yellow and red to a black maximum', () => {
+  it('uses explicit viewport-based matrix depths rather than track height', () => {
+    expect(matrixQueryMaximumDistance(1_000_000, 'auto')).toBe(200_000)
+    expect(matrixQueryMaximumDistance(1_000_000, 'full')).toBe(1_000_000)
+    expect(matrixQueryMaximumDistance(1_000_000, 'fixed', 75_000)).toBe(75_000)
+  })
+
+  it('supports maximum and robust-percentile autoscaling after diagonal exclusion', () => {
+    const matrix = {
+      featureType: 'matrix', start: 0, end: 100, resolution: 10,
+      cells: [
+        { bin1: 0, bin2: 0, value: 1_000 },
+        { bin1: 0, bin2: 10, value: 500 },
+        { bin1: 0, bin2: 20, value: 100 },
+        { bin1: 0, bin2: 30, value: 1 },
+        { bin1: 0, bin2: 40, value: 2 },
+        { bin1: 0, bin2: 50, value: 100 },
+      ],
+    } satisfies MatrixFeature
+    expect(matrixAutomaticMaximum(matrix, 1, 0)).toBe(1_000)
+    expect(matrixAutomaticMaximum(matrix, 0.5, 3)).toBe(2)
+  })
+
+  it('maps low contacts through yellow and red to a deep-red maximum', () => {
     expect(matrixWarmPaletteColor(0)).toBe('#fffdf2')
-    expect(matrixWarmPaletteColor(0.9)).toBe('#d7191c')
-    expect(matrixWarmPaletteColor(1)).toBe('#111111')
+    expect(matrixWarmPaletteColor(0.75)).toBe('#d7191c')
+    expect(matrixWarmPaletteColor(1)).toBe('#700d1a')
   })
 
   it('uses a light-blue to black palette for dark-mode matrices', () => {
     expect(matrixBlueBlackPaletteColor(0)).toBe('#daf0ff')
-    expect(matrixBlueBlackPaletteColor(0.9)).toBe('#14437a')
+    expect(matrixBlueBlackPaletteColor(2 / 3)).toBe('#14437a')
     expect(matrixBlueBlackPaletteColor(1)).toBe('#040609')
   })
 
   it('labels linear and log matrix gradients at their visual midpoint', () => {
-    expect(matrixLegendValues(100, 'linear')).toEqual([100, 50, 0])
-    expect(matrixLegendValues(99, 'log1p')[1]).toBeCloseTo(9)
+    expect(matrixLegendValues(0, 100, 'linear')).toEqual([100, 50, 0])
+    expect(matrixLegendValues(0, 99, 'log1p')[1]).toBeCloseTo(9)
+    expect(matrixLegendValues(20, 100, 'linear')).toEqual([100, 60, 20])
+    expect(matrixValueIntensity(60, 20, 100, 'linear')).toBe(0.5)
   })
 
   it('can reverse which palette end represents high scores', () => {
@@ -149,11 +174,11 @@ describe('contact-matrix rendering helpers', () => {
     expect(matrixPaletteIntensity(1, true)).toBe(0)
   })
 
-  it('can reserve the final palette color for a narrow high-score tail', () => {
+  it('interpolates custom palette colors at even score intervals', () => {
     const colors = ['#fff7bc', '#d7191c', '#111111']
-    expect(matrixGradientColor(colors, 0.9, 0.9)).toBe('#d7191c')
-    expect(matrixGradientColor(colors, 0.95, 0.9)).not.toBe('#111111')
-    expect(matrixGradientColor(colors, 1, 0.9)).toBe('#111111')
+    expect(matrixGradientColor(colors, 0.5)).toBe('#d7191c')
+    expect(matrixGradientColor(colors, 0.75)).not.toBe('#111111')
+    expect(matrixGradientColor(colors, 1)).toBe('#111111')
   })
 
   it('shares the largest matrix z-max only when a group is linked', () => {
