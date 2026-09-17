@@ -191,6 +191,7 @@ let fittedTrackHeights
 let groupContextFocusedAction
 let groupClickSelectionText
 let groupHighlightChanged
+let groupRightClickHighlightChanged
 let clickAwaySelectionText
 let newWorkspaceConfirmationVisible
 let flyoutClosesOnPlainAction
@@ -235,7 +236,12 @@ if (visualDataTrackCount > 1) {
   groupClickSelectionText = await page.locator('#track-context-menu').textContent()
   redundantGroupingHidden = !groupClickSelectionText?.includes('Group selected')
   await page.keyboard.press('Escape')
+  await page.mouse.click(box.x + Math.max(240, box.width * 0.4), box.y + 60)
+  const groupBeforeRightClick = await canvas.evaluate((element) => element.toDataURL())
   await page.mouse.click(box.x + 8, box.y + 60, { button: 'right' })
+  await page.waitForTimeout(50)
+  const groupAfterRightClick = await canvas.evaluate((element) => element.toDataURL())
+  groupRightClickHighlightChanged = groupBeforeRightClick !== groupAfterRightClick
   groupMenuText = await page.locator('#track-context-menu').textContent()
   await page.locator('[data-context-submenu="group-appearance"]').hover()
   groupAppearanceText = await page.locator('#track-context-flyout').textContent()
@@ -382,7 +388,7 @@ const matrixResizeBeforeDelay = await page.evaluate(() => JSON.parse(localStorag
 const resizeRequiresHoverDelay = matrixResizeBeforeDelay[0]?.manualPixelHeight === matrixResizeBefore[0]?.manualPixelHeight
 await page.mouse.move(matrixCanvasBox.x + 300, matrixCanvasBox.y + firstMatrixPixels + 30)
 await page.mouse.move(matrixCanvasBox.x + 300, matrixCanvasBox.y + firstMatrixPixels)
-await page.waitForTimeout(550)
+await page.waitForTimeout(300)
 await page.mouse.down()
 await page.mouse.move(matrixCanvasBox.x + 300, matrixCanvasBox.y + firstMatrixPixels + 18, { steps: 4 })
 await page.mouse.up()
@@ -390,7 +396,11 @@ await page.waitForTimeout(250)
 const matrixResizeAfter = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').tracks)
 const unselectedBottomBoundaryResize = matrixResizeAfter[0]?.manualPixelHeight > firstMatrixPixels
   && matrixResizeAfter[1]?.manualPixelHeight === matrixResizeBefore[1]?.manualPixelHeight
+const matrixGroupBeforeRightClick = await page.locator('#genome-canvas').evaluate((element) => element.toDataURL())
 await page.mouse.click(matrixCanvasBox.x + 8, matrixCanvasBox.y + 60, { button: 'right' })
+await page.waitForTimeout(50)
+const matrixGroupAfterRightClick = await page.locator('#genome-canvas').evaluate((element) => element.toDataURL())
+const matrixGroupRightClickHighlightChanged = matrixGroupBeforeRightClick !== matrixGroupAfterRightClick
 const matrixGroupMenuText = await page.locator('#track-context-menu').textContent()
 await page.locator('[data-context-submenu="group-appearance"]').hover()
 const matrixGroupAppearanceText = await page.locator('#track-context-flyout').textContent()
@@ -474,7 +484,7 @@ for (const submenu of ['bam-content', 'bam-layout', 'bam-color', 'bam-filters'])
 await page.screenshot({ path: 'dist/smoke-bam-menu.png', fullPage: true })
 await browser.close()
 
-console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixGroupAppearanceText, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log(JSON.stringify({ ...result, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
 if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button' || helpMenuActiveElement !== 'help-menu-button') process.exitCode = 1
@@ -507,13 +517,13 @@ if (visualDataTrackCount > 1 && !groupMenuAfterPaneMove?.includes('Experiment A'
 if (visualDataTrackCount > 1 && !selectAllText?.includes(`${visualDataTrackCount + 1} tracks selected`)) process.exitCode = 1
 if (visualDataTrackCount > 1 && selectAllText?.includes('Y-axis scale')) process.exitCode = 1
 if (visualDataTrackCount > 1 && (!colorDialogVisible || !dragGhostVisible)) process.exitCode = 1
-if (visualDataTrackCount > 1 && (!groupHighlightChanged || !groupClickSelectionText?.includes('2 tracks selected') || clickAwaySelectionText?.includes('tracks selected'))) process.exitCode = 1
+  if (visualDataTrackCount > 1 && (!groupHighlightChanged || !groupRightClickHighlightChanged || !groupClickSelectionText?.includes('2 tracks selected') || clickAwaySelectionText?.includes('tracks selected'))) process.exitCode = 1
 if (hasStrandedTrack && (!initialTrackContextText?.includes('Stranded signal pair') || !initialAppearanceText?.includes('Set positive-strand color') || !initialAppearanceText?.includes('Set negative-strand color') || !initialTrackContextText.includes('Separate stranded pair'))) process.exitCode = 1
 if (hasStrandedTrack && !strandedRoundTrip) process.exitCode = 1
 if (dataPaths.length && (!offlineTrackStatus?.includes('reopening or attention') || offlineLeftPixel.slice(0, 3).join(',') === '150,144,135')) process.exitCode = 1
 if (customReferenceBeforeReload !== customReferenceAfterReload) process.exitCode = 1
 if (!referenceMenuText?.includes('Add reference')) process.exitCode = 1
-if (!matrixGroupMenuText?.includes('Matrix settings') || !matrixGroupAppearanceText?.includes('Set group track color') || !matrixGroupAppearanceText?.includes('Set group track height')) process.exitCode = 1
+if (!matrixGroupRightClickHighlightChanged || !matrixGroupMenuText?.includes('Matrix settings') || !matrixGroupAppearanceText?.includes('Set group track color') || !matrixGroupAppearanceText?.includes('Set group track height')) process.exitCode = 1
 if (!matrixSettingsVisible || !matrixGroupSettingsApplied || !matrixSettingsReopenedAtTop || !resizeRequiresHoverDelay || !unselectedBottomBoundaryResize || !selectedMatrixMenuText?.includes('2 tracks selected') || !selectedMatrixMenuText?.includes('Matrix settings') || !newWorkspaceConfirmationVisible) process.exitCode = 1
 if (!mixedSelectionMenuText?.includes('3 tracks selected') || mixedSelectionMenuText.includes('Matrix settings') || mixedSelectionMenuText.includes('Remove 3 selected tracks')) process.exitCode = 1
 if (!bamMenuText?.includes('Content') || !bamMenuText.includes('Read layout') || !bamMenuText.includes('Color by') || !bamMenuText.includes('Read filters') || bamMenuText.includes('Coverage only')) process.exitCode = 1
