@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 15 as const
+export const TRACK_DOCUMENT_VERSION = 16 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -12,6 +12,8 @@ export type SignalScaleChannel = 'ordinary' | SignalStrand
 export type InteractionDirection = 'up' | 'down'
 export type InteractionFilterMode = 'all' | 'genes' | 'visible-genes'
 export type MatrixPalette = 'monochrome' | 'warm' | 'blue-black' | 'custom'
+export type MatrixScaleMode = 'maximum' | 'percentile' | 'fixed'
+export type MatrixDepthMode = 'auto' | 'full' | 'fixed'
 
 export interface SourceFileSpec {
   name: string
@@ -72,7 +74,15 @@ export interface TrackSpec {
   matrixResolution?: number
   matrixNormalization?: string
   matrixTransform?: 'linear' | 'log1p'
+  matrixScaleMode?: MatrixScaleMode
+  matrixScaleMin?: number
   matrixScaleMax?: number
+  matrixScalePercentile?: number
+  /** Number of diagonals, including the main diagonal, excluded from automatic scaling. */
+  matrixIgnoreDiagonals?: number
+  matrixDepthMode?: MatrixDepthMode
+  /** Maximum genomic separation in bases when matrixDepthMode is fixed. */
+  matrixMaxDistance?: number
   matrixPalette?: MatrixPalette
   /** Reverses which end of the selected palette represents the highest score. */
   matrixPaletteReversed?: boolean
@@ -408,6 +418,11 @@ export function addMatrixTrack(
     matrixDirection: 'up',
     matrixNormalization: options.defaultNormalization ?? 'raw',
     matrixTransform: 'log1p',
+    matrixScaleMode: 'percentile',
+    matrixScaleMin: 0,
+    matrixScalePercentile: 0.99,
+    matrixIgnoreDiagonals: 3,
+    matrixDepthMode: 'auto',
     matrixPalette: 'warm',
     matrixHighColorStart: 0.9,
   }
@@ -634,7 +649,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -692,8 +707,26 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
       ? track.matrixNormalization.trim()
       : track.kind === 'matrix' ? 'raw' : undefined,
     matrixTransform: track.kind === 'matrix' && track.matrixTransform === 'linear' ? 'linear' as const : track.kind === 'matrix' ? 'log1p' as const : undefined,
+    matrixScaleMode: track.kind === 'matrix' && (track.matrixScaleMode === 'maximum' || track.matrixScaleMode === 'percentile' || track.matrixScaleMode === 'fixed')
+      ? track.matrixScaleMode
+      : track.kind === 'matrix' ? (track.matrixScaleMax === undefined ? 'percentile' as const : 'fixed' as const) : undefined,
+    matrixScaleMin: track.kind === 'matrix' && typeof track.matrixScaleMin === 'number' && Number.isFinite(track.matrixScaleMin) && track.matrixScaleMin >= 0
+      ? track.matrixScaleMin
+      : track.kind === 'matrix' ? 0 : undefined,
     matrixScaleMax: track.kind === 'matrix' && typeof track.matrixScaleMax === 'number' && Number.isFinite(track.matrixScaleMax) && track.matrixScaleMax > 0
       ? track.matrixScaleMax
+      : undefined,
+    matrixScalePercentile: track.kind === 'matrix' && typeof track.matrixScalePercentile === 'number' && Number.isFinite(track.matrixScalePercentile)
+      ? Math.max(0.5, Math.min(1, track.matrixScalePercentile))
+      : track.kind === 'matrix' ? 0.99 : undefined,
+    matrixIgnoreDiagonals: track.kind === 'matrix' && typeof track.matrixIgnoreDiagonals === 'number' && Number.isFinite(track.matrixIgnoreDiagonals)
+      ? Math.max(0, Math.min(100, Math.round(track.matrixIgnoreDiagonals)))
+      : track.kind === 'matrix' ? 3 : undefined,
+    matrixDepthMode: track.kind === 'matrix' && (track.matrixDepthMode === 'auto' || track.matrixDepthMode === 'full' || track.matrixDepthMode === 'fixed')
+      ? track.matrixDepthMode
+      : track.kind === 'matrix' ? 'auto' as const : undefined,
+    matrixMaxDistance: track.kind === 'matrix' && typeof track.matrixMaxDistance === 'number' && Number.isSafeInteger(track.matrixMaxDistance) && track.matrixMaxDistance > 0
+      ? track.matrixMaxDistance
       : undefined,
     matrixPalette: track.kind === 'matrix' && (track.matrixPalette === 'warm' || track.matrixPalette === 'blue-black' || track.matrixPalette === 'custom' || (track.matrixPalette as string) === 'warm-dark')
       ? (track.matrixPalette as string) === 'warm-dark' ? 'blue-black' : track.matrixPalette

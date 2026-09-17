@@ -171,6 +171,8 @@ describe('track document', () => {
     }, { id: 'matrix-track', defaultNormalization: 'weight' })
     Object.assign(track, {
       matrixDirection: 'down', matrixResolution: 10_000, matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42,
+      matrixScaleMode: 'fixed', matrixScaleMin: 2, matrixScalePercentile: 0.98, matrixIgnoreDiagonals: 4,
+      matrixDepthMode: 'fixed', matrixMaxDistance: 250_000,
       matrixPalette: 'custom', matrixPaletteColors: ['#ffffff', '#ff0000', '#111111'], matrixHighColorStart: 0.94, matrixPaletteReversed: true,
     })
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
@@ -178,7 +180,8 @@ describe('track document', () => {
     expect(restored.sources[0]).toMatchObject({ format: 'mcool', name: 'contacts.mcool' })
     expect(restored.tracks.find((item) => item.id === 'matrix-track')).toMatchObject({
       kind: 'matrix', matrixDirection: 'down', matrixResolution: 10_000,
-      matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42, matrixPalette: 'custom',
+      matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMode: 'fixed', matrixScaleMin: 2, matrixScaleMax: 42,
+      matrixScalePercentile: 0.98, matrixIgnoreDiagonals: 4, matrixDepthMode: 'fixed', matrixMaxDistance: 250_000, matrixPalette: 'custom',
       matrixPaletteColors: ['#ffffff', '#ff0000', '#111111'], matrixHighColorStart: 0.94, matrixPaletteReversed: true,
     })
   })
@@ -197,6 +200,21 @@ describe('track document', () => {
     legacy.schemaVersion = 14
     delete track.matrixHighColorStart
     expect(normalizeTrackDocument(legacy).tracks[0]).toMatchObject({ matrixHighColorStart: 0.9 })
+  })
+
+  it('migrates version 15 matrices to robust scaling and height-independent automatic depth', () => {
+    const legacy = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 1_000_000 }) as any
+    const track = addMatrixTrack(legacy, { id: 'matrix-source', name: 'contacts.cool', format: 'cool', files: [] })
+    legacy.schemaVersion = 15
+    delete track.matrixScaleMode
+    delete track.matrixScaleMin
+    delete track.matrixScalePercentile
+    delete track.matrixIgnoreDiagonals
+    delete track.matrixDepthMode
+    expect(normalizeTrackDocument(legacy).tracks[0]).toMatchObject({
+      matrixScaleMode: 'percentile', matrixScaleMin: 0, matrixScalePercentile: 0.99,
+      matrixIgnoreDiagonals: 3, matrixDepthMode: 'auto',
+    })
   })
 
   it('starts contact matrices with raw values and the warm publication palette', () => {

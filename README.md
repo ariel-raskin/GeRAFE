@@ -177,9 +177,11 @@ BAM track menus provide:
 
 ### Contact-matrix display controls
 
-Right-click one or several selected `.hic`, `.cool`, or `.mcool` tracks to open hover fly-out menus for their shared resolution, normalization, intensity, and color-scale controls. Resolution can follow the visible span automatically or use a value supported by every selected source. New tracks start with unnormalized values (`NONE` for `.hic`, raw counts for Cooler) and a publication-oriented yellow → red → black scale. A dark-canvas warm → red → white adaptation and a single-color scale are also available. Intensity can use an off-diagonal automatic z-maximum or a fixed z-max with either log or linear transformation. The triangular matrix can also be flipped above or below its baseline.
+Right-click one or several selected `.hic`, `.cool`, or `.mcool` tracks to open hover fly-out menus for their shared resolution and normalization and a dedicated matrix-settings window for scaling, depth, and color. Resolution can follow the visible span automatically or use a value supported by every selected source. New tracks start with unnormalized values (`NONE` for `.hic`, raw counts for Cooler), robust 99th-percentile scaling, and a publication-oriented yellow → red → black scale. A light-blue → dark-blue → black palette, a single-color scale, and custom multi-stop palettes are also available.
 
-GeRAFE reads genomic coordinates from each Cooler's stored bin table and canonicalizes the triangle orientation of both Cooler and `.hic` cells before drawing. Matrix readers and their indexes are reused across queries, pans use an overscanned window, and contacts too distant to be visible within the track height at query time are omitted from the render payload to keep navigation responsive. Contacts are drawn directly at full canvas resolution; absent, zero, masked, or unavailable bins retain the canvas background.
+Intensity can use the eligible maximum, a chosen robust percentile, or a fixed z-min/z-max range with either log or linear transformation. Automatic scaling can ignore a chosen number of near-diagonal bins without hiding those contacts. Matrix depth can use the bounded automatic range, the full visible span, common genomic-distance presets, or a custom distance. The triangular matrix can also be flipped above or below its baseline.
+
+GeRAFE reads genomic coordinates from each Cooler's stored bin table and canonicalizes the triangle orientation of both Cooler and `.hic` cells before drawing. Matrix readers and their indexes are reused across queries, and pans use an overscanned window. Automatic depth is based on the visible genomic span rather than track height, so resizing a track cannot silently multiply its contact query. Contacts are drawn directly at full canvas resolution; absent, zero, masked, or unavailable bins retain the canvas background.
 
 ### Workspaces and persistence
 
@@ -194,7 +196,7 @@ Use **File → Save workspace…** to export a `.gerafe.json` document and **Ope
 - The supported track formats are limited to those listed above.
 - BEDPE is currently an in-memory arc track for files up to 50 MB, with at most 2,000 highest-scoring interactions drawn per visible window.
 - Contact-matrix tracks currently show one-dimensional cis windows as triangular heatmaps. Interchromosomal maps, two-axis navigation, expected/observed transforms, and matrix-derived annotations are not yet available.
-- Contact-matrix tracks fetch the distance range needed for their final height after either numeric or drag resizing. Dragging uses the existing matrix as a lightweight preview and performs one refresh when the drag ends.
+- Very deep or high-resolution contact-matrix queries can contain enough cells to slow panning. Automatic depth is bounded; full-span and custom deep queries are explicit user choices.
 - Custom references provide coordinate navigation but do not automatically include gene annotations or cytobands.
 - Individual BAM reads are drawn below a 250 kb visible span; BAM requests are limited to 2 Mb to avoid unbounded pileups.
 - Mismatches can be read from BAM MD tags. Reconstructing mismatches for BAMs without MD tags is unavailable because reference-sequence bases are not currently loaded.
