@@ -421,6 +421,7 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
     openTrackContextMenu(trackId, x, y)
   },
   onGroupContextMenu(groupId, x, y) {
+    selectGroup(groupId, false)
     openGroupContextMenu(groupId, x, y)
   },
   onTracksReorder(trackIds, pane, insertionIndex, withinGroupId) {
@@ -2131,7 +2132,7 @@ function closeActionDialog(value: string | boolean | undefined): void {
 }
 
 function showInteractionGuide(): Promise<void> {
-  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click to select additional tracks and Shift+click to select a range; clicking a group card adds all of its tracks. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for half a second before dragging its height. The mouse wheel scrolls; Ctrl+wheel zooms. Right-click a track or group card for options.')
+  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click to select additional tracks and Shift+click to select a range; clicking or right-clicking a group card adds all of its tracks. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for a quarter second before dragging its height. The mouse wheel scrolls; Ctrl+wheel zooms. Right-click a track or group card for options.')
 }
 
 function showFirstRunInteractionHint(): void {

@@ -18,7 +18,7 @@ const OVERSCAN_FACTOR = 1
 const MATRIX_OVERSCAN_FACTOR = 0.5
 const GENE_CONTENT_PADDING = 6
 const MIN_BOTTOM_GENE_HEIGHT = 44
-const TRACK_RESIZE_HOVER_DELAY_MS = 500
+const TRACK_RESIZE_HOVER_DELAY_MS = 250
 
 export interface BrowserCallbacks {
   onRegionChange(region: Region): void
@@ -949,7 +949,7 @@ export class GenomeBrowser {
       max = Math.max(max, bin.max)
     }
     const amplitude = Math.max(1e-9, max - min)
-    const { top: chartTop, bottom: chartBottom } = signalChartBounds(top, bottom)
+    const { top: chartTop, bottom: chartBottom } = signalChartBounds(top, bottom, min >= 0 && spec.signalStrand !== 'minus')
     const chartHeight = chartBottom - chartTop
     const rawZeroY = chartBottom - ((0 - min) / amplitude) * chartHeight
     const zeroY = spec.signalStrand === 'minus' ? chartTop : Math.max(chartTop, Math.min(chartBottom, rawZeroY))
@@ -2155,9 +2155,9 @@ export function interactionArcHeight(pixelSpan: number, trackHeight: number): nu
   return Math.min(Math.max(8, trackHeight - 14), Math.max(8, Math.sqrt(Math.max(0, pixelSpan)) * 4.2))
 }
 
-export function signalChartBounds(top: number, bottom: number): { top: number; bottom: number } {
+export function signalChartBounds(top: number, bottom: number, flushBottom = false): { top: number; bottom: number } {
   const inset = Math.min(7, Math.max(2, (bottom - top) * 0.08))
-  return { top: top + inset, bottom: bottom - inset }
+  return { top: top + inset, bottom: flushBottom ? bottom - 0.5 : bottom - inset }
 }
 
 export function bottomTrackResizeBoundaries(

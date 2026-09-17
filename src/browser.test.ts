@@ -73,6 +73,7 @@ describe('track layout and ruler formatting', () => {
   it('uses most of the signal height with a small symmetric inset', () => {
     expect(signalChartBounds(100, 220)).toEqual({ top: 107, bottom: 213 })
     expect(signalChartBounds(0, 20)).toEqual({ top: 2, bottom: 18 })
+    expect(signalChartBounds(100, 220, true)).toEqual({ top: 107, bottom: 219.5 })
   })
 
   it('assigns each resize line only to the track directly above it', () => {
