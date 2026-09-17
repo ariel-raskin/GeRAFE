@@ -170,14 +170,16 @@ describe('track document', () => {
       files: [{ name: 'contacts.mcool', size: 84, lastModified: 123, role: 'signal', path: 'C:\\data\\contacts.mcool' }],
     }, { id: 'matrix-track', defaultNormalization: 'weight' })
     Object.assign(track, {
-      matrixDirection: 'down', matrixResolution: 10_000, matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42, matrixPalette: 'blue-black', matrixPaletteReversed: true,
+      matrixDirection: 'down', matrixResolution: 10_000, matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42,
+      matrixPalette: 'custom', matrixPaletteColors: ['#ffffff', '#ff0000', '#111111'], matrixHighColorStart: 0.94, matrixPaletteReversed: true,
     })
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
     expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
     expect(restored.sources[0]).toMatchObject({ format: 'mcool', name: 'contacts.mcool' })
     expect(restored.tracks.find((item) => item.id === 'matrix-track')).toMatchObject({
       kind: 'matrix', matrixDirection: 'down', matrixResolution: 10_000,
-      matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42, matrixPalette: 'blue-black', matrixPaletteReversed: true,
+      matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42, matrixPalette: 'custom',
+      matrixPaletteColors: ['#ffffff', '#ff0000', '#111111'], matrixHighColorStart: 0.94, matrixPaletteReversed: true,
     })
   })
 
@@ -187,6 +189,14 @@ describe('track document', () => {
     legacy.schemaVersion = 13
     ;(track as any).matrixPalette = 'warm-dark'
     expect(normalizeTrackDocument(legacy).tracks[0]).toMatchObject({ matrixPalette: 'blue-black' })
+  })
+
+  it('migrates version 14 matrices to the default high-color transition', () => {
+    const legacy = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 1_000_000 }) as any
+    const track = addMatrixTrack(legacy, { id: 'matrix-source', name: 'contacts.cool', format: 'cool', files: [] })
+    legacy.schemaVersion = 14
+    delete track.matrixHighColorStart
+    expect(normalizeTrackDocument(legacy).tracks[0]).toMatchObject({ matrixHighColorStart: 0.9 })
   })
 
   it('starts contact matrices with raw values and the warm publication palette', () => {

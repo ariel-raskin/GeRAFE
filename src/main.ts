@@ -1,6 +1,6 @@
 import './style.css'
 import { ungzip } from 'pako-esm2'
-import { distributeFittedPixels, GenomeBrowser, heightScoreForPixels, trackPixelHeight } from './browser.ts'
+import { distributeFittedPixels, GenomeBrowser, heightScoreForPixels, MATRIX_BLUE_BLACK_COLORS, MATRIX_WARM_COLORS, trackPixelHeight } from './browser.ts'
 import { BedGraphSource, MAX_BEDGRAPH_BYTES } from './data/bedgraph.ts'
 import { gzipText } from './data/gzip.ts'
 import { BedSource } from './data/bed.ts'
@@ -35,7 +35,7 @@ import {
   unlinkScales,
   unlinkStrandedTrack,
 } from './track-document.ts'
-import type { SignalScaleChannel, SourceFormat, TrackDocument, TrackSourceSpec, TrackSpec } from './track-document.ts'
+import type { MatrixPalette, SignalScaleChannel, SourceFormat, TrackDocument, TrackSourceSpec, TrackSpec } from './track-document.ts'
 import type { TrackSource, TrackRuntime } from './types.ts'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -219,10 +219,32 @@ app.innerHTML = `
       <div class="track-options-content">
         <label><span><strong>Show TSS elbow arrows</strong><small>Draw transcription start site indicators in gene tracks.</small></span><input id="tss-indicators-toggle" type="checkbox" /></label>
         <label><span><strong>Auto-link stranded signals</strong><small>Pair matching positive and negative signal files when opened.</small></span><input id="stranded-auto-link-toggle" type="checkbox" /></label>
-        <label><span><strong>Autoscale new visual groups</strong><small>Link compatible signal scales whenever tracks are added to a new group.</small></span><input id="group-autoscale-toggle" type="checkbox" /></label>
+        <label><span><strong>Autoscale new visual groups</strong><small>Link compatible signal or matrix scales whenever tracks are added to a new group.</small></span><input id="group-autoscale-toggle" type="checkbox" /></label>
         <label><span><strong>Color linked strands red and blue</strong><small>Use red for positive and blue for negative strands when pairs are linked.</small></span><input id="stranded-auto-colors-toggle" type="checkbox" /></label>
       </div>
     </section>
+  </div>
+  <div class="matrix-settings-dialog" id="matrix-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="matrix-settings-title" hidden>
+    <form class="matrix-settings-card" id="matrix-settings-form">
+      <header><div><strong id="matrix-settings-title">Matrix settings</strong><small id="matrix-settings-scope"></small></div><button class="update-dialog-close" id="matrix-settings-close" type="button" aria-label="Close">×</button></header>
+      <div class="matrix-settings-content">
+        <div class="matrix-settings-grid">
+          <label><span>Intensity range</span><select id="matrix-scale-mode"><option value="auto">Automatic z-max</option><option value="fixed">Fixed z-max</option></select></label>
+          <label><span>Fixed z-max</span><input id="matrix-scale-maximum" type="number" min="0.000001" step="any" /></label>
+          <label><span>Intensity transform</span><select id="matrix-transform"><option value="log1p">Log</option><option value="linear">Linear</option></select></label>
+          <label><span>Color palette</span><select id="matrix-palette"><option value="warm">Figure warm</option><option value="blue-black">Light blue → dark blue → black</option><option value="monochrome">Track color</option><option value="custom">Custom colors</option></select></label>
+          <label id="matrix-group-scaling-row"><span>Matrix group scaling</span><select id="matrix-group-scaling"><option value="linked">Shared automatic scale</option><option value="independent">Independent automatic scales</option></select></label>
+        </div>
+        <section class="matrix-palette-editor" id="matrix-palette-editor" hidden>
+          <header><span>Low-to-high colors</span><button id="matrix-add-color" type="button">Add color</button></header>
+          <div id="matrix-palette-colors"></div>
+          <small>Stops are interpolated in this low-to-high order.</small>
+        </section>
+        <label class="matrix-range-row"><span><strong>Final-color transition</strong><small>Start blending toward the highest color only above this fraction of z-max.</small></span><input id="matrix-high-color-start" type="range" min="50" max="99" step="1" /><output id="matrix-high-color-output"></output></label>
+        <label class="matrix-check-row"><span><strong>Reverse score colors</strong><small>Map high scores to the low end of the selected palette.</small></span><input id="matrix-palette-reversed" type="checkbox" /></label>
+      </div>
+      <footer><button class="dialog-button secondary" id="matrix-settings-cancel" type="button">Cancel</button><button class="dialog-button primary" type="submit">Apply to tracks</button></footer>
+    </form>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 `
@@ -274,6 +296,20 @@ const tssIndicatorsToggle = document.querySelector<HTMLInputElement>('#tss-indic
 const strandedAutoLinkToggle = document.querySelector<HTMLInputElement>('#stranded-auto-link-toggle')!
 const groupAutoscaleToggle = document.querySelector<HTMLInputElement>('#group-autoscale-toggle')!
 const strandedAutoColorsToggle = document.querySelector<HTMLInputElement>('#stranded-auto-colors-toggle')!
+const matrixSettingsDialog = document.querySelector<HTMLElement>('#matrix-settings-dialog')!
+const matrixSettingsForm = document.querySelector<HTMLFormElement>('#matrix-settings-form')!
+const matrixSettingsScope = document.querySelector<HTMLElement>('#matrix-settings-scope')!
+const matrixScaleMode = document.querySelector<HTMLSelectElement>('#matrix-scale-mode')!
+const matrixScaleMaximum = document.querySelector<HTMLInputElement>('#matrix-scale-maximum')!
+const matrixTransform = document.querySelector<HTMLSelectElement>('#matrix-transform')!
+const matrixPalette = document.querySelector<HTMLSelectElement>('#matrix-palette')!
+const matrixGroupScalingRow = document.querySelector<HTMLElement>('#matrix-group-scaling-row')!
+const matrixGroupScaling = document.querySelector<HTMLSelectElement>('#matrix-group-scaling')!
+const matrixPaletteEditor = document.querySelector<HTMLElement>('#matrix-palette-editor')!
+const matrixPaletteColors = document.querySelector<HTMLElement>('#matrix-palette-colors')!
+const matrixHighColorStart = document.querySelector<HTMLInputElement>('#matrix-high-color-start')!
+const matrixHighColorOutput = document.querySelector<HTMLOutputElement>('#matrix-high-color-output')!
+const matrixPaletteReversed = document.querySelector<HTMLInputElement>('#matrix-palette-reversed')!
 const zoomLevel = document.querySelector<HTMLInputElement>('#zoom-level')!
 const fitTracksAuto = document.querySelector<HTMLButtonElement>('#fit-tracks-auto')!
 
@@ -287,6 +323,9 @@ let pendingRelinkChannel: 'plus' | 'minus' | undefined
 let pendingOpenGroupId: string | undefined
 let pendingColorGroupId: string | undefined
 let pendingColorChannel: SignalScaleChannel | undefined
+let pendingMatrixTrackIds: string[] = []
+let pendingMatrixGroupId: string | undefined
+let matrixDialogColors: string[] = []
 let bottomPaneAutoFit = true
 let upperPaneAutoFit = savedUpperPaneAutoFit()
 let upperAutoFitFrame: number | undefined
@@ -469,6 +508,38 @@ strandedAutoColorsToggle.addEventListener('change', () => {
   if (strandedAutoColorsToggle.checked) store.edit(applyAutomaticStrandedColors)
 })
 trackOptionsClose.addEventListener('click', closeTrackOptionsDialog)
+document.querySelector<HTMLButtonElement>('#matrix-settings-close')!.addEventListener('click', closeMatrixSettingsDialog)
+document.querySelector<HTMLButtonElement>('#matrix-settings-cancel')!.addEventListener('click', closeMatrixSettingsDialog)
+matrixScaleMode.addEventListener('change', updateMatrixSettingsVisibility)
+matrixPalette.addEventListener('change', () => {
+  if (matrixPalette.value === 'custom' && matrixDialogColors.length < 2) matrixDialogColors = [...MATRIX_WARM_COLORS]
+  updateMatrixSettingsVisibility()
+  renderMatrixPaletteColors()
+})
+matrixHighColorStart.addEventListener('input', updateMatrixHighColorOutput)
+document.querySelector<HTMLButtonElement>('#matrix-add-color')!.addEventListener('click', () => {
+  if (matrixDialogColors.length >= 8) return
+  matrixDialogColors.push(matrixDialogColors.at(-1) ?? '#111111')
+  renderMatrixPaletteColors()
+})
+matrixPaletteColors.addEventListener('input', (event) => {
+  const input = (event.target as Element).closest<HTMLInputElement>('[data-matrix-color-index]')
+  if (!input) return
+  matrixDialogColors[Number(input.dataset.matrixColorIndex)] = input.value
+  const code = input.nextElementSibling
+  if (code) code.textContent = input.value
+})
+matrixPaletteColors.addEventListener('click', (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>('[data-remove-matrix-color]')
+  if (!button || matrixDialogColors.length <= 2) return
+  matrixDialogColors.splice(Number(button.dataset.removeMatrixColor), 1)
+  renderMatrixPaletteColors()
+})
+matrixSettingsForm.addEventListener('submit', (event) => {
+  event.preventDefault()
+  applyMatrixSettingsDialog()
+})
+matrixSettingsDialog.addEventListener('pointerdown', (event) => { if (event.target === matrixSettingsDialog) closeMatrixSettingsDialog() })
 document.querySelector<HTMLButtonElement>('#check-updates-menu-item')!.addEventListener('click', () => {
   closeMenus()
   openUpdateDialog()
@@ -487,10 +558,10 @@ document.addEventListener('pointerdown', (event) => {
   if (!(event.target as Element).closest?.('#reference-picker')) setReferenceMenu(false)
   if (!(event.target as Element).closest?.('#chromosome-picker')) setChromosomeMenu(false)
   if (!(event.target as Element).closest?.('.track-context-menu')) closeTrackContextMenu()
-  if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog, #track-options-dialog')) clearTrackSelection()
+  if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog, #track-options-dialog, #matrix-settings-dialog')) clearTrackSelection()
 })
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') { closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog() }
+  if (event.key === 'Escape') { closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeMatrixSettingsDialog() }
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'o') {
     event.preventDefault()
     closeMenus()
@@ -1190,14 +1261,6 @@ function matrixContextMenuMarkup(
   const normalizationLabel = sameValue(matrixTracks.map((track) => track.matrixNormalization))
     ? matrixTracks[0].matrixNormalization ?? metadata[0]?.defaultNormalization ?? 'raw'
     : 'Mixed'
-  const scaleLabel = sameValue(matrixTracks.map((track) => track.matrixScaleMax))
-    ? matrixTracks[0].matrixScaleMax ? `z-max ${matrixTracks[0].matrixScaleMax}` : 'Automatic z-max'
-    : 'Mixed'
-  const palettes = matrixTracks.map((track) => track.matrixPalette ?? 'monochrome')
-  const paletteLabel = sameValue(palettes)
-    ? palettes[0] === 'monochrome' ? 'Track color' : palettes[0] === 'blue-black' ? 'Blue → black' : 'Yellow → red → black'
-    : 'Mixed'
-
   return [
     action('matrix-flip', 'Flip matrix upside down', matrixTracks.every((track) => track.matrixDirection === 'down') ? 'current' : ''),
     submenu('matrix-resolution', 'Resolution', resolutionLabel,
@@ -1205,17 +1268,7 @@ function matrixContextMenuMarkup(
       + commonResolutions.map((resolution) => action(`matrix-resolution-value-${resolution}`, formatBases(resolution), matrixTracks.every((track) => track.matrixResolution === resolution) ? 'current' : '')).join('')),
     commonNormalizations.length ? submenu('matrix-normalization', 'Normalization', escapeHtml(normalizationLabel),
       commonNormalizations.map((normalization) => action(`matrix-normalization-value-${encodeURIComponent(normalization)}`, escapeHtml(normalization), matrixTracks.every((track) => track.matrixNormalization === normalization) ? 'current' : '')).join('')) : '',
-    submenu('matrix-intensity', 'Intensity scale', scaleLabel,
-      action('matrix-scale-auto', 'Automatic z-max', matrixTracks.every((track) => track.matrixScaleMax === undefined) ? 'current' : '')
-      + action('matrix-scale-fixed', 'Set z-max…', sameValue(matrixTracks.map((track) => track.matrixScaleMax)) && matrixTracks[0].matrixScaleMax ? String(matrixTracks[0].matrixScaleMax) : '')
-      + '<span class="context-separator"></span>'
-      + action('matrix-transform-log', 'Log intensity', matrixTracks.every((track) => track.matrixTransform !== 'linear') ? 'current' : '')
-      + action('matrix-transform-linear', 'Linear intensity', matrixTracks.every((track) => track.matrixTransform === 'linear') ? 'current' : '')),
-    submenu('matrix-palette', 'Color scale', paletteLabel,
-      action('matrix-palette-monochrome', 'Single track color', matrixTracks.every((track) => (track.matrixPalette ?? 'monochrome') === 'monochrome') ? 'current' : '')
-      + action('matrix-palette-warm', 'Yellow → red → black', matrixTracks.every((track) => track.matrixPalette === 'warm') ? 'current' : '')
-      + action('matrix-palette-blue-black', 'Light blue → dark blue → black', matrixTracks.every((track) => track.matrixPalette === 'blue-black') ? 'current' : '')),
-    action('matrix-palette-reverse', 'Reverse score colors', matrixTracks.every((track) => track.matrixPaletteReversed) ? 'current' : ''),
+    action('matrix-settings', 'Matrix settings…', matrixTracks.length > 1 ? `${matrixTracks.length} tracks` : ''),
   ].join('')
 }
 
@@ -1502,6 +1555,10 @@ function handleTrackContextAction(event: MouseEvent): void {
 
 function applyMatrixContextAction(command: string | undefined, matrixIds: readonly string[]): void {
   if (!command?.startsWith('matrix-') || !matrixIds.length) return
+  if (command === 'matrix-settings') {
+    openMatrixSettingsDialog(matrixIds)
+    return
+  }
   if (command === 'matrix-flip') store.edit((draft) => {
     const tracks = draft.tracks.filter((item) => matrixIds.includes(item.id) && item.kind === 'matrix')
     const direction = tracks.length && tracks.every((track) => track.matrixDirection === 'down') ? 'up' : 'down'
@@ -1703,6 +1760,91 @@ function updateUpperAutoFitControl(): void {
   fitTracksAuto.classList.toggle('is-active', upperPaneAutoFit)
   fitTracksAuto.setAttribute('aria-pressed', String(upperPaneAutoFit))
   fitTracksAuto.title = upperPaneAutoFit ? 'Automatic track fitting is on' : 'Automatically keep upper tracks fitted'
+}
+
+function openMatrixSettingsDialog(trackIds: readonly string[]): void {
+  const tracks = store.current.tracks.filter((track) => trackIds.includes(track.id) && track.kind === 'matrix')
+  if (!tracks.length) return
+  pendingMatrixTrackIds = tracks.map((track) => track.id)
+  const candidateGroupId = tracks[0].displayGroupId
+  const groupMembers = candidateGroupId ? store.current.tracks.filter((track) => track.displayGroupId === candidateGroupId) : []
+  pendingMatrixGroupId = candidateGroupId && tracks.every((track) => track.displayGroupId === candidateGroupId)
+    && groupMembers.length === tracks.length && groupMembers.every((track) => track.kind === 'matrix')
+    ? candidateGroupId
+    : undefined
+  const first = tracks[0]
+  matrixSettingsScope.textContent = tracks.length === 1 ? first.label : `${tracks.length} matrix tracks`
+  matrixScaleMode.value = first.matrixScaleMax === undefined ? 'auto' : 'fixed'
+  matrixScaleMaximum.value = first.matrixScaleMax === undefined ? '' : String(first.matrixScaleMax)
+  matrixTransform.value = first.matrixTransform ?? 'log1p'
+  matrixPalette.value = first.matrixPalette ?? 'monochrome'
+  matrixDialogColors = first.matrixPalette === 'custom' && (first.matrixPaletteColors?.length ?? 0) >= 2
+    ? [...first.matrixPaletteColors!]
+    : [...matrixPresetColors(first.matrixPalette ?? 'monochrome', first.color)]
+  matrixHighColorStart.value = String(Math.round((first.matrixHighColorStart ?? 0.9) * 100))
+  matrixPaletteReversed.checked = first.matrixPaletteReversed === true
+  matrixGroupScalingRow.hidden = !pendingMatrixGroupId
+  const group = store.current.groups.find((item) => item.id === pendingMatrixGroupId)
+  matrixGroupScaling.value = group?.scaleBehavior === 'independent' ? 'independent' : 'linked'
+  renderMatrixPaletteColors()
+  updateMatrixSettingsVisibility()
+  updateMatrixHighColorOutput()
+  matrixSettingsDialog.hidden = false
+  window.setTimeout(() => matrixScaleMode.focus(), 0)
+}
+
+function matrixPresetColors(palette: MatrixPalette, trackColor: string): readonly string[] {
+  if (palette === 'blue-black') return MATRIX_BLUE_BLACK_COLORS
+  if (palette === 'monochrome') return [trackColor, trackColor]
+  return MATRIX_WARM_COLORS
+}
+
+function renderMatrixPaletteColors(): void {
+  matrixPaletteColors.innerHTML = matrixDialogColors.map((color, index) => `
+    <label><span>${index === 0 ? 'Low' : index === matrixDialogColors.length - 1 ? 'High' : `Stop ${index + 1}`}</span><input type="color" value="${escapeHtml(normalizedHexColor(color) ?? '#111111')}" data-matrix-color-index="${index}" /><code>${escapeHtml(normalizedHexColor(color) ?? '#111111')}</code><button type="button" data-remove-matrix-color="${index}" ${matrixDialogColors.length <= 2 ? 'disabled' : ''} aria-label="Remove color">×</button></label>
+  `).join('')
+}
+
+function updateMatrixSettingsVisibility(): void {
+  matrixScaleMaximum.disabled = matrixScaleMode.value !== 'fixed'
+  matrixPaletteEditor.hidden = matrixPalette.value !== 'custom'
+  matrixHighColorStart.disabled = matrixPalette.value === 'monochrome'
+}
+
+function updateMatrixHighColorOutput(): void {
+  matrixHighColorOutput.value = `${matrixHighColorStart.value}%`
+}
+
+function applyMatrixSettingsDialog(): void {
+  const fixedMaximum = Number(matrixScaleMaximum.value)
+  if (matrixScaleMode.value === 'fixed' && (!Number.isFinite(fixedMaximum) || fixedMaximum <= 0)) {
+    matrixScaleMaximum.focus()
+    return
+  }
+  const palette = matrixPalette.value as MatrixPalette
+  const colors = matrixDialogColors.map((color) => normalizedHexColor(color)).filter((color): color is string => Boolean(color)).slice(0, 8)
+  if (palette === 'custom' && colors.length < 2) return
+  const highColorStart = Math.max(0.5, Math.min(0.99, Number(matrixHighColorStart.value) / 100))
+  store.edit((draft) => {
+    for (const track of draft.tracks) {
+      if (!pendingMatrixTrackIds.includes(track.id) || track.kind !== 'matrix') continue
+      track.matrixScaleMax = matrixScaleMode.value === 'fixed' ? fixedMaximum : undefined
+      track.matrixTransform = matrixTransform.value === 'linear' ? 'linear' : 'log1p'
+      track.matrixPalette = palette
+      track.matrixPaletteColors = palette === 'custom' ? [...colors] : undefined
+      track.matrixHighColorStart = highColorStart
+      track.matrixPaletteReversed = matrixPaletteReversed.checked || undefined
+    }
+    const group = draft.groups.find((item) => item.id === pendingMatrixGroupId)
+    if (group) group.scaleBehavior = matrixGroupScaling.value === 'independent' ? 'independent' : 'linked'
+  })
+  closeMatrixSettingsDialog()
+}
+
+function closeMatrixSettingsDialog(): void {
+  matrixSettingsDialog.hidden = true
+  pendingMatrixTrackIds = []
+  pendingMatrixGroupId = undefined
 }
 
 function openColorDialog(title: string, initialColor: string): void {

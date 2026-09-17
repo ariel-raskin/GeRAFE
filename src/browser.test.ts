@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixBlueBlackPaletteColor, matrixLegendValues, matrixPaletteIntensity, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixBlueBlackPaletteColor, matrixGradientColor, matrixLegendValues, matrixPaletteIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectInteractionFeatures, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { InteractionFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 
@@ -56,7 +56,7 @@ describe('track layout and ruler formatting', () => {
     const placements = placeCollapsedGeneLabels([
       { preferredX: 10, width: 30 }, { preferredX: 12, width: 30 }, { preferredX: 14, width: 30 }, { preferredX: 50, width: 120 },
     ], 0, 100)
-    expect(placements.slice(0, 3)).toEqual([{ x: 15, lane: 0 }, { x: 15, lane: 1 }, { x: 51, lane: 0 }])
+    expect(placements.slice(0, 3)).toEqual([{ x: 15, lane: 0 }, { x: 15, lane: 1 }, undefined])
     expect(placements[3]).toBeUndefined()
   })
 })
@@ -97,14 +97,14 @@ describe('interaction rendering helpers', () => {
 
 describe('contact-matrix rendering helpers', () => {
   it('maps low contacts through yellow and red to a black maximum', () => {
-    expect(matrixWarmPaletteColor(0)).toBe('#fff7bc')
-    expect(matrixWarmPaletteColor(0.82)).toBe('#d7191c')
+    expect(matrixWarmPaletteColor(0)).toBe('#fffdf2')
+    expect(matrixWarmPaletteColor(0.9)).toBe('#d7191c')
     expect(matrixWarmPaletteColor(1)).toBe('#111111')
   })
 
   it('uses a light-blue to black palette for dark-mode matrices', () => {
     expect(matrixBlueBlackPaletteColor(0)).toBe('#daf0ff')
-    expect(matrixBlueBlackPaletteColor(0.82)).toBe('#14437a')
+    expect(matrixBlueBlackPaletteColor(0.9)).toBe('#14437a')
     expect(matrixBlueBlackPaletteColor(1)).toBe('#040609')
   })
 
@@ -117,6 +117,27 @@ describe('contact-matrix rendering helpers', () => {
     expect(matrixPaletteIntensity(0.2, false)).toBe(0.2)
     expect(matrixPaletteIntensity(0.2, true)).toBe(0.8)
     expect(matrixPaletteIntensity(1, true)).toBe(0)
+  })
+
+  it('can reserve the final palette color for a narrow high-score tail', () => {
+    const colors = ['#fff7bc', '#d7191c', '#111111']
+    expect(matrixGradientColor(colors, 0.9, 0.9)).toBe('#d7191c')
+    expect(matrixGradientColor(colors, 0.95, 0.9)).not.toBe('#111111')
+    expect(matrixGradientColor(colors, 1, 0.9)).toBe('#111111')
+  })
+
+  it('shares the largest matrix z-max only when a group is linked', () => {
+    const tracks = [
+      { id: 'a', kind: 'matrix', displayGroupId: 'g' },
+      { id: 'b', kind: 'matrix', displayGroupId: 'g' },
+    ] as any
+    expect([...resolveMatrixMaximums(tracks, [{ id: 'g', label: 'Matrices', scaleBehavior: 'linked' }], new Map([['a', 8], ['b', 21]])).values()]).toEqual([21, 21])
+    expect([...resolveMatrixMaximums(tracks, [{ id: 'g', label: 'Matrices', scaleBehavior: 'independent' }], new Map([['a', 8], ['b', 21]])).values()]).toEqual([8, 21])
+  })
+
+  it('keeps an upward matrix baseline and clip inside its bottom track boundary', () => {
+    expect(matrixVerticalGeometry(100, 220, 'up')).toEqual({ baseline: 219.5, clipTop: 100.5, clipBottom: 219.5 })
+    expect(matrixVerticalGeometry(100, 220, 'down').baseline).toBe(100.5)
   })
 
 })

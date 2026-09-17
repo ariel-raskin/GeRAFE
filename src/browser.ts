@@ -2,11 +2,11 @@ import { clampRegion, formatBases, formatLocus } from './genome.ts'
 import type { Cytoband } from './cytoband.ts'
 import type { GeneFeature, GeneSource, TranscriptFeature } from './reference.ts'
 import { computeScaleDomains, createTrackDocument, signalFeatureKey } from './track-document.ts'
-import type { MatrixPalette, TrackDocument, TrackSpec } from './track-document.ts'
+import type { DisplayGroup, TrackDocument, TrackSpec } from './track-document.ts'
 import type { AlignmentCoverageFeature, AlignmentFeature, InteractionFeature, IntervalFeature, MatrixFeature, Region, SignalFeature, TrackSource, TrackRuntime } from './types.ts'
 import { SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
 
-const RULER_HEIGHT = 108
+const RULER_HEIGHT = 70
 const TRACK_HEIGHT = 132
 const GROUP_RAIL_WIDTH = 24
 const LABEL_WIDTH = 176
@@ -623,6 +623,7 @@ export class GenomeBrowser {
     ctx.fillStyle = palette.background
     ctx.fillRect(0, 0, width, height)
     const specs = this.visibleSpecs(pane)
+    const matrixMaximums = this.matrixMaximums(specs)
     const movingIds = this.trackDrag?.active ? this.movingIds(this.trackDrag.draggedIds) : undefined
     let visibleFeatures = 0
     let top = 0
@@ -648,7 +649,7 @@ export class GenomeBrowser {
       } else if (spec.kind === 'interaction') {
         visibleFeatures += this.drawInteractionTrack(spec, this.runtimes.get(spec.id)!, index, top, rowHeight, width, palette)
       } else if (spec.kind === 'matrix') {
-        visibleFeatures += this.drawMatrixTrack(spec, this.runtimes.get(spec.id)!, index, top, rowHeight, width, palette)
+        visibleFeatures += this.drawMatrixTrack(spec, this.runtimes.get(spec.id)!, index, top, rowHeight, width, palette, matrixMaximums.get(spec.id))
       } else if (spec.kind === 'alignment') {
         visibleFeatures += this.drawAlignmentTrack(spec, this.runtimes.get(spec.id)!, index, top, rowHeight, width, palette)
       } else visibleFeatures += this.drawGeneTrack(spec, width, top, rowHeight, palette)
@@ -695,6 +696,16 @@ export class GenomeBrowser {
     return visibleFeatures
   }
 
+  private matrixMaximums(specs: readonly TrackSpec[]): ReadonlyMap<string, number> {
+    const maxima = new Map<string, number>()
+    for (const spec of specs) {
+      if (spec.kind !== 'matrix') continue
+      const matrix = this.runtimes.get(spec.id)?.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
+      maxima.set(spec.id, spec.matrixScaleMax ?? matrixAutomaticMaximum(matrix))
+    }
+    return resolveMatrixMaximums(specs, this.document.groups, maxima)
+  }
+
   private drawRuler(width: number, palette: CanvasPalette): void {
     const ctx = this.context
     ctx.fillStyle = palette.gutter
@@ -710,7 +721,7 @@ export class GenomeBrowser {
     const span = this.region.end - this.region.start
     const chromosomeLength = this.chromosomes.get(this.region.chr)
     if (chromosomeLength) this.drawIdeogram(PLOT_LEFT + 4, Math.max(1, plotWidth - 8), chromosomeLength, palette)
-    const spanY = 51
+    const spanY = 30
     ctx.strokeStyle = palette.label
     ctx.beginPath()
     ctx.moveTo(PLOT_LEFT, spanY + 0.5)
@@ -745,19 +756,19 @@ export class GenomeBrowser {
       const x = PLOT_LEFT + ((coordinate - this.region.start) / span) * plotWidth
       ctx.strokeStyle = palette.tick
       ctx.beginPath()
-      ctx.moveTo(Math.round(x) + 0.5, 86)
+      ctx.moveTo(Math.round(x) + 0.5, 58)
       ctx.lineTo(Math.round(x) + 0.5, RULER_HEIGHT)
       ctx.stroke()
       ctx.fillStyle = palette.label
-      ctx.fillText(formatCoordinate(coordinate, step, Math.max(Math.abs(this.region.start), Math.abs(this.region.end))), x, 79)
+      ctx.fillText(formatCoordinate(coordinate, step, Math.max(Math.abs(this.region.start), Math.abs(this.region.end))), x, 53)
     }
     ctx.textAlign = 'start'
   }
 
   private drawIdeogram(x: number, width: number, chromosomeLength: number, palette: CanvasPalette): void {
     const ctx = this.context
-    const top = 8
-    const height = 13
+    const top = 4
+    const height = 10
     const bands = this.cytobands?.get(this.region.chr)
     ctx.save()
     ctx.beginPath()
@@ -935,14 +946,8 @@ export class GenomeBrowser {
     if (scaleValue !== 0) {
       const maxLabel = formatScore(scaleValue)
       ctx.font = '10px ui-monospace, SFMono-Regular, Consolas, monospace'
-      const laneWidth = Math.max(SCALE_LANE_MIN_WIDTH, Math.ceil(ctx.measureText(maxLabel).width) + 12)
-      const dividerX = LABEL_WIDTH - laneWidth
       ctx.strokeStyle = palette.axisLine
       ctx.lineWidth = 1
-      ctx.beginPath()
-      ctx.moveTo(dividerX + 0.5, top + 7)
-      ctx.lineTo(dividerX + 0.5, bottom - 7)
-      ctx.stroke()
       ctx.fillStyle = palette.axisInk
       ctx.textAlign = 'right'
       const scaleAtBottom = spec.signalStrand === 'minus' || (max === 0 && min < 0)
@@ -1001,9 +1006,7 @@ export class GenomeBrowser {
     ctx.strokeStyle = palette.zero
     ctx.beginPath(); ctx.moveTo(PLOT_LEFT, zeroY + 0.5); ctx.lineTo(width, zeroY + 0.5); ctx.stroke()
     if (scaleLaneWidth) {
-      const dividerX = LABEL_WIDTH - scaleLaneWidth
       ctx.strokeStyle = palette.axisLine
-      ctx.beginPath(); ctx.moveTo(dividerX + 0.5, top + 7); ctx.lineTo(dividerX + 0.5, bottom - 7); ctx.stroke()
       ctx.font = '10px ui-monospace, SFMono-Regular, Consolas, monospace'
       ctx.fillStyle = palette.axisInk
       ctx.textAlign = 'right'
@@ -1254,6 +1257,7 @@ export class GenomeBrowser {
     height: number,
     width: number,
     palette: CanvasPalette,
+    matrixMaximum?: number,
   ): number {
     const ctx = this.context
     const bottom = top + height
@@ -1267,15 +1271,7 @@ export class GenomeBrowser {
     ctx.beginPath(); ctx.moveTo(0, bottom - 0.5); ctx.lineTo(width, bottom - 0.5); ctx.stroke()
 
     const matrix = track.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
-    const offDiagonalValues = matrix?.cells
-      .filter((cell) => cell.bin2 - cell.bin1 > matrix.resolution * 2)
-      .map((cell) => cell.value)
-      .filter((value) => Number.isFinite(value) && value > 0) ?? []
-    const values = matrix?.cells.length
-      ? (offDiagonalValues.length >= 20 ? offDiagonalValues : matrix.cells.map((cell) => cell.value).filter((value) => Number.isFinite(value) && value > 0)).sort((a, b) => a - b)
-      : []
-    const automaticMaximum = values[Math.min(values.length - 1, Math.floor(values.length * 0.99))] ?? 1
-    const maximum = Math.max(Number.EPSILON, spec.matrixScaleMax ?? automaticMaximum)
+    const maximum = Math.max(Number.EPSILON, matrixMaximum ?? spec.matrixScaleMax ?? matrixAutomaticMaximum(matrix))
     const legendValues = matrix?.cells.length ? matrixLegendValues(maximum, spec.matrixTransform ?? 'log1p') : []
     ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
     const legendLabels = legendValues.map(formatScore)
@@ -1316,12 +1312,12 @@ export class GenomeBrowser {
       : (value: number) => Math.log1p(value) / Math.log1p(maximum)
     const scale = plotWidth / Math.max(1, this.region.end - this.region.start)
     const direction = spec.matrixDirection === 'down' ? 1 : -1
-    const baseline = direction > 0 ? top + 3 : bottom - 3
+    const geometry = matrixVerticalGeometry(top, bottom, spec.matrixDirection ?? 'up')
+    const baseline = geometry.baseline
     const halfCell = Math.max(0.55, matrix.resolution * scale / 2)
-    const matrixPalette = spec.matrixPalette ?? 'monochrome'
-    drawMatrixLegend(ctx, spec, matrixPalette, maximum, top, bottom, scaleLaneWidth, palette)
+    drawMatrixLegend(ctx, spec, maximum, top, bottom, scaleLaneWidth, palette)
     ctx.save()
-    ctx.beginPath(); ctx.rect(PLOT_LEFT, top + 1, plotWidth, height - 2); ctx.clip()
+    ctx.beginPath(); ctx.rect(PLOT_LEFT, geometry.clipTop, plotWidth, Math.max(0, geometry.clipBottom - geometry.clipTop)); ctx.clip()
     for (const cell of matrix.cells) {
       if (!(cell.value > 0) || cell.bin2 + matrix.resolution <= this.region.start || cell.bin1 >= this.region.end) continue
       const firstCenter = cell.bin1 + matrix.resolution / 2
@@ -1332,7 +1328,7 @@ export class GenomeBrowser {
       const scoreIntensity = Math.max(0, Math.min(1, transform(cell.value)))
       if (!Number.isFinite(scoreIntensity) || scoreIntensity <= 0) continue
       const intensity = matrixPaletteIntensity(scoreIntensity, spec.matrixPaletteReversed === true)
-      const style = matrixPaletteStyle(matrixPalette, spec.color, intensity)
+      const style = matrixPaletteStyle(spec, intensity)
       ctx.fillStyle = style.color
       ctx.globalAlpha = style.alpha
       ctx.beginPath()
@@ -1347,6 +1343,8 @@ export class GenomeBrowser {
     ctx.strokeStyle = palette.axisLine
     ctx.beginPath(); ctx.moveTo(PLOT_LEFT, baseline + 0.5); ctx.lineTo(width, baseline + 0.5); ctx.stroke()
     ctx.restore()
+    ctx.strokeStyle = palette.line
+    ctx.beginPath(); ctx.moveTo(0, bottom - 0.5); ctx.lineTo(width, bottom - 0.5); ctx.stroke()
     return matrix.cells.length
   }
 
@@ -1612,8 +1610,7 @@ export class GenomeBrowser {
     ctx.rect(PLOT_LEFT, top, plotWidth, height)
     ctx.clip()
     for (const block of layout.blocks) {
-      const { gene, transcripts, firstSlot, geneX1, geneX2 } = block
-      const geneCenterX = (geneX1 + geneX2) / 2
+      const { gene, transcripts, firstSlot } = block
       if (block.labelX !== undefined) {
         const labelY = mode === 'collapsed'
           ? contentTop + 9 + (block.labelLane ?? 0) * 11
@@ -1621,22 +1618,12 @@ export class GenomeBrowser {
         ctx.fillStyle = palette.ink
         ctx.textAlign = 'center'
         ctx.fillText(gene.name, block.labelX, labelY)
-        if (mode === 'collapsed') {
-          ctx.strokeStyle = palette.axisLine
-          ctx.globalAlpha = 0.55
-          ctx.lineWidth = 0.75
-          ctx.beginPath()
-          ctx.moveTo(block.labelX, labelY + 2)
-          ctx.lineTo(geneCenterX, contentTop + 33)
-          ctx.stroke()
-          ctx.globalAlpha = 1
-        }
         ctx.textAlign = 'start'
       }
 
       transcripts.forEach((transcript, transcriptIndex) => {
         const centerY = mode === 'collapsed'
-          ? contentTop + 39
+          ? contentTop + 34
           : contentTop + (firstSlot + transcriptIndex + 1) * layout.slotHeight + layout.slotHeight / 2
         const rawTxX1 = PLOT_LEFT + (transcript.start - this.region.start) * scale
         const rawTxX2 = PLOT_LEFT + (transcript.end - this.region.start) * scale
@@ -1728,7 +1715,7 @@ export class GenomeBrowser {
           labelLane: placements[index]?.lane,
         })),
         slotHeight,
-        contentHeight: 64,
+        contentHeight: 48,
         transcriptCount,
       }
     }
@@ -2153,7 +2140,9 @@ export function placeCollapsedGeneLabels(
     const preferred = Math.max(minimumCenter, Math.min(maximumCenter, label.preferredX))
     const choices = laneEnds.flatMap((laneEnd, lane) => {
       const x = Math.max(preferred, laneEnd + gap + halfWidth)
-      return x <= maximumCenter ? [{ x, lane, shift: Math.abs(x - preferred) }] : []
+      const shift = Math.abs(x - preferred)
+      const maxShift = Math.max(18, label.width * 0.75)
+      return x <= maximumCenter && shift <= maxShift ? [{ x, lane, shift }] : []
     }).sort((a, b) => a.shift - b.shift || a.lane - b.lane)
     const choice = choices[0]
     if (!choice) return undefined
@@ -2162,38 +2151,76 @@ export function placeCollapsedGeneLabels(
   })
 }
 
-/** Low-to-high contact intensity palette adapted from the figure workflow. */
-export function matrixWarmPaletteColor(intensity: number): string {
+export const MATRIX_WARM_COLORS = ['#fffdf2', '#fff7bc', '#fdae61', '#d7191c', '#111111'] as const
+export const MATRIX_BLUE_BLACK_COLORS = ['#daf0ff', '#4d97cf', '#14437a', '#040609'] as const
+
+/** Visible-cell z-max used by automatic matrix scaling. */
+export function matrixAutomaticMaximum(matrix: MatrixFeature | undefined): number {
+  if (!matrix?.cells.length) return 1
+  const offDiagonalValues = matrix.cells
+    .filter((cell) => cell.bin2 - cell.bin1 > matrix.resolution * 2)
+    .map((cell) => cell.value)
+    .filter((value) => Number.isFinite(value) && value > 0)
+  const values = (offDiagonalValues.length >= 20
+    ? offDiagonalValues
+    : matrix.cells.map((cell) => cell.value).filter((value) => Number.isFinite(value) && value > 0)).sort((a, b) => a - b)
+  return values[Math.min(values.length - 1, Math.floor(values.length * 0.99))] ?? 1
+}
+
+export function matrixVerticalGeometry(top: number, bottom: number, direction: 'up' | 'down'): { baseline: number; clipTop: number; clipBottom: number } {
+  return {
+    baseline: direction === 'down' ? top + 0.5 : bottom - 0.5,
+    clipTop: top + 0.5,
+    clipBottom: bottom - 0.5,
+  }
+}
+
+export function resolveMatrixMaximums(
+  specs: readonly TrackSpec[],
+  groups: readonly DisplayGroup[],
+  individual: ReadonlyMap<string, number>,
+): ReadonlyMap<string, number> {
+  const resolved = new Map(individual)
+  for (const group of groups) {
+    if (group.scaleBehavior !== 'linked') continue
+    const memberIds = specs.filter((spec) => spec.kind === 'matrix' && spec.displayGroupId === group.id).map((spec) => spec.id)
+    if (memberIds.length < 2) continue
+    const shared = Math.max(...memberIds.map((id) => resolved.get(id) ?? 1))
+    for (const id of memberIds) resolved.set(id, shared)
+  }
+  return resolved
+}
+
+/** Interpolates palette colors while reserving a configurable high-score tail for the final color. */
+export function matrixGradientColor(colors: readonly string[], intensity: number, highColorStart = 0.9): string {
+  const valid = colors.filter((color) => /^#[0-9a-f]{6}$/i.test(color))
+  if (!valid.length) return '#000000'
+  if (valid.length === 1) return valid[0].toLocaleLowerCase()
   const value = Math.max(0, Math.min(1, intensity))
-  const stops = [
-    { at: 0, color: [255, 247, 188] },
-    { at: 0.5, color: [253, 174, 97] },
-    { at: 0.82, color: [215, 25, 28] },
-    { at: 1, color: [17, 17, 17] },
-  ] as const
+  const tailStart = Math.max(0.5, Math.min(0.99, highColorStart))
+  const penultimateIndex = valid.length - 2
+  const stops = valid.map((color, index) => ({
+    at: index === valid.length - 1 ? 1 : penultimateIndex === 0 ? 0 : tailStart * index / penultimateIndex,
+    color,
+  }))
   const upperIndex = Math.max(1, stops.findIndex((stop) => value <= stop.at))
   const lower = stops[upperIndex - 1]
   const upper = stops[upperIndex]
   const mix = (value - lower.at) / Math.max(Number.EPSILON, upper.at - lower.at)
-  const channels = lower.color.map((channel, index) => Math.round(channel + (upper.color[index] - channel) * mix))
+  const lowerChannels = hexChannels(lower.color)
+  const upperChannels = hexChannels(upper.color)
+  const channels = lowerChannels.map((channel, index) => Math.round(channel + (upperChannels[index] - channel) * mix))
   return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
 }
 
+/** Low-to-high publication palette adapted from the earlier figure workflow. */
+export function matrixWarmPaletteColor(intensity: number, highColorStart = 0.9): string {
+  return matrixGradientColor(MATRIX_WARM_COLORS, intensity, highColorStart)
+}
+
 /** Dark-mode contact palette: low scores are light blue and high scores approach black. */
-export function matrixBlueBlackPaletteColor(intensity: number): string {
-  const value = Math.max(0, Math.min(1, intensity))
-  const stops = [
-    { at: 0, color: [218, 240, 255] },
-    { at: 0.5, color: [77, 151, 207] },
-    { at: 0.82, color: [20, 67, 122] },
-    { at: 1, color: [4, 6, 9] },
-  ] as const
-  const upperIndex = Math.max(1, stops.findIndex((stop) => value <= stop.at))
-  const lower = stops[upperIndex - 1]
-  const upper = stops[upperIndex]
-  const mix = (value - lower.at) / Math.max(Number.EPSILON, upper.at - lower.at)
-  const channels = lower.color.map((channel, index) => Math.round(channel + (upper.color[index] - channel) * mix))
-  return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
+export function matrixBlueBlackPaletteColor(intensity: number, highColorStart = 0.9): string {
+  return matrixGradientColor(MATRIX_BLUE_BLACK_COLORS, intensity, highColorStart)
 }
 
 /** Legend values at the high, visual midpoint, and low ends of a matrix scale. */
@@ -2207,11 +2234,19 @@ export function matrixPaletteIntensity(scoreIntensity: number, reversed: boolean
   return reversed ? 1 - value : value
 }
 
-function matrixPaletteStyle(palette: MatrixPalette, trackColor: string, intensity: number): { color: string; alpha: number } {
+function matrixPaletteStyle(spec: TrackSpec, intensity: number): { color: string; alpha: number } {
   const value = Math.max(0, Math.min(1, intensity))
-  if (palette === 'warm') return { color: matrixWarmPaletteColor(value), alpha: 1 }
-  if (palette === 'blue-black') return { color: matrixBlueBlackPaletteColor(value), alpha: 1 }
-  return { color: trackColor, alpha: 0.08 + Math.pow(value, 0.72) * 0.92 }
+  const highColorStart = spec.matrixHighColorStart ?? 0.9
+  if (spec.matrixPalette === 'warm') return { color: matrixWarmPaletteColor(value, highColorStart), alpha: 1 }
+  if (spec.matrixPalette === 'blue-black') return { color: matrixBlueBlackPaletteColor(value, highColorStart), alpha: 1 }
+  if (spec.matrixPalette === 'custom' && (spec.matrixPaletteColors?.length ?? 0) >= 2) {
+    return { color: matrixGradientColor(spec.matrixPaletteColors!, value, highColorStart), alpha: 1 }
+  }
+  return { color: spec.color, alpha: 0.08 + Math.pow(value, 0.72) * 0.92 }
+}
+
+function hexChannels(color: string): [number, number, number] {
+  return [Number.parseInt(color.slice(1, 3), 16), Number.parseInt(color.slice(3, 5), 16), Number.parseInt(color.slice(5, 7), 16)]
 }
 
 function colorWithAlpha(color: string, alpha: number): string {
@@ -2226,7 +2261,6 @@ function colorWithAlpha(color: string, alpha: number): string {
 function drawMatrixLegend(
   ctx: CanvasRenderingContext2D,
   spec: TrackSpec,
-  matrixPalette: MatrixPalette,
   maximum: number,
   top: number,
   bottom: number,
@@ -2234,23 +2268,19 @@ function drawMatrixLegend(
   palette: CanvasPalette,
 ): void {
   if (!laneWidth || bottom - top < 44) return
-  const dividerX = LABEL_WIDTH - laneWidth
   const legendTop = top + 14
   const legendBottom = bottom - 12
-  const gradientX = dividerX + 6
+  const gradientX = LABEL_WIDTH - 8
   const gradientWidth = 7
   const gradient = ctx.createLinearGradient(0, legendTop, 0, legendBottom)
-  for (const scoreIntensity of [1, 0.75, 0.5, 0.25, 0]) {
+  for (let step = 20; step >= 0; step -= 1) {
+    const scoreIntensity = step / 20
     const intensity = matrixPaletteIntensity(scoreIntensity, spec.matrixPaletteReversed === true)
-    const style = matrixPaletteStyle(matrixPalette, spec.color, intensity)
+    const style = matrixPaletteStyle(spec, intensity)
     gradient.addColorStop(1 - scoreIntensity, style.alpha === 1 ? style.color : colorWithAlpha(style.color, style.alpha))
   }
   ctx.strokeStyle = palette.axisLine
   ctx.lineWidth = 1
-  ctx.beginPath()
-  ctx.moveTo(dividerX + 0.5, top + 7)
-  ctx.lineTo(dividerX + 0.5, bottom - 7)
-  ctx.stroke()
   ctx.fillStyle = gradient
   ctx.fillRect(gradientX, legendTop, gradientWidth, Math.max(1, legendBottom - legendTop))
   ctx.strokeRect(gradientX + 0.5, legendTop + 0.5, gradientWidth - 1, Math.max(1, legendBottom - legendTop - 1))
@@ -2259,9 +2289,9 @@ function drawMatrixLegend(
   ctx.fillStyle = palette.axisInk
   ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
   ctx.textAlign = 'right'
-  ctx.fillText(labels[0], LABEL_WIDTH - 5, legendTop + 3)
-  ctx.fillText(labels[1], LABEL_WIDTH - 5, (legendTop + legendBottom) / 2 + 3)
-  ctx.fillText(labels[2], LABEL_WIDTH - 5, legendBottom + 3)
+  ctx.fillText(labels[0], gradientX - 4, legendTop + 3)
+  ctx.fillText(labels[1], gradientX - 4, (legendTop + legendBottom) / 2 + 3)
+  ctx.fillText(labels[2], gradientX - 4, legendBottom + 3)
   ctx.textAlign = 'start'
 }
 
