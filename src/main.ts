@@ -262,6 +262,24 @@ app.innerHTML = `
           <small>Stops are interpolated in this low-to-high order.</small>
         </section>
         <label class="matrix-check-row"><span><strong>Reverse score colors</strong><small>Map high scores to the low end of the selected palette.</small></span><input id="matrix-palette-reversed" type="checkbox" /></label>
+        <section class="matrix-display-settings">
+          <header><strong>Cell display</strong><small>Zero, missing, and masked data remain distinct.</small></header>
+          <div class="matrix-settings-grid">
+            <label><span>Zero contacts</span><select id="matrix-zero-style"><option value="background">Track background</option><option value="low-color">Lowest scale color</option><option value="custom">Custom color</option></select></label>
+            <label><span>Zero custom color</span><input id="matrix-zero-color" type="color" value="#d7d9df" /></label>
+            <label><span>Missing / NaN contacts</span><select id="matrix-missing-style"><option value="background">Track background</option><option value="custom">Custom color</option></select></label>
+            <label><span>Missing custom color</span><input id="matrix-missing-color" type="color" value="#9197a3" /></label>
+            <label><span>Masked normalization bins</span><select id="matrix-masked-style"><option value="hatch">Muted hatch</option><option value="background">Track background</option><option value="custom">Custom color</option></select></label>
+            <label><span>Masked custom color</span><input id="matrix-masked-color" type="color" value="#777d89" /></label>
+          </div>
+          <p class="matrix-settings-note">Sparse omitted contacts are zero. Missing marks explicit non-finite source pixels. Masked bins are shown only when the active file reader exposes them.</p>
+        </section>
+        <section class="matrix-display-settings">
+          <header><strong>Inspection and labels</strong><small>Presentation-only controls do not reload matrix data.</small></header>
+          <label class="matrix-check-row"><span><strong>Show matrix cursor</strong><small>Inspect genomic bins and values with a crosshair and hover card.</small></span><input id="matrix-show-inspector" type="checkbox" /></label>
+          <label class="matrix-check-row"><span><strong>Show color scale</strong><small>Draw the gradient legend and scale values in the track card.</small></span><input id="matrix-show-legend" type="checkbox" /></label>
+          <label class="matrix-check-row"><span><strong>Show track metadata</strong><small>Show matrix resolution and normalization below the track name.</small></span><input id="matrix-show-metadata" type="checkbox" /></label>
+        </section>
       </div>
       <footer><button class="dialog-button secondary" id="matrix-settings-cancel" type="button">Cancel</button><button class="dialog-button primary" id="matrix-settings-apply" type="submit">Apply</button></footer>
     </form>
@@ -345,6 +363,15 @@ const matrixGroupScaling = document.querySelector<HTMLSelectElement>('#matrix-gr
 const matrixPaletteEditor = document.querySelector<HTMLElement>('#matrix-palette-editor')!
 const matrixPaletteColors = document.querySelector<HTMLElement>('#matrix-palette-colors')!
 const matrixPaletteReversed = document.querySelector<HTMLInputElement>('#matrix-palette-reversed')!
+const matrixZeroStyle = document.querySelector<HTMLSelectElement>('#matrix-zero-style')!
+const matrixZeroColor = document.querySelector<HTMLInputElement>('#matrix-zero-color')!
+const matrixMissingStyle = document.querySelector<HTMLSelectElement>('#matrix-missing-style')!
+const matrixMissingColor = document.querySelector<HTMLInputElement>('#matrix-missing-color')!
+const matrixMaskedStyle = document.querySelector<HTMLSelectElement>('#matrix-masked-style')!
+const matrixMaskedColor = document.querySelector<HTMLInputElement>('#matrix-masked-color')!
+const matrixShowInspector = document.querySelector<HTMLInputElement>('#matrix-show-inspector')!
+const matrixShowLegend = document.querySelector<HTMLInputElement>('#matrix-show-legend')!
+const matrixShowMetadata = document.querySelector<HTMLInputElement>('#matrix-show-metadata')!
 const matrixSettingsApply = document.querySelector<HTMLButtonElement>('#matrix-settings-apply')!
 const actionDialog = document.querySelector<HTMLElement>('#action-dialog')!
 const actionDialogForm = document.querySelector<HTMLFormElement>('#action-dialog-form')!
@@ -579,6 +606,9 @@ document.querySelector<HTMLButtonElement>('#matrix-settings-close')!.addEventLis
 document.querySelector<HTMLButtonElement>('#matrix-settings-cancel')!.addEventListener('click', closeMatrixSettingsDialog)
 matrixScaleMode.addEventListener('change', updateMatrixSettingsVisibility)
 matrixDepth.addEventListener('change', updateMatrixSettingsVisibility)
+matrixZeroStyle.addEventListener('change', updateMatrixSettingsVisibility)
+matrixMissingStyle.addEventListener('change', updateMatrixSettingsVisibility)
+matrixMaskedStyle.addEventListener('change', updateMatrixSettingsVisibility)
 matrixPalette.addEventListener('change', () => {
   if (matrixPalette.value === 'custom' && matrixDialogColors.length < 2) matrixDialogColors = [...MATRIX_WARM_COLORS]
   updateMatrixSettingsVisibility()
@@ -2008,6 +2038,15 @@ function openMatrixSettingsDialog(trackIds: readonly string[]): void {
     ? [...first.matrixPaletteColors!]
     : [...matrixPresetColors(first.matrixPalette ?? 'monochrome', first.color)]
   matrixPaletteReversed.checked = first.matrixPaletteReversed === true
+  matrixZeroStyle.value = first.matrixZeroStyle ?? 'background'
+  matrixZeroColor.value = normalizedHexColor(first.matrixZeroColor ?? '#d7d9df') ?? '#d7d9df'
+  matrixMissingStyle.value = first.matrixMissingStyle ?? 'background'
+  matrixMissingColor.value = normalizedHexColor(first.matrixMissingColor ?? '#9197a3') ?? '#9197a3'
+  matrixMaskedStyle.value = first.matrixMaskedStyle ?? 'hatch'
+  matrixMaskedColor.value = normalizedHexColor(first.matrixMaskedColor ?? '#777d89') ?? '#777d89'
+  matrixShowInspector.checked = first.matrixShowInspector !== false
+  matrixShowLegend.checked = first.matrixShowLegend !== false
+  matrixShowMetadata.checked = first.matrixShowMetadata !== false
   matrixGroupScalingRow.hidden = !pendingMatrixGroupId
   const group = store.current.groups.find((item) => item.id === pendingMatrixGroupId)
   matrixGroupScaling.value = group?.scaleBehavior === 'independent' ? 'independent' : 'linked'
@@ -2036,6 +2075,9 @@ function updateMatrixSettingsVisibility(): void {
   matrixIgnoreDiagonals.disabled = matrixScaleMode.value === 'fixed'
   matrixDepthDistance.disabled = matrixDepth.value !== 'custom'
   matrixPaletteEditor.hidden = matrixPalette.value !== 'custom'
+  matrixZeroColor.disabled = matrixZeroStyle.value !== 'custom'
+  matrixMissingColor.disabled = matrixMissingStyle.value !== 'custom'
+  matrixMaskedColor.disabled = matrixMaskedStyle.value !== 'custom'
 }
 
 function applyMatrixSettingsDialog(): void {
@@ -2086,6 +2128,15 @@ function applyMatrixSettingsDialog(): void {
       track.matrixPalette = palette
       track.matrixPaletteColors = palette === 'custom' ? [...colors] : undefined
       track.matrixPaletteReversed = matrixPaletteReversed.checked || undefined
+      track.matrixZeroStyle = matrixZeroStyle.value === 'low-color' ? 'low-color' : matrixZeroStyle.value === 'custom' ? 'custom' : 'background'
+      track.matrixZeroColor = matrixZeroStyle.value === 'custom' ? matrixZeroColor.value : undefined
+      track.matrixMissingStyle = matrixMissingStyle.value === 'custom' ? 'custom' : 'background'
+      track.matrixMissingColor = matrixMissingStyle.value === 'custom' ? matrixMissingColor.value : undefined
+      track.matrixMaskedStyle = matrixMaskedStyle.value === 'custom' ? 'custom' : matrixMaskedStyle.value === 'background' ? 'background' : 'hatch'
+      track.matrixMaskedColor = matrixMaskedStyle.value === 'custom' ? matrixMaskedColor.value : undefined
+      track.matrixShowInspector = matrixShowInspector.checked
+      track.matrixShowLegend = matrixShowLegend.checked
+      track.matrixShowMetadata = matrixShowMetadata.checked
     }
     const group = draft.groups.find((item) => item.id === pendingMatrixGroupId)
     if (group) group.scaleBehavior = matrixGroupScaling.value === 'independent' ? 'independent' : 'linked'

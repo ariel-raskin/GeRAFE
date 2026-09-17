@@ -356,7 +356,7 @@ const customReferenceAfterReload = await page.locator('#reference-label').textCo
 await page.evaluate(() => {
   const existing = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
   localStorage.setItem('gerafe-track-document', JSON.stringify({
-  schemaVersion: 15,
+  schemaVersion: 16,
   referenceId: existing.referenceId,
   region: { chr: existing.region?.chr ?? 'contigA', start: 10_000, end: 30_000 },
   sources: [
@@ -409,15 +409,31 @@ const matrixSettingsVisible = await page.locator('#matrix-settings-dialog').isVi
 await page.screenshot({ path: 'dist/smoke-matrix-settings.png', fullPage: true })
 await page.locator('#matrix-palette').selectOption('custom')
 await page.locator('#matrix-add-color').click()
-await page.locator('#matrix-high-color-start').fill('95')
+await page.locator('#matrix-scale-mode').selectOption('percentile')
+await page.locator('#matrix-scale-percentile').fill('98.5')
+await page.locator('#matrix-depth').selectOption('250000')
 await page.locator('#matrix-palette-reversed').check()
+await page.locator('#matrix-zero-style').selectOption('low-color')
+await page.locator('#matrix-missing-style').selectOption('custom')
+await page.locator('#matrix-missing-color').fill('#8a8f99')
+await page.locator('#matrix-masked-style').selectOption('background')
+await page.locator('#matrix-show-inspector').uncheck()
+await page.locator('#matrix-show-legend').uncheck()
+await page.locator('#matrix-show-metadata').uncheck()
 await page.locator('#matrix-group-scaling').selectOption('independent')
 await page.locator('.matrix-settings-content').evaluate((element) => { element.scrollTop = element.scrollHeight })
 await page.locator('#matrix-settings-form button[type="submit"]').click()
 await page.waitForTimeout(250)
 const matrixGroupSettingsApplied = await page.evaluate(() => {
   const document = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
-  return document.tracks?.every((track) => track.kind !== 'matrix' || (track.matrixPalette === 'custom' && track.matrixPaletteReversed === true && track.matrixHighColorStart === 0.95 && track.matrixPaletteColors?.length === 6))
+  return document.tracks?.every((track) => track.kind !== 'matrix' || (
+    track.matrixPalette === 'custom' && track.matrixPaletteReversed === true && track.matrixPaletteColors?.length === 6
+    && track.matrixScaleMode === 'percentile' && track.matrixScalePercentile === 0.985
+    && track.matrixDepthMode === 'fixed' && track.matrixMaxDistance === 250000
+    && track.matrixZeroStyle === 'low-color' && track.matrixMissingStyle === 'custom' && track.matrixMissingColor === '#8a8f99'
+    && track.matrixMaskedStyle === 'background' && track.matrixShowInspector === false
+    && track.matrixShowLegend === false && track.matrixShowMetadata === false
+  ))
     && document.groups?.find((group) => group.id === 'matrix-group')?.scaleBehavior === 'independent'
 })
 await page.mouse.click(matrixCanvasBox.x + 8, matrixCanvasBox.y + 60, { button: 'right' })

@@ -3,7 +3,7 @@ import type { Cytoband } from './cytoband.ts'
 import type { GeneFeature, GeneSource, TranscriptFeature } from './reference.ts'
 import { computeScaleDomains, createTrackDocument, signalFeatureKey } from './track-document.ts'
 import type { DisplayGroup, TrackDocument, TrackSpec } from './track-document.ts'
-import type { AlignmentCoverageFeature, AlignmentFeature, InteractionFeature, IntervalFeature, MatrixFeature, Region, SignalFeature, TrackSource, TrackRuntime } from './types.ts'
+import type { AlignmentCoverageFeature, AlignmentFeature, InteractionFeature, IntervalFeature, MatrixCellPosition, MatrixFeature, Region, SignalFeature, TrackSource, TrackRuntime } from './types.ts'
 import { SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
 
 const RULER_HEIGHT = 70
@@ -50,6 +50,23 @@ interface GeneRenderLayout {
   transcriptCount: number
 }
 
+export type MatrixCellState = 'value' | 'zero' | 'missing' | 'masked'
+
+export interface MatrixCellInspection {
+  bin1: number
+  bin2: number
+  separation: number
+  state: MatrixCellState
+  value?: number
+}
+
+interface MatrixHover extends MatrixCellInspection {
+  trackId: string
+  pane: 'main' | 'bottom'
+  x: number
+  y: number
+}
+
 export class GenomeBrowser {
   private context: CanvasRenderingContext2D
   private readonly mainContext: CanvasRenderingContext2D
@@ -91,6 +108,7 @@ export class GenomeBrowser {
   private trackResizeHoverCandidate?: { canvas: HTMLCanvasElement; pane: 'main' | 'bottom'; y: number; timer: number }
   private readonly resizePreviewPixels = new Map<string, number>()
   private readonly trackDragGhost: HTMLDivElement
+  private readonly matrixInspector: HTMLDivElement
   private mainResizeObserver: ResizeObserver
   private bottomResizeObserver: ResizeObserver
   private lastFrameTime = performance.now()
@@ -100,6 +118,7 @@ export class GenomeBrowser {
   private geneScrollOffsets = new Map<string, number>()
   private showTssIndicators = true
   private trackBodyHold?: { canvas: HTMLCanvasElement; startX: number; startY: number; timer: number }
+  private matrixHover?: MatrixHover
 
   constructor(
     private readonly headerCanvas: HTMLCanvasElement,
@@ -130,6 +149,10 @@ export class GenomeBrowser {
     this.trackDragGhost.className = 'track-drag-ghost'
     this.trackDragGhost.hidden = true
     document.body.append(this.trackDragGhost)
+    this.matrixInspector = document.createElement('div')
+    this.matrixInspector.className = 'matrix-inspector'
+    this.matrixInspector.hidden = true
+    document.body.append(this.matrixInspector)
     this.bindEvents(canvas, 'main')
     this.bindEvents(bottomCanvas, 'bottom')
     this.bindNavigationEvents(headerCanvas)
@@ -145,12 +168,14 @@ export class GenomeBrowser {
     document.body.classList.remove('is-track-resizing')
     this.cancelTrackBodyHold()
     this.trackDragGhost.remove()
+    this.matrixInspector.remove()
   }
 
   setRegion(region: Region): void {
     const length = this.chromosomes.get(region.chr)
     if (!length) return
     this.region = clampRegion(region, length)
+    this.clearMatrixHover()
     this.callbacks.onRegionChange(this.region)
     this.scheduleRender()
     void this.ensureData()
@@ -224,6 +249,10 @@ export class GenomeBrowser {
       }
     }
     this.document = document
+    if (this.matrixHover) {
+      const hovered = document.tracks.find((track) => track.id === this.matrixHover?.trackId)
+      if (hovered?.kind !== 'matrix' || hovered.matrixShowInspector === false) this.clearMatrixHover()
+    }
     const descriptors = document.tracks.flatMap(runtimeDescriptors)
     const validIds = new Set(descriptors.map((descriptor) => descriptor.id))
     for (const [id] of this.runtimes) {
@@ -295,6 +324,7 @@ export class GenomeBrowser {
   private bindEvents(canvas: HTMLCanvasElement, pane: 'main' | 'bottom'): void {
     canvas.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return
+      this.clearMatrixHover()
       const resizeHit = this.resizeBoundaryAt(pane, event.offsetY)
       const resizeIsArmed = resizeHit
         && this.trackResizeHover?.canvas === canvas
@@ -394,6 +424,8 @@ export class GenomeBrowser {
       if (!this.dragging || this.dragging.canvas !== canvas) {
         const hit = this.resizeBoundaryAt(pane, event.offsetY)
         this.updateTrackResizeHover(canvas, pane, hit?.y)
+        if (hit) this.clearMatrixHover()
+        else this.updateMatrixHover(canvas, pane, event)
         return
       }
       const plotWidth = Math.max(1, this.cssWidth(canvas) - PLOT_LEFT)
@@ -449,6 +481,7 @@ export class GenomeBrowser {
     canvas.addEventListener('pointerleave', () => {
       if (this.trackResize?.canvas === canvas) return
       this.clearTrackResizeHover(canvas)
+      this.clearMatrixHover()
     })
     canvas.addEventListener('wheel', (event) => {
       if (!event.ctrlKey && !event.metaKey) {
@@ -531,6 +564,7 @@ export class GenomeBrowser {
     const plotWidth = Math.max(1, this.cssWidth(canvas) - PLOT_LEFT)
     const shift = deltaPixels * (this.region.end - this.region.start) / plotWidth
     this.region = clampRegion({ chr: this.region.chr, start: this.region.start + shift, end: this.region.end + shift }, chromosomeLength)
+    this.clearMatrixHover()
     this.callbacks.onRegionChange(this.region)
     this.scheduleRender()
     if (!this.hasOverscanCoverage()) void this.ensureData()
@@ -539,6 +573,73 @@ export class GenomeBrowser {
   private cancelTrackBodyHold(): void {
     if (this.trackBodyHold) window.clearTimeout(this.trackBodyHold.timer)
     this.trackBodyHold = undefined
+  }
+
+  private updateMatrixHover(canvas: HTMLCanvasElement, pane: 'main' | 'bottom', event: PointerEvent): void {
+    if (event.offsetX < PLOT_LEFT) {
+      this.clearMatrixHover()
+      return
+    }
+    const hit = this.itemAt(canvas, pane, event.offsetX, event.offsetY)
+    const spec = hit?.kind === 'track' ? this.document.tracks.find((track) => track.id === hit.id && track.kind === 'matrix') : undefined
+    if (!spec || spec.matrixShowInspector === false) {
+      this.clearMatrixHover()
+      return
+    }
+    const matrix = this.runtimes.get(spec.id)?.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
+    if (!matrix) {
+      this.clearMatrixHover()
+      return
+    }
+    const specs = this.visibleSpecs(pane)
+    const top = specs.slice(0, specs.findIndex((track) => track.id === spec.id)).reduce((sum, track) => sum + this.trackHeight(track), 0)
+    const bottom = top + this.trackHeight(spec)
+    const maximumDistance = matrixQueryMaximumDistance(this.region.end - this.region.start, spec.matrixDepthMode ?? 'full', spec.matrixMaxDistance)
+    const inspection = inspectMatrixPoint(matrix, this.region, event.offsetX, event.offsetY, PLOT_LEFT, this.cssWidth(canvas), top, bottom, spec.matrixDirection ?? 'up', maximumDistance)
+    if (!inspection) {
+      this.clearMatrixHover()
+      return
+    }
+    const scale = (this.cssWidth(canvas) - PLOT_LEFT) / Math.max(1, this.region.end - this.region.start)
+    const geometry = matrixVerticalGeometry(top, bottom, spec.matrixDirection ?? 'up')
+    const center1 = inspection.bin1 + matrix.resolution / 2
+    const center2 = inspection.bin2 + matrix.resolution / 2
+    const x = PLOT_LEFT + (((center1 + center2) / 2) - this.region.start) * scale
+    const direction = spec.matrixDirection === 'down' ? 1 : -1
+    const y = geometry.baseline + direction * ((center2 - center1) / 2) * scale
+    const changed = !this.matrixHover
+      || this.matrixHover.trackId !== spec.id
+      || this.matrixHover.bin1 !== inspection.bin1
+      || this.matrixHover.bin2 !== inspection.bin2
+      || this.matrixHover.state !== inspection.state
+      || this.matrixHover.value !== inspection.value
+    this.matrixHover = { ...inspection, trackId: spec.id, pane, x, y }
+    this.showMatrixInspector(spec, matrix, inspection, event.clientX, event.clientY)
+    if (changed) this.scheduleRender()
+  }
+
+  private showMatrixInspector(spec: TrackSpec, matrix: MatrixFeature, inspection: MatrixCellInspection, clientX: number, clientY: number): void {
+    const heading = document.createElement('strong')
+    heading.textContent = inspection.state === 'value' ? `Value ${formatScore(inspection.value!)}`
+      : inspection.state === 'zero' ? 'Zero contact'
+        : inspection.state === 'masked' ? 'Masked by normalization' : 'Missing / NaN'
+    const bins = document.createElement('span')
+    bins.textContent = `${formatLocus({ chr: this.region.chr, start: inspection.bin1, end: inspection.bin1 + matrix.resolution })} × ${formatLocus({ chr: this.region.chr, start: inspection.bin2, end: inspection.bin2 + matrix.resolution })}`
+    const details = document.createElement('small')
+    details.textContent = `${formatBases(inspection.separation)} separation · ${formatBases(matrix.resolution)} bins · ${spec.matrixNormalization ?? 'raw'} · ${spec.matrixTransform === 'linear' ? 'linear' : 'log'}`
+    this.matrixInspector.replaceChildren(heading, bins, details)
+    this.matrixInspector.hidden = false
+    const width = 340
+    const left = Math.max(8, Math.min(window.innerWidth - width - 8, clientX + 15))
+    const top = Math.max(8, Math.min(window.innerHeight - 88, clientY + 15))
+    this.matrixInspector.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`
+  }
+
+  private clearMatrixHover(): void {
+    if (!this.matrixHover && this.matrixInspector.hidden) return
+    this.matrixHover = undefined
+    this.matrixInspector.hidden = true
+    this.scheduleRender()
   }
 
   private updateTrackResizeHover(canvas: HTMLCanvasElement, pane: 'main' | 'bottom', y: number | undefined): void {
@@ -1302,7 +1403,8 @@ export class GenomeBrowser {
     const ctx = this.context
     const bottom = top + height
     const plotWidth = width - PLOT_LEFT
-    ctx.fillStyle = index % 2 === 0 ? palette.track : palette.trackAlternate
+    const trackBackground = index % 2 === 0 ? palette.track : palette.trackAlternate
+    ctx.fillStyle = trackBackground
     ctx.fillRect(LABEL_WIDTH, top, plotWidth, height)
     ctx.fillStyle = palette.gutter
     ctx.fillRect(0, top, LABEL_WIDTH, height)
@@ -1317,7 +1419,7 @@ export class GenomeBrowser {
     const maximum = Math.max(minimum + minimumRange, matrixMaximum
       ?? (spec.matrixScaleMode === 'fixed' ? spec.matrixScaleMax : undefined)
       ?? matrixAutomaticMaximum(matrix, automaticPercentile, spec.matrixIgnoreDiagonals ?? 3))
-    const legendValues = matrix?.cells.length ? matrixLegendValues(minimum, maximum, spec.matrixTransform ?? 'log1p') : []
+    const legendValues = matrix && spec.matrixShowLegend !== false ? matrixLegendValues(minimum, maximum, spec.matrixTransform ?? 'log1p') : []
     ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
     const legendLabels = legendValues.map(formatScore)
     const scaleLaneWidth = legendLabels.length
@@ -1332,10 +1434,12 @@ export class GenomeBrowser {
     ctx.fillStyle = palette.muted
     ctx.font = '9px Inter, system-ui, sans-serif'
     ctx.textAlign = 'center'
-    const resolution = matrix?.resolution ?? spec.matrixResolution
-    const normalization = spec.matrixNormalization ?? 'raw'
-    const metadata = ellipsize(ctx, `${resolution ? formatBases(resolution) : 'auto resolution'} · ${normalization}`, labelBounds.width)
-    ctx.fillText(metadata, labelBounds.center, Math.min(bottom - 7, labelTop + labelLines.length * 15 + 3))
+    if (spec.matrixShowMetadata !== false) {
+      const resolution = matrix?.resolution ?? spec.matrixResolution
+      const normalization = spec.matrixNormalization ?? 'raw'
+      const metadata = ellipsize(ctx, `${resolution ? formatBases(resolution) : 'auto resolution'} · ${normalization}`, labelBounds.width)
+      ctx.fillText(metadata, labelBounds.center, Math.min(bottom - 7, labelTop + labelLines.length * 15 + 3))
+    }
     ctx.textAlign = 'start'
     if (track.status === 'error' || track.status === 'offline') {
       ctx.fillStyle = palette.error
@@ -1343,7 +1447,7 @@ export class GenomeBrowser {
       wrapText(ctx, track.error ?? 'Could not load contact matrix', 24, bottom - 38, 136, 15, 2)
       return 0
     }
-    if (!matrix?.cells.length) {
+    if (!matrix) {
       if (track.status === 'loading') {
         ctx.fillStyle = palette.muted
         ctx.font = '12px Inter, system-ui, sans-serif'
@@ -1357,9 +1461,20 @@ export class GenomeBrowser {
     const geometry = matrixVerticalGeometry(top, bottom, spec.matrixDirection ?? 'up')
     const baseline = geometry.baseline
     const halfCell = Math.max(0.55, matrix.resolution * scale / 2)
+    const maximumDistance = matrixQueryMaximumDistance(this.region.end - this.region.start, spec.matrixDepthMode ?? 'full', spec.matrixMaxDistance)
+    const depthPixels = Math.min(plotWidth / 2, maximumDistance * scale / 2)
     drawMatrixLegend(ctx, spec, minimum, maximum, top, bottom, scaleLaneWidth, palette)
     ctx.save()
     ctx.beginPath(); ctx.rect(PLOT_LEFT, geometry.clipTop, plotWidth, Math.max(0, geometry.clipBottom - geometry.clipTop)); ctx.clip()
+    if (spec.matrixZeroStyle !== 'background') {
+      const zeroStyle = spec.matrixZeroStyle === 'custom'
+        ? { color: spec.matrixZeroColor ?? '#d7d9df', alpha: 1 }
+        : matrixPaletteStyle(spec, matrixPaletteIntensity(0, spec.matrixPaletteReversed === true))
+      ctx.fillStyle = zeroStyle.color
+      ctx.globalAlpha = Math.min(1, zeroStyle.alpha * 0.72)
+      matrixDomainPath(ctx, PLOT_LEFT, width, baseline, direction, depthPixels)
+      ctx.fill()
+    }
     for (const cell of matrix.cells) {
       if (!(cell.value > 0) || cell.bin2 + matrix.resolution <= this.region.start || cell.bin1 >= this.region.end) continue
       const firstCenter = cell.bin1 + matrix.resolution / 2
@@ -1382,12 +1497,16 @@ export class GenomeBrowser {
       ctx.fill()
     }
     ctx.globalAlpha = 1
+    drawMissingMatrixCells(ctx, matrix.missingCells ?? [], matrix.resolution, this.region, scale, baseline, direction, halfCell, spec.matrixMissingStyle === 'custom' ? spec.matrixMissingColor ?? '#9197a3' : trackBackground)
+    drawMaskedMatrixBins(ctx, matrix.maskedBins ?? [], matrix.resolution, this.region, scale, PLOT_LEFT, width, baseline, direction, depthPixels, spec, trackBackground, palette)
+    if (this.matrixHover?.trackId === spec.id) drawMatrixCrosshair(ctx, this.matrixHover, matrix.resolution, PLOT_LEFT, width, geometry.clipTop, geometry.clipBottom, halfCell, direction, palette)
+    ctx.globalAlpha = 1
     ctx.strokeStyle = palette.axisLine
     ctx.beginPath(); ctx.moveTo(PLOT_LEFT, baseline + 0.5); ctx.lineTo(width, baseline + 0.5); ctx.stroke()
     ctx.restore()
     ctx.strokeStyle = palette.line
     ctx.beginPath(); ctx.moveTo(0, bottom - 0.5); ctx.lineTo(width, bottom - 0.5); ctx.stroke()
-    return matrix.cells.length
+    return matrix.cells.length + (matrix.missingCells?.length ?? 0)
   }
 
   private drawAlignmentTrack(
@@ -2213,6 +2332,84 @@ export function placeCollapsedGeneLabels(
 export const MATRIX_WARM_COLORS = ['#fffdf2', '#fff7bc', '#fdae61', '#d7191c', '#700d1a'] as const
 export const MATRIX_BLUE_BLACK_COLORS = ['#daf0ff', '#4d97cf', '#14437a', '#040609'] as const
 const matrixAutomaticMaximumCache = new WeakMap<MatrixFeature, Map<string, number>>()
+const matrixCellLookupCache = new WeakMap<MatrixFeature, Map<string, number>>()
+const matrixMissingLookupCache = new WeakMap<MatrixFeature, Set<string>>()
+const matrixMaskedLookupCache = new WeakMap<MatrixFeature, Set<number>>()
+
+function matrixCellKey(bin1: number, bin2: number): string {
+  return `${bin1}:${bin2}`
+}
+
+function matrixCellLookup(matrix: MatrixFeature): Map<string, number> {
+  let lookup = matrixCellLookupCache.get(matrix)
+  if (!lookup) {
+    lookup = new Map(matrix.cells.map((cell) => [matrixCellKey(cell.bin1, cell.bin2), cell.value]))
+    matrixCellLookupCache.set(matrix, lookup)
+  }
+  return lookup
+}
+
+function matrixMissingLookup(matrix: MatrixFeature): Set<string> {
+  let lookup = matrixMissingLookupCache.get(matrix)
+  if (!lookup) {
+    lookup = new Set((matrix.missingCells ?? []).map((cell) => matrixCellKey(cell.bin1, cell.bin2)))
+    matrixMissingLookupCache.set(matrix, lookup)
+  }
+  return lookup
+}
+
+function matrixMaskedLookup(matrix: MatrixFeature): Set<number> {
+  let lookup = matrixMaskedLookupCache.get(matrix)
+  if (!lookup) {
+    lookup = new Set(matrix.maskedBins ?? [])
+    matrixMaskedLookupCache.set(matrix, lookup)
+  }
+  return lookup
+}
+
+export function inspectMatrixCell(matrix: MatrixFeature, bin1: number, bin2: number): MatrixCellInspection {
+  const orderedBin1 = Math.min(bin1, bin2)
+  const orderedBin2 = Math.max(bin1, bin2)
+  const masked = matrixMaskedLookup(matrix)
+  if (masked.has(orderedBin1) || masked.has(orderedBin2)) {
+    return { bin1: orderedBin1, bin2: orderedBin2, separation: orderedBin2 - orderedBin1, state: 'masked' }
+  }
+  const key = matrixCellKey(orderedBin1, orderedBin2)
+  if (matrixMissingLookup(matrix).has(key)) {
+    return { bin1: orderedBin1, bin2: orderedBin2, separation: orderedBin2 - orderedBin1, state: 'missing' }
+  }
+  const value = matrixCellLookup(matrix).get(key)
+  return value === undefined
+    ? { bin1: orderedBin1, bin2: orderedBin2, separation: orderedBin2 - orderedBin1, state: 'zero' }
+    : { bin1: orderedBin1, bin2: orderedBin2, separation: orderedBin2 - orderedBin1, state: 'value', value }
+}
+
+export function inspectMatrixPoint(
+  matrix: MatrixFeature,
+  region: Region,
+  x: number,
+  y: number,
+  left: number,
+  right: number,
+  top: number,
+  bottom: number,
+  direction: 'up' | 'down',
+  maximumDistance: number,
+): MatrixCellInspection | undefined {
+  if (x < left || x > right || y < top || y > bottom) return undefined
+  const scale = (right - left) / Math.max(1, region.end - region.start)
+  const baseline = matrixVerticalGeometry(top, bottom, direction).baseline
+  const directionSign = direction === 'down' ? 1 : -1
+  const separation = directionSign * (y - baseline) * 2 / scale
+  if (separation < 0 || separation > maximumDistance + matrix.resolution) return undefined
+  const center = region.start + (x - left) / scale
+  const first = center - separation / 2
+  const second = center + separation / 2
+  const bin1 = Math.floor(first / matrix.resolution) * matrix.resolution
+  const bin2 = Math.floor(second / matrix.resolution) * matrix.resolution
+  if (bin1 + matrix.resolution <= matrix.start || bin2 >= matrix.end) return undefined
+  return inspectMatrixCell(matrix, bin1, bin2)
+}
 
 /** Visible-cell z-max used by automatic matrix scaling. */
 export function matrixAutomaticMaximum(matrix: MatrixFeature | undefined, percentile = 0.99, ignoredDiagonals = 3): number {
@@ -2336,6 +2533,132 @@ function matrixPaletteStyle(spec: TrackSpec, intensity: number): { color: string
 
 function hexChannels(color: string): [number, number, number] {
   return [Number.parseInt(color.slice(1, 3), 16), Number.parseInt(color.slice(3, 5), 16), Number.parseInt(color.slice(5, 7), 16)]
+}
+
+function matrixDomainPath(ctx: CanvasRenderingContext2D, left: number, right: number, baseline: number, direction: number, depthPixels: number): void {
+  const depth = Math.max(0, Math.min((right - left) / 2, depthPixels))
+  ctx.beginPath()
+  ctx.moveTo(left, baseline)
+  ctx.lineTo(right, baseline)
+  ctx.lineTo(right - depth, baseline + direction * depth)
+  ctx.lineTo(left + depth, baseline + direction * depth)
+  ctx.closePath()
+}
+
+function drawMatrixDiamond(ctx: CanvasRenderingContext2D, x: number, y: number, halfCell: number): void {
+  ctx.beginPath()
+  ctx.moveTo(x - halfCell, y)
+  ctx.lineTo(x, y + halfCell)
+  ctx.lineTo(x + halfCell, y)
+  ctx.lineTo(x, y - halfCell)
+  ctx.closePath()
+}
+
+function drawMissingMatrixCells(
+  ctx: CanvasRenderingContext2D,
+  cells: readonly MatrixCellPosition[],
+  resolution: number,
+  region: Region,
+  scale: number,
+  baseline: number,
+  direction: number,
+  halfCell: number,
+  color: string,
+): void {
+  if (!cells.length) return
+  ctx.fillStyle = color
+  ctx.globalAlpha = 1
+  for (const cell of cells) {
+    const firstCenter = cell.bin1 + resolution / 2
+    const secondCenter = cell.bin2 + resolution / 2
+    const x = PLOT_LEFT + (((firstCenter + secondCenter) / 2) - region.start) * scale
+    const y = baseline + direction * ((secondCenter - firstCenter) / 2) * scale
+    drawMatrixDiamond(ctx, x, y, halfCell)
+    ctx.fill()
+  }
+}
+
+function drawMaskedMatrixBins(
+  ctx: CanvasRenderingContext2D,
+  bins: readonly number[],
+  resolution: number,
+  region: Region,
+  scale: number,
+  left: number,
+  right: number,
+  baseline: number,
+  direction: number,
+  depthPixels: number,
+  spec: TrackSpec,
+  trackBackground: string,
+  palette: CanvasPalette,
+): void {
+  if (!bins.length) return
+  ctx.save()
+  matrixDomainPath(ctx, left, right, baseline, direction, depthPixels)
+  ctx.clip()
+  const bandWidth = Math.max(1.25, resolution * scale / Math.SQRT2)
+  const drawAllRays = () => {
+    ctx.beginPath()
+    for (const bin of bins) {
+      const x = PLOT_LEFT + (bin + resolution / 2 - region.start) * scale
+      if (x + depthPixels < left || x - depthPixels > right) continue
+      ctx.moveTo(x, baseline)
+      ctx.lineTo(left, baseline + direction * (x - left))
+      ctx.moveTo(x, baseline)
+      ctx.lineTo(right, baseline + direction * (right - x))
+    }
+    ctx.stroke()
+  }
+  ctx.setLineDash([])
+  ctx.lineWidth = bandWidth
+  ctx.strokeStyle = spec.matrixMaskedStyle === 'custom' ? spec.matrixMaskedColor ?? '#777d89' : trackBackground
+  drawAllRays()
+  if (spec.matrixMaskedStyle === 'hatch' || spec.matrixMaskedStyle === undefined) {
+    ctx.setLineDash([3, 3])
+    ctx.lineWidth = Math.max(1, Math.min(2, bandWidth * 0.24))
+    ctx.strokeStyle = palette.muted
+    ctx.globalAlpha = 0.8
+    drawAllRays()
+    ctx.globalAlpha = 1
+  }
+  ctx.setLineDash([])
+  ctx.restore()
+}
+
+function drawMatrixCrosshair(
+  ctx: CanvasRenderingContext2D,
+  hover: MatrixHover,
+  resolution: number,
+  left: number,
+  right: number,
+  clipTop: number,
+  clipBottom: number,
+  halfCell: number,
+  direction: number,
+  palette: CanvasPalette,
+): void {
+  const extent = right - left
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(left, clipTop, extent, Math.max(0, clipBottom - clipTop))
+  ctx.clip()
+  ctx.strokeStyle = palette.selection
+  ctx.globalAlpha = 0.72
+  ctx.lineWidth = 1
+  ctx.setLineDash([4, 3])
+  ctx.beginPath()
+  ctx.moveTo(hover.x - extent, hover.y - direction * extent)
+  ctx.lineTo(hover.x + extent, hover.y + direction * extent)
+  ctx.moveTo(hover.x - extent, hover.y + direction * extent)
+  ctx.lineTo(hover.x + extent, hover.y - direction * extent)
+  ctx.stroke()
+  ctx.setLineDash([])
+  ctx.globalAlpha = 1
+  ctx.lineWidth = Math.max(1.5, Math.min(3, resolution > 0 ? halfCell * 0.2 : 1.5))
+  drawMatrixDiamond(ctx, hover.x, hover.y, halfCell)
+  ctx.stroke()
+  ctx.restore()
 }
 
 function colorWithAlpha(color: string, alpha: number): string {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, interactionArcHeight, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, interactionArcHeight, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
@@ -144,6 +144,8 @@ describe('contact-matrix rendering helpers', () => {
         { bin1: 0, bin2: 40, value: 2 },
         { bin1: 0, bin2: 50, value: 100 },
       ],
+      missingCells: [],
+      maskedBins: [],
     } satisfies MatrixFeature
     expect(matrixAutomaticMaximum(matrix, 1, 0)).toBe(1_000)
     expect(matrixAutomaticMaximum(matrix, 0.5, 3)).toBe(2)
@@ -193,6 +195,29 @@ describe('contact-matrix rendering helpers', () => {
   it('keeps an upward matrix baseline and clip inside its bottom track boundary', () => {
     expect(matrixVerticalGeometry(100, 220, 'up')).toEqual({ baseline: 219.5, clipTop: 100.5, clipBottom: 219.5 })
     expect(matrixVerticalGeometry(100, 220, 'down').baseline).toBe(100.5)
+  })
+
+  it('distinguishes values, sparse zeros, explicit missing pixels, and masked bins', () => {
+    const matrix: MatrixFeature = {
+      featureType: 'matrix', start: 0, end: 100, resolution: 10,
+      cells: [{ bin1: 10, bin2: 30, value: 7.5 }],
+      missingCells: [{ bin1: 20, bin2: 40 }],
+      maskedBins: [50],
+    }
+    expect(inspectMatrixCell(matrix, 10, 30)).toMatchObject({ state: 'value', value: 7.5, separation: 20 })
+    expect(inspectMatrixCell(matrix, 0, 10)).toMatchObject({ state: 'zero', separation: 10 })
+    expect(inspectMatrixCell(matrix, 20, 40)).toMatchObject({ state: 'missing', separation: 20 })
+    expect(inspectMatrixCell(matrix, 30, 50)).toMatchObject({ state: 'masked', separation: 20 })
+  })
+
+  it('maps upward and downward matrix pixels to stable genomic bins', () => {
+    const matrix: MatrixFeature = {
+      featureType: 'matrix', start: 0, end: 100, resolution: 10,
+      cells: [{ bin1: 10, bin2: 30, value: 7.5 }], missingCells: [], maskedBins: [],
+    }
+    expect(inspectMatrixPoint(matrix, { chr: 'chr1', start: 0, end: 100 }, 25, 49.5, 0, 100, 0, 60, 'up', 100)).toMatchObject({ bin1: 10, bin2: 30, value: 7.5 })
+    expect(inspectMatrixPoint(matrix, { chr: 'chr1', start: 0, end: 100 }, 25, 10.5, 0, 100, 0, 60, 'down', 100)).toMatchObject({ bin1: 10, bin2: 30, value: 7.5 })
+    expect(inspectMatrixPoint(matrix, { chr: 'chr1', start: 0, end: 100 }, 25, 39.5, 0, 100, 0, 60, 'up', 10)).toBeUndefined()
   })
 
 })
