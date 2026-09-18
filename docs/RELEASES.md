@@ -30,11 +30,12 @@ it to a release, or send it through an issue or pull request.
 2. Choose the next semantic version and synchronize every version-bearing file:
 
    ```powershell
-   npm run version:set -- 0.1.2
+   npm run version:set -- 0.1.3
    npm run version:check
    ```
 
-3. Update user-facing release notes or documentation as needed, then run:
+3. Add the new user-facing entry to `CHANGELOG.md`, update other documentation
+   as needed, then run:
 
    ```powershell
    npm test
@@ -47,15 +48,17 @@ it to a release, or send it through an issue or pull request.
 5. From updated `main`, create and push the matching tag:
 
    ```powershell
-   git tag v0.1.2
-   git push origin v0.1.2
+   git tag v0.1.3
+   git push origin v0.1.3
    ```
 
 6. The **Release Windows beta** workflow verifies that the tag matches the
    application version, repeats the test suite, builds the Windows NSIS
    installer, signs its updater artifact, creates `latest.json`, and opens a
    draft GitHub Release.
-7. Download and install the draft asset on a Windows test account. Verify the
+7. Replace the generated draft description with the matching `CHANGELOG.md`
+   entry while retaining the beta-testing and SmartScreen installation notes.
+   Download and install the draft asset on a Windows test account. Verify the
    app version, Start Menu entry, workspace restoration, file reopening, and
    **Help → Check for updates**.
 8. Publish the draft only after that smoke test. Published releases become
