@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, interactionArcHeight, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, interactionArcHeight, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
@@ -34,6 +34,11 @@ describe('track layout and ruler formatting', () => {
   it('keeps large scale labels readable without exponential notation', () => {
     expect(formatScore(1_600)).toBe('1600')
     expect(formatScore(-12_345)).toBe('-12345')
+  })
+
+  it('shows matrix values without a redundant label', () => {
+    expect(matrixInspectionHeading({ bin1: 10, bin2: 20, separation: 10, state: 'value', value: 7.5 })).toBe('7.5')
+    expect(matrixInspectionHeading({ bin1: 10, bin2: 20, separation: 10, state: 'zero' })).toBe('Zero contact')
   })
 
   it('centers text line blocks around a track midpoint', () => {

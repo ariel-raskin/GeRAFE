@@ -60,6 +60,12 @@ export interface MatrixCellInspection {
   value?: number
 }
 
+export function matrixInspectionHeading(inspection: MatrixCellInspection): string {
+  return inspection.state === 'value' ? formatScore(inspection.value!)
+    : inspection.state === 'zero' ? 'Zero contact'
+      : inspection.state === 'masked' ? 'Masked by normalization' : 'Missing / NaN'
+}
+
 export interface MatrixDisplayPreferences {
   inspector: boolean
   inspectorValue: boolean
@@ -643,9 +649,7 @@ export class GenomeBrowser {
 
   private showMatrixInspector(spec: TrackSpec, matrix: MatrixFeature, inspection: MatrixCellInspection, clientX: number, clientY: number): void {
     const heading = document.createElement('strong')
-    heading.textContent = inspection.state === 'value' ? `Value ${formatScore(inspection.value!)}`
-      : inspection.state === 'zero' ? 'Zero contact'
-        : inspection.state === 'masked' ? 'Masked by normalization' : 'Missing / NaN'
+    heading.textContent = matrixInspectionHeading(inspection)
     const bins = document.createElement('span')
     bins.textContent = `${formatLocus({ chr: this.region.chr, start: inspection.bin1, end: inspection.bin1 + matrix.resolution })} × ${formatLocus({ chr: this.region.chr, start: inspection.bin2, end: inspection.bin2 + matrix.resolution })}`
     const details = document.createElement('small')
@@ -660,9 +664,10 @@ export class GenomeBrowser {
       return
     }
     this.matrixInspector.hidden = false
-    const width = 340
+    const width = this.matrixInspector.offsetWidth
+    const height = this.matrixInspector.offsetHeight
     const left = Math.max(8, Math.min(window.innerWidth - width - 8, clientX + 15))
-    const top = Math.max(8, Math.min(window.innerHeight - this.matrixInspector.offsetHeight - 8, clientY + 15))
+    const top = Math.max(8, Math.min(window.innerHeight - height - 8, clientY + 15))
     this.matrixInspector.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`
   }
 
