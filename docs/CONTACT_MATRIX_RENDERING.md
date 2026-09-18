@@ -51,3 +51,17 @@ Palette stops are evenly spaced across the resolved intensity range. The warm pr
 Matrix tracks in a linked visual group share the largest automatic or fixed z-max calculated for the matrix members of that group. Independent groups retain a separate z-max for every matrix. Applying matrix settings to a matrix-only group also applies z-min and automatic-scale parameters consistently to every member. This is intentionally separate from the matrix normalization stored for each source. Mixed groups may contain other track kinds, but linked matrix scaling is calculated only from their matrix members.
 
 The renderer clips every contact diamond to the inside of its track and redraws the lower track boundary after the matrix. Palette, legend, group scaling, intensity scaling, and track-height changes must remain presentation-only so they cannot reintroduce the height-dependent query expansion described above. `matrixDepthMode` and `matrixMaxDistance` are the sole persisted controls for off-diagonal query reach.
+
+## Inspection and empty-cell states
+
+Matrix hover inspection is presentation-only. The browser converts the pointer from the rotated triangular canvas coordinates back into the two source bins, then uses cached sparse lookups to classify the cell and report its value, genomic separation, resolution, normalization, and transform. The crosshair and hover card do not trigger source queries. Inspector visibility and content are global app preferences under **Settings → Track behavior → Matrix tracks**. The inspector defaults to on with only its value or cell-state line shown; interacting bins and the lower details line are independently optional. The same global section controls matrix color-scale legends and track-card metadata.
+
+The renderer keeps three non-value states distinct:
+
+- a sparse omitted pixel inside the queried domain is a zero;
+- an explicit non-finite source pixel is missing / NaN;
+- a bin with an invalid active Cooler normalization weight is masked, and all cells involving it are masked.
+
+Some readers do not expose a normalization mask. GeRAFE does not infer masked bins from absent contacts in that case. Zero cells can retain the track background, use the palette's low-score color, or use a chosen color. Missing pixels can use the track background or a chosen color. Masked bins can use a muted hatch, the track background, or a chosen color.
+
+Zero-color display must remain a single clipped triangular/trapezoidal fill beneath the sparse contacts. It must not enumerate or materialize absent matrix cells. Missing pixels remain sparse coordinates and masked bins remain a short bin list. This preserves the direct renderer's feature-count guardrail.

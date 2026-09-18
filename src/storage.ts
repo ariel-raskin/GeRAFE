@@ -9,6 +9,12 @@ export const STORAGE_KEYS = {
   strandedAutoColors: 'gerafe-auto-color-stranded-signals',
   upperPaneAutoFit: 'gerafe-auto-fit-upper-tracks',
   interactionGuideSeen: 'gerafe-interaction-guide-seen',
+  matrixInspector: 'gerafe-matrix-inspector',
+  matrixInspectorValue: 'gerafe-matrix-inspector-value',
+  matrixInspectorBins: 'gerafe-matrix-inspector-bins',
+  matrixInspectorDetails: 'gerafe-matrix-inspector-details',
+  matrixLegend: 'gerafe-matrix-color-scale',
+  matrixMetadata: 'gerafe-matrix-track-metadata',
 } as const
 
 export const LEGACY_STORAGE_KEYS = {
@@ -22,6 +28,12 @@ export const LEGACY_STORAGE_KEYS = {
   strandedAutoColors: 'locus-glide-auto-color-stranded-signals',
   upperPaneAutoFit: 'locus-glide-auto-fit-upper-tracks',
   interactionGuideSeen: 'locus-glide-interaction-guide-seen',
+  matrixInspector: 'locus-glide-matrix-inspector',
+  matrixInspectorValue: 'locus-glide-matrix-inspector-value',
+  matrixInspectorBins: 'locus-glide-matrix-inspector-bins',
+  matrixInspectorDetails: 'locus-glide-matrix-inspector-details',
+  matrixLegend: 'locus-glide-matrix-color-scale',
+  matrixMetadata: 'locus-glide-matrix-track-metadata',
 } as const
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>

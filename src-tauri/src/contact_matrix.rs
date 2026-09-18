@@ -71,9 +71,18 @@ pub struct MatrixCell {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MatrixCellPosition {
+    pub bin1: u64,
+    pub bin2: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MatrixQueryResult {
     pub resolution: u64,
     pub cells: Vec<MatrixCell>,
+    pub missing_cells: Vec<MatrixCellPosition>,
+    pub masked_bins: Vec<u64>,
 }
 
 pub fn metadata(path: &Path, format: &str) -> Result<MatrixMetadata, String> {
@@ -279,26 +288,38 @@ fn query_hic(options: &MatrixQuery) -> Result<MatrixQueryResult, String> {
         .read_sparse_values(&request)
         .map_err(|error| format!("Could not read .hic contacts: {error}"))?;
     let bin_start = location.x.bin_start;
-    let cells = matrix
-        .values
-        .into_iter()
-        .zip(matrix.row)
-        .zip(matrix.col)
-        .filter_map(|((value, row), col)| {
-            let first = (bin_start + row as i64).checked_mul(resolution as i64)?;
-            let second = (bin_start + col as i64).checked_mul(resolution as i64)?;
-            if !value.is_finite() || value <= 0.0 || first < 0 || second < 0 {
-                return None;
-            }
-            let (bin1, bin2) = ordered_bins(first as u64, second as u64);
-            within_distance(bin1, bin2, resolution, options.max_distance).then_some(MatrixCell {
+    let mut cells = Vec::new();
+    let mut missing_cells = Vec::new();
+    for ((value, row), col) in matrix.values.into_iter().zip(matrix.row).zip(matrix.col) {
+        let Some(first) = (bin_start + row as i64).checked_mul(resolution as i64) else {
+            continue;
+        };
+        let Some(second) = (bin_start + col as i64).checked_mul(resolution as i64) else {
+            continue;
+        };
+        if first < 0 || second < 0 {
+            continue;
+        }
+        let (bin1, bin2) = ordered_bins(first as u64, second as u64);
+        if !within_distance(bin1, bin2, resolution, options.max_distance) {
+            continue;
+        }
+        if !value.is_finite() {
+            missing_cells.push(MatrixCellPosition { bin1, bin2 });
+        } else if value > 0.0 {
+            cells.push(MatrixCell {
                 bin1,
                 bin2,
                 value: value as f64,
-            })
-        })
-        .collect();
-    Ok(MatrixQueryResult { resolution, cells })
+            });
+        }
+    }
+    Ok(MatrixQueryResult {
+        resolution,
+        cells,
+        missing_cells,
+        masked_bins: Vec::new(),
+    })
 }
 
 fn query_cool(
@@ -349,6 +370,8 @@ fn query_cool(
         return Ok(MatrixQueryResult {
             resolution,
             cells: Vec::new(),
+            missing_cells: Vec::new(),
+            masked_bins: Vec::new(),
         });
     }
 
@@ -409,38 +432,69 @@ fn query_cool(
         None
     };
     let divisive = is_divisive_cooler_weight(&options.normalization);
-    let cells = bin1_ids
-        .into_iter()
-        .zip(bin2_ids)
-        .zip(counts)
-        .filter_map(|((bin1_id, bin2_id), count)| {
-            if bin1_id < first_bin
-                || bin1_id >= last_bin
-                || bin2_id < first_bin
-                || bin2_id >= last_bin
-            {
-                return None;
-            }
-            let mut value = count;
-            if let Some(weights) = &weights {
-                let weight1 = *weights.get((bin1_id - first_bin) as usize)?;
-                let weight2 = *weights.get((bin2_id - first_bin) as usize)?;
+    let masked_bins = weights
+        .as_ref()
+        .map(|weights| masked_bin_starts(weights, &bin_starts))
+        .unwrap_or_default();
+    let mut cells = Vec::new();
+    let mut missing_cells = Vec::new();
+    for ((bin1_id, bin2_id), count) in bin1_ids.into_iter().zip(bin2_ids).zip(counts) {
+        if bin1_id < first_bin || bin1_id >= last_bin || bin2_id < first_bin || bin2_id >= last_bin
+        {
+            continue;
+        }
+        let Some(&first) = bin_starts.get((bin1_id - first_bin) as usize) else {
+            continue;
+        };
+        let Some(&second) = bin_starts.get((bin2_id - first_bin) as usize) else {
+            continue;
+        };
+        let (bin1, bin2) = ordered_bins(first, second);
+        if !within_distance(bin1, bin2, resolution, options.max_distance) {
+            continue;
+        }
+        let mut value = count;
+        let mut masked = false;
+        if let Some(weights) = &weights {
+            let Some(&weight1) = weights.get((bin1_id - first_bin) as usize) else {
+                continue;
+            };
+            let Some(&weight2) = weights.get((bin2_id - first_bin) as usize) else {
+                continue;
+            };
+            masked =
+                !weight1.is_finite() || weight1 <= 0.0 || !weight2.is_finite() || weight2 <= 0.0;
+            if !masked {
                 value = if divisive {
                     value / (weight1 * weight2)
                 } else {
                     value * weight1 * weight2
                 };
             }
-            let first = *bin_starts.get((bin1_id - first_bin) as usize)?;
-            let second = *bin_starts.get((bin2_id - first_bin) as usize)?;
-            let (bin1, bin2) = ordered_bins(first, second);
-            (value.is_finite()
-                && value > 0.0
-                && within_distance(bin1, bin2, resolution, options.max_distance))
-            .then_some(MatrixCell { bin1, bin2, value })
-        })
-        .collect();
-    Ok(MatrixQueryResult { resolution, cells })
+        }
+        if masked {
+            continue;
+        }
+        if !value.is_finite() {
+            missing_cells.push(MatrixCellPosition { bin1, bin2 });
+        } else if value > 0.0 {
+            cells.push(MatrixCell { bin1, bin2, value });
+        }
+    }
+    Ok(MatrixQueryResult {
+        resolution,
+        cells,
+        missing_cells,
+        masked_bins,
+    })
+}
+
+fn masked_bin_starts(weights: &[f64], bin_starts: &[u64]) -> Vec<u64> {
+    weights
+        .iter()
+        .zip(bin_starts)
+        .filter_map(|(weight, start)| (!weight.is_finite() || *weight <= 0.0).then_some(*start))
+        .collect()
 }
 
 fn open_cooler(path: &Path) -> Result<Hdf5File, String> {
@@ -697,6 +751,16 @@ mod tests {
         assert_eq!(ordered_bins(15_000, 5_000), (5_000, 15_000));
         assert!(within_distance(5_000, 15_000, 5_000, Some(5_000)));
         assert!(!within_distance(5_000, 25_000, 5_000, Some(5_000)));
+    }
+
+    #[test]
+    fn invalid_normalization_weights_identify_masked_bins() {
+        let weights = [1.0, f64::NAN, 0.0, -1.0, 2.0];
+        let starts = [0, 5_000, 10_000, 15_000, 20_000];
+        assert_eq!(
+            masked_bin_starts(&weights, &starts),
+            vec![5_000, 10_000, 15_000]
+        );
     }
 
     #[test]

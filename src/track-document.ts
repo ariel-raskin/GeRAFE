@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 16 as const
+export const TRACK_DOCUMENT_VERSION = 17 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -14,6 +14,9 @@ export type InteractionFilterMode = 'all' | 'genes' | 'visible-genes'
 export type MatrixPalette = 'monochrome' | 'warm' | 'blue-black' | 'custom'
 export type MatrixScaleMode = 'maximum' | 'percentile' | 'fixed'
 export type MatrixDepthMode = 'auto' | 'full' | 'fixed'
+export type MatrixZeroStyle = 'background' | 'low-color' | 'custom'
+export type MatrixMissingStyle = 'background' | 'custom'
+export type MatrixMaskedStyle = 'background' | 'hatch' | 'custom'
 
 export interface SourceFileSpec {
   name: string
@@ -88,6 +91,12 @@ export interface TrackSpec {
   matrixPaletteReversed?: boolean
   /** Ordered low-to-high colors for the custom matrix palette. */
   matrixPaletteColors?: string[]
+  matrixZeroStyle?: MatrixZeroStyle
+  matrixZeroColor?: string
+  matrixMissingStyle?: MatrixMissingStyle
+  matrixMissingColor?: string
+  matrixMaskedStyle?: MatrixMaskedStyle
+  matrixMaskedColor?: string
   alignmentDisplayMode?: 'collapsed' | 'expanded' | 'squished'
   bamViewMode?: 'coverage' | 'alignments' | 'both'
   bamColorMode?: 'track' | 'strand' | 'pair-orientation' | 'mapping-quality'
@@ -422,6 +431,9 @@ export function addMatrixTrack(
     matrixIgnoreDiagonals: 3,
     matrixDepthMode: 'full',
     matrixPalette: 'warm',
+    matrixZeroStyle: 'background',
+    matrixMissingStyle: 'background',
+    matrixMaskedStyle: 'hatch',
   }
   draft.sources.push(source)
   const bottomIndex = draft.tracks.findIndex((item) => item.pane === 'bottom')
@@ -646,7 +658,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -731,6 +743,24 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     matrixPaletteReversed: track.kind === 'matrix' && track.matrixPaletteReversed === true ? true : undefined,
     matrixPaletteColors: track.kind === 'matrix' && Array.isArray(track.matrixPaletteColors)
       ? track.matrixPaletteColors.filter((color: unknown): color is string => typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color)).slice(0, 8)
+      : undefined,
+    matrixZeroStyle: track.kind === 'matrix' && (track.matrixZeroStyle === 'low-color' || track.matrixZeroStyle === 'custom')
+      ? track.matrixZeroStyle
+      : track.kind === 'matrix' ? 'background' as const : undefined,
+    matrixZeroColor: track.kind === 'matrix' && typeof track.matrixZeroColor === 'string' && /^#[0-9a-f]{6}$/i.test(track.matrixZeroColor)
+      ? track.matrixZeroColor
+      : undefined,
+    matrixMissingStyle: track.kind === 'matrix' && track.matrixMissingStyle === 'custom'
+      ? 'custom' as const
+      : track.kind === 'matrix' ? 'background' as const : undefined,
+    matrixMissingColor: track.kind === 'matrix' && typeof track.matrixMissingColor === 'string' && /^#[0-9a-f]{6}$/i.test(track.matrixMissingColor)
+      ? track.matrixMissingColor
+      : undefined,
+    matrixMaskedStyle: track.kind === 'matrix' && (track.matrixMaskedStyle === 'background' || track.matrixMaskedStyle === 'custom')
+      ? track.matrixMaskedStyle
+      : track.kind === 'matrix' ? 'hatch' as const : undefined,
+    matrixMaskedColor: track.kind === 'matrix' && typeof track.matrixMaskedColor === 'string' && /^#[0-9a-f]{6}$/i.test(track.matrixMaskedColor)
+      ? track.matrixMaskedColor
       : undefined,
     alignmentDisplayMode: track.kind === 'alignment' && (track.alignmentDisplayMode === 'collapsed' || track.alignmentDisplayMode === 'expanded' || track.alignmentDisplayMode === 'squished')
       ? track.alignmentDisplayMode
