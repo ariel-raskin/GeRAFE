@@ -1,6 +1,6 @@
 [package]
 name = "gerafe"
-version = "0.1.2"
+version = "0.1.3"
 description = "GeRAFE — Genomic Renderer and Figure Editor"
 authors = ["Stengel-Raskin Lab"]
 edition = "2021"
