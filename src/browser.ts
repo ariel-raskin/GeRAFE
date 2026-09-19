@@ -19,6 +19,7 @@ const MATRIX_OVERSCAN_FACTOR = 0.5
 const GENE_CONTENT_PADDING = 6
 const MIN_BOTTOM_GENE_HEIGHT = 44
 const TRACK_RESIZE_HOVER_DELAY_MS = 250
+const BAM_READS_MAX_VISIBLE_SPAN = 150_000
 
 export interface BrowserCallbacks {
   onRegionChange(region: Region): void
@@ -31,7 +32,6 @@ export interface BrowserCallbacks {
   onGroupContextMenu(groupId: string, x: number, y: number): void
   onTracksReorder(trackIds: readonly string[], pane: 'main' | 'bottom', insertionIndex: number, withinGroupId?: string): void
   onTrackHeightsResize(updates: readonly { id: string; pixels: number }[]): void
-  onAlignmentInspect(read: AlignmentFeature, navigateToMate: boolean): void
 }
 
 interface GeneRenderBlock {
@@ -82,6 +82,7 @@ interface MatrixHover extends MatrixCellInspection {
   x: number
   y: number
 }
+interface BamHover { trackId: string; read: AlignmentFeature }
 
 export class GenomeBrowser {
   private context: CanvasRenderingContext2D
@@ -143,6 +144,8 @@ export class GenomeBrowser {
   }
   private trackBodyHold?: { canvas: HTMLCanvasElement; startX: number; startY: number; timer: number }
   private matrixHover?: MatrixHover
+  private bamHover?: BamHover
+  private bamReadHitboxes: Array<{ trackId: string; read: AlignmentFeature; x1: number; x2: number; y1: number; y2: number }> = []
 
   constructor(
     private readonly headerCanvas: HTMLCanvasElement,
@@ -454,8 +457,8 @@ export class GenomeBrowser {
       if (!this.dragging || this.dragging.canvas !== canvas) {
         const hit = this.resizeBoundaryAt(pane, event.offsetY)
         this.updateTrackResizeHover(canvas, pane, hit?.y)
-        if (hit) this.clearMatrixHover()
-        else this.updateMatrixHover(canvas, pane, event)
+        if (hit) { this.clearMatrixHover(); this.clearBamHover() }
+        else { this.updateMatrixHover(canvas, pane, event); this.updateBamHover(canvas, pane, event) }
         return
       }
       const plotWidth = Math.max(1, this.cssWidth(canvas) - PLOT_LEFT)
@@ -502,16 +505,6 @@ export class GenomeBrowser {
         return
       }
       if (!this.dragging || this.dragging.canvas !== canvas) return
-      if (event.type === 'pointerup' && Math.abs(event.clientX - this.dragging.x) < 4) {
-        const hit = this.itemAt(canvas, pane, event.offsetX, event.offsetY)
-        const runtime = hit?.kind === 'track' ? this.runtimes.get(hit.id) : undefined
-        const spec = hit?.kind === 'track' ? this.document.tracks.find((track) => track.id === hit.id) : undefined
-        if (runtime && spec?.kind === 'alignment') {
-          const coordinate = this.region.start + (event.offsetX - PLOT_LEFT) * ((this.region.end - this.region.start) / Math.max(1, this.cssWidth(canvas) - PLOT_LEFT))
-          const read = runtime.features.filter((feature): feature is AlignmentFeature => 'featureType' in feature && feature.featureType === 'alignment').find((feature) => feature.start <= coordinate && feature.end >= coordinate)
-          if (read) this.callbacks.onAlignmentInspect(read, event.altKey)
-        }
-      }
       this.dragging = undefined
       canvas.classList.remove('is-dragging')
       void this.ensureData()
@@ -685,6 +678,32 @@ export class GenomeBrowser {
   private clearMatrixHover(): void {
     if (!this.matrixHover && this.matrixInspector.hidden) return
     this.matrixHover = undefined
+    this.matrixInspector.hidden = true
+    this.scheduleRender()
+  }
+
+  private updateBamHover(canvas: HTMLCanvasElement, pane: 'main' | 'bottom', event: PointerEvent): void {
+    const hit = this.itemAt(canvas, pane, event.offsetX, event.offsetY)
+    const spec = hit?.kind === 'track' ? this.document.tracks.find((track) => track.id === hit.id && track.kind === 'alignment') : undefined
+    if (!spec || event.offsetX < PLOT_LEFT || this.region.end - this.region.start > BAM_READS_MAX_VISIBLE_SPAN) return this.clearBamHover()
+    const read = this.bamReadHitboxes.find((box) => box.trackId === spec.id && event.offsetX >= box.x1 && event.offsetX <= box.x2 && event.offsetY >= box.y1 && event.offsetY <= box.y2)?.read
+    if (!read) return this.clearBamHover()
+    const changed = this.bamHover?.trackId !== spec.id || this.bamHover.read !== read
+    this.bamHover = { trackId: spec.id, read }
+    const heading = document.createElement('strong'); heading.textContent = read.name
+    const detail = document.createElement('span'); detail.textContent = `${read.strand} · MAPQ ${read.mapq} · ${read.cigar}`
+    const mate = document.createElement('small'); mate.textContent = read.mateOnSameChromosome && read.mateStart !== undefined ? `Mate at ${Math.round(read.mateStart).toLocaleString()} · Alt-click to visit` : read.paired ? 'Mate on another chromosome' : 'Unpaired read'
+    this.matrixInspector.replaceChildren(heading, detail, mate)
+    this.matrixInspector.hidden = false
+    const left = Math.max(8, Math.min(window.innerWidth - this.matrixInspector.offsetWidth - 8, event.clientX + 15))
+    const top = Math.max(8, Math.min(window.innerHeight - this.matrixInspector.offsetHeight - 8, event.clientY + 15))
+    this.matrixInspector.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`
+    if (changed) this.scheduleRender()
+  }
+
+  private clearBamHover(): void {
+    if (!this.bamHover) return
+    this.bamHover = undefined
     this.matrixInspector.hidden = true
     this.scheduleRender()
   }
@@ -1635,12 +1654,12 @@ export class GenomeBrowser {
     const coverageHeight = viewMode === 'both' ? Math.min(54, Math.max(28, height * 0.28)) : viewMode === 'coverage' ? height - 8 : 0
     if (coverageHeight > 0 && coverage.length) this.drawBamCoverage(coverage, spec.color, top + 4, coverageHeight, width, palette)
     const readsTop = top + coverageHeight + (coverageHeight ? 7 : 4)
-    if (viewMode !== 'coverage') {
+    if (viewMode !== 'coverage' && this.region.end - this.region.start <= BAM_READS_MAX_VISIBLE_SPAN) {
       if (alignments.length) this.drawBamReads(alignments, spec, readsTop, bottom - 3, width, palette)
       else {
         ctx.fillStyle = palette.muted
         ctx.font = '11px Inter, system-ui, sans-serif'
-        ctx.fillText('Zoom below 250 kb to draw individual reads', PLOT_LEFT + 22, Math.min(bottom - 10, readsTop + 18))
+        ctx.fillText(`Zoom below ${formatBases(BAM_READS_MAX_VISIBLE_SPAN)} to draw individual reads`, PLOT_LEFT + 22, Math.min(bottom - 10, readsTop + 18))
       }
     }
     if (alignments.length < sourceAlignments.length) { ctx.fillStyle = palette.muted; ctx.font = '9px Inter, system-ui, sans-serif'; ctx.fillText(`Showing ${alignments.length.toLocaleString()} of ${sourceAlignments.length.toLocaleString()} reads`, PLOT_LEFT + 8, bottom - 4) }
@@ -1676,6 +1695,7 @@ export class GenomeBrowser {
     const scale = (width - PLOT_LEFT) / (this.region.end - this.region.start)
     const groups = alignmentRenderGroups(features, spec.bamViewAsPairs === true)
     const laneEnds: number[] = []
+    this.bamReadHitboxes = this.bamReadHitboxes.filter((box) => box.trackId !== spec.id)
     ctx.save()
     ctx.beginPath(); ctx.rect(PLOT_LEFT, top, width - PLOT_LEFT, Math.max(0, bottom - top)); ctx.clip()
     for (const group of groups) {
@@ -1701,7 +1721,12 @@ export class GenomeBrowser {
           const x1 = Math.max(PLOT_LEFT, PLOT_LEFT + (block.start - this.region.start) * scale)
           const x2 = Math.min(width, PLOT_LEFT + (block.end - this.region.start) * scale)
           if (x2 <= x1) continue
+          this.bamReadHitboxes.push({ trackId: spec.id, read, x1, x2, y1: centerY - readHeight / 2 - 2, y2: centerY + readHeight / 2 + 2 })
           drawDirectionalReadBlock(ctx, x1, x2, centerY, readHeight, read.strand)
+          if (this.bamHover?.trackId === spec.id && this.bamHover.read === read) {
+            ctx.save(); ctx.strokeStyle = palette.ink; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.9
+            ctx.strokeRect(x1 - 1, centerY - readHeight / 2 - 1, Math.max(2, x2 - x1 + 2), readHeight + 2); ctx.restore()
+          }
         }
         ctx.globalAlpha = 1
         if (spec.bamShowMismatches !== false) for (const difference of read.differences) {
@@ -2059,7 +2084,7 @@ export class GenomeBrowser {
       return
     }
     const span = this.region.end - this.region.start
-    const overscanFactor = spec?.kind === 'matrix' ? MATRIX_OVERSCAN_FACTOR : OVERSCAN_FACTOR
+    const overscanFactor = spec?.kind === 'matrix' ? MATRIX_OVERSCAN_FACTOR : spec?.kind === 'alignment' ? 0 : OVERSCAN_FACTOR
     const queryRegion = clampRegion({
       chr: this.region.chr,
       start: this.region.start - span * overscanFactor,
