@@ -499,16 +499,6 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
       }
     })
   },
-  onAlignmentInspect(read, navigateToMate) {
-    if (navigateToMate && read.mateOnSameChromosome && read.mateStart !== undefined) {
-      const span = browser.getRegion().end - browser.getRegion().start
-      browser.setRegion({ chr: browser.getRegion().chr, start: read.mateStart - span / 2, end: read.mateStart + span / 2 })
-      showToast(`Moved to mate of ${read.name}`)
-      return
-    }
-    const mate = read.mateOnSameChromosome && read.mateStart !== undefined ? ` · mate ${Math.round(read.mateStart).toLocaleString()}` : ''
-    showToast(`${read.name} · ${read.strand} · MAPQ ${read.mapq} · ${read.cigar}${mate}${read.mateOnSameChromosome ? ' · Alt-click to visit mate' : ''}`)
-  },
 })
 browser.setShowTssIndicators(savedTssIndicators())
 browser.setMatrixDisplayPreferences(savedMatrixDisplayPreferences())
