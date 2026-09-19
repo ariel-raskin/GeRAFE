@@ -1334,6 +1334,14 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
       action('interval-collapsed', 'Collapsed', intervalTracks.every((track) => track.intervalDisplayMode === 'collapsed' || !track.intervalDisplayMode) ? 'current' : '')
       + action('interval-expanded', 'Expanded', intervalTracks.every((track) => track.intervalDisplayMode === 'expanded') ? 'current' : '')
       + action('interval-squished', 'Squished', intervalTracks.every((track) => track.intervalDisplayMode === 'squished') ? 'current' : ''))
+    typeItems += submenu('interval-options', 'Interval options', '',
+      action('interval-labels', 'Show labels', intervalTracks.every((track) => track.intervalShowLabels !== false) ? 'current' : '')
+      + action('interval-color-track', 'Track color', intervalTracks.every((track) => (track.intervalColorMode ?? 'track') === 'track') ? 'current' : '')
+      + action('interval-color-item-rgb', 'Use BED item RGB', intervalTracks.every((track) => track.intervalColorMode === 'item-rgb') ? 'current' : '')
+      + action('interval-color-strand', 'Color by strand', intervalTracks.every((track) => track.intervalColorMode === 'strand') ? 'current' : '')
+      + action('interval-color-score', 'Color by score', intervalTracks.every((track) => track.intervalColorMode === 'score') ? 'current' : '')
+      + action('interval-min-score', 'Minimum score…')
+      + action('interval-max-rows', 'Maximum rows…'))
   }
   if (interactionTracks.length) {
     typeItems += action('interaction-flip', 'Draw arcs downward', interactionTracks.every((track) => track.interactionDirection === 'down') ? 'current' : '')
@@ -1344,6 +1352,19 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
       action('interaction-filter-all', 'All interactions', interactionTracks.every((track) => !track.interactionFilterMode || track.interactionFilterMode === 'all') ? 'current' : '')
       + action('interaction-filter-genes', 'Matching gene symbols…', interactionGeneDetail)
       + action('interaction-filter-visible', 'Interactions involving visible genes', interactionTracks.every((track) => track.interactionFilterMode === 'visible-genes') ? 'current' : ''))
+    typeItems += submenu('interaction-options', 'Arc options', '',
+      action('interaction-anchors', 'Show endpoint anchors', interactionTracks.every((track) => track.interactionShowAnchors !== false) ? 'current' : '')
+      + action('interaction-names', 'Show interaction names', interactionTracks.every((track) => track.interactionShowNames === true) ? 'current' : '')
+      + action('interaction-height-distance', 'Height by distance', interactionTracks.every((track) => (track.interactionArcHeightMode ?? 'distance') === 'distance') ? 'current' : '')
+      + action('interaction-height-fixed', 'Fixed arc height', interactionTracks.every((track) => track.interactionArcHeightMode === 'fixed') ? 'current' : '')
+      + action('interaction-color-track', 'Track color', interactionTracks.every((track) => (track.interactionColorMode ?? 'track') === 'track') ? 'current' : '')
+      + action('interaction-color-item-rgb', 'Use BEDPE item RGB', interactionTracks.every((track) => track.interactionColorMode === 'item-rgb') ? 'current' : '')
+      + action('interaction-color-score', 'Color by score', interactionTracks.every((track) => track.interactionColorMode === 'score') ? 'current' : '')
+      + action('interaction-min-score', 'Minimum score…')
+      + action('interaction-max-distance', 'Maximum cis distance…')
+      + action('interaction-max-features', 'Display limit…')
+      + action('interaction-line-width', 'Line width…')
+      + action('interaction-opacity', 'Opacity…'))
   }
   if (matricesOnly) typeItems += matrixContextMenuMarkup(matrixTracks, action, submenu)
   if (alignmentTracks.length) {
@@ -1377,6 +1398,11 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
       action('genes-collapsed', 'Collapsed', geneTracks.every((track) => track.geneDisplayMode === 'collapsed' || !track.geneDisplayMode) ? 'current' : '')
       + action('genes-expanded', 'Expanded transcripts', geneTracks.every((track) => track.geneDisplayMode === 'expanded') ? 'current' : '')
       + action('genes-squished', 'Squished transcripts', geneTracks.every((track) => track.geneDisplayMode === 'squished') ? 'current' : ''))
+    typeItems += submenu('genes-options', 'Annotation options', '',
+      action('genes-transcripts-canonical', 'Representative transcript', geneTracks.every((track) => (track.geneTranscriptMode ?? 'canonical') === 'canonical') ? 'current' : '')
+      + action('genes-transcripts-all', 'All transcripts', geneTracks.every((track) => track.geneTranscriptMode === 'all') ? 'current' : '')
+      + action('genes-tss', 'Show TSS indicators', geneTracks.every((track) => track.geneShowTssIndicators !== false) ? 'current' : '')
+      + action('genes-tss-default', 'Use global TSS setting'))
   }
   let sourceItems = ''
   if (one && target.kind !== 'genes') {
@@ -1753,19 +1779,66 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
     lastSelectedTrackId = unlinkedIds.at(-1)
     browser.setSelectedTracks(selectedTrackIds)
   }
-  if (command?.startsWith('genes-')) {
+  if (command === 'genes-tss') store.edit((draft) => {
+    const tracks = draft.tracks.filter((track) => geneIds.includes(track.id) && track.kind === 'genes')
+    const show = !tracks.every((track) => track.geneShowTssIndicators !== false)
+    for (const track of tracks) track.geneShowTssIndicators = show
+  })
+  if (command === 'genes-tss-default') store.edit((draft) => { for (const track of draft.tracks) if (geneIds.includes(track.id) && track.kind === 'genes') track.geneShowTssIndicators = undefined })
+  if (command === 'genes-transcripts-canonical' || command === 'genes-transcripts-all') store.edit((draft) => {
+    const transcriptMode = command === 'genes-transcripts-all' ? 'all' : 'canonical'
+    for (const track of draft.tracks) if (geneIds.includes(track.id) && track.kind === 'genes') track.geneTranscriptMode = transcriptMode
+  })
+  if (command === 'genes-collapsed' || command === 'genes-expanded' || command === 'genes-squished') {
     const mode = command.slice(6) as 'collapsed' | 'expanded' | 'squished'
     store.edit((draft) => { for (const track of draft.tracks) if (geneIds.includes(track.id) && track.kind === 'genes') track.geneDisplayMode = mode })
   }
   if (command?.startsWith('interval-')) {
-    const mode = command.slice(9) as 'collapsed' | 'expanded' | 'squished'
-    store.edit((draft) => { for (const track of draft.tracks) if (intervalIds.includes(track.id) && track.kind === 'interval') track.intervalDisplayMode = mode })
+    if (command === 'interval-labels') store.edit((draft) => { const show = !draft.tracks.filter((track) => intervalIds.includes(track.id) && track.kind === 'interval').every((track) => track.intervalShowLabels !== false); for (const track of draft.tracks) if (intervalIds.includes(track.id) && track.kind === 'interval') track.intervalShowLabels = show })
+    else if (command.startsWith('interval-color-')) { const mode = command.slice(15) as 'track' | 'item-rgb' | 'strand' | 'score'; store.edit((draft) => { for (const track of draft.tracks) if (intervalIds.includes(track.id) && track.kind === 'interval') track.intervalColorMode = mode }) }
+    else if (command === 'interval-min-score' || command === 'interval-max-rows') { const entered = await requestText({ title: command === 'interval-min-score' ? 'Set minimum BED score' : 'Set maximum BED rows', label: command === 'interval-min-score' ? 'Minimum score (blank clears)' : 'Rows (blank clears)', initial: '', submitLabel: 'Apply' }); if (entered !== undefined) store.edit((draft) => { const value = Number(entered); for (const track of draft.tracks) if (intervalIds.includes(track.id) && track.kind === 'interval') { if (command === 'interval-min-score') track.intervalMinScore = entered.trim() && Number.isFinite(value) ? value : undefined; else track.intervalMaxRows = entered.trim() && Number.isFinite(value) ? Math.max(1, Math.round(value)) : undefined } }) }
+    else { const mode = command.slice(9) as 'collapsed' | 'expanded' | 'squished'; store.edit((draft) => { for (const track of draft.tracks) if (intervalIds.includes(track.id) && track.kind === 'interval') track.intervalDisplayMode = mode }) }
   }
   if (command === 'interaction-flip') store.edit((draft) => {
     const tracks = draft.tracks.filter((track) => interactionIds.includes(track.id) && track.kind === 'interaction')
     const direction = tracks.length && tracks.every((track) => track.interactionDirection === 'down') ? 'up' : 'down'
     for (const track of tracks) track.interactionDirection = direction
   })
+  if (command === 'interaction-anchors' || command === 'interaction-names') store.edit((draft) => {
+    const tracks = draft.tracks.filter((track) => interactionIds.includes(track.id) && track.kind === 'interaction')
+    const property = command === 'interaction-anchors' ? 'interactionShowAnchors' : 'interactionShowNames'
+    const enabled = command === 'interaction-anchors' ? !tracks.every((track) => track.interactionShowAnchors !== false) : !tracks.every((track) => track.interactionShowNames === true)
+    for (const track of tracks) track[property] = enabled
+  })
+  if (command === 'interaction-height-distance' || command === 'interaction-height-fixed') store.edit((draft) => {
+    const mode = command === 'interaction-height-fixed' ? 'fixed' : 'distance'
+    for (const track of draft.tracks) if (interactionIds.includes(track.id) && track.kind === 'interaction') track.interactionArcHeightMode = mode
+  })
+  if (command?.startsWith('interaction-color-')) store.edit((draft) => {
+    const mode = command.slice(18) as 'track' | 'item-rgb' | 'score'
+    for (const track of draft.tracks) if (interactionIds.includes(track.id) && track.kind === 'interaction') track.interactionColorMode = mode
+  })
+  if (command === 'interaction-min-score' || command === 'interaction-max-distance' || command === 'interaction-max-features' || command === 'interaction-line-width' || command === 'interaction-opacity') {
+    const option = command.slice(12)
+    const labels: Record<string, [string, string]> = {
+      'min-score': ['Set minimum BEDPE score', 'Minimum score (blank clears)'],
+      'max-distance': ['Set maximum cis distance', 'Distance in bases (blank clears)'],
+      'max-features': ['Set BEDPE display limit', 'Interactions to draw (blank resets to 2,000)'],
+      'line-width': ['Set BEDPE line width', 'Width multiplier (0.25–10; blank resets to 1)'],
+      opacity: ['Set BEDPE opacity', 'Percent (10–100; blank resets to 92)'],
+    }
+    const entered = await requestText({ title: labels[option][0], label: labels[option][1], initial: '', submitLabel: 'Apply' })
+    if (entered !== undefined) store.edit((draft) => {
+      const value = Number(entered)
+      for (const track of draft.tracks) if (interactionIds.includes(track.id) && track.kind === 'interaction') {
+        if (option === 'min-score') track.interactionMinScore = entered.trim() && Number.isFinite(value) ? value : undefined
+        else if (option === 'max-distance') track.interactionMaxDistance = entered.trim() && Number.isFinite(value) && value > 0 ? Math.round(value) : undefined
+        else if (option === 'max-features') track.interactionMaxFeatures = entered.trim() && Number.isFinite(value) ? Math.max(1, Math.min(10_000, Math.round(value))) : 2_000
+        else if (option === 'line-width') track.interactionLineWidth = entered.trim() && Number.isFinite(value) ? Math.max(0.25, Math.min(10, value)) : 1
+        else track.interactionOpacity = entered.trim() && Number.isFinite(value) ? Math.max(10, Math.min(100, Math.round(value))) : 92
+      }
+    })
+  }
   if (command === 'interaction-filter-all' || command === 'interaction-filter-visible') store.edit((draft) => {
     for (const track of draft.tracks) if (interactionIds.includes(track.id) && track.kind === 'interaction') {
       track.interactionFilterMode = command === 'interaction-filter-visible' ? 'visible-genes' : 'all'

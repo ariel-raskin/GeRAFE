@@ -26,7 +26,7 @@
     "version:print": "node scripts/version.mjs --print",
     "version:set": "node scripts/version.mjs",
     "test": "vitest run",
-    "smoke": "node scripts/smoke-browser.mjs",
+    "smoke": "node scripts/run-smoke.mjs",
     "benchmark:data": "node scripts/benchmark-bigwig.mjs",
     "reference:cytobands": "node scripts/update-cytobands.mjs",
     "reference:genes": "node scripts/build-refseq-transcripts.mjs"

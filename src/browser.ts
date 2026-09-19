@@ -1252,7 +1252,8 @@ export class GenomeBrowser {
       wrapText(ctx, track.error ?? 'Could not load track', 24, bottom - 25, 136, 15, 2)
       return 0
     }
-    const visible = track.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) as IntervalFeature[]
+    const visible = (track.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end) as IntervalFeature[])
+      .filter((feature) => spec.intervalMinScore === undefined || (feature.score ?? Number.NEGATIVE_INFINITY) >= spec.intervalMinScore)
     if (!visible.length) {
       if (track.status === 'loading') {
         ctx.fillStyle = palette.muted
@@ -1272,20 +1273,26 @@ export class GenomeBrowser {
     ctx.rect(PLOT_LEFT, top, plotWidth, height)
     ctx.clip()
     ctx.font = mode === 'squished' ? '9px Inter, system-ui, sans-serif' : '10px Inter, system-ui, sans-serif'
+    const intervalScores = visible.map((feature) => feature.score).filter((score): score is number => Number.isFinite(score))
+    const scoreMin = intervalScores.length ? Math.min(...intervalScores) : 0
+    const scoreMax = intervalScores.length ? Math.max(...intervalScores) : 0
     for (const feature of visible) {
       const rawX1 = PLOT_LEFT + (feature.start - this.region.start) * scale
       const rawX2 = PLOT_LEFT + (feature.end - this.region.start) * scale
       const x1 = Math.max(PLOT_LEFT, rawX1)
       const x2 = Math.min(width, rawX2)
-      const labelWidth = feature.name && mode !== 'squished' ? ctx.measureText(feature.name).width + 7 : 0
+      const labelWidth = feature.name && spec.intervalShowLabels !== false && mode !== 'squished' ? ctx.measureText(feature.name).width + 7 : 0
       let lane = 0
       if (mode !== 'collapsed') {
         while (rawX1 <= (laneEnds[lane] ?? Number.NEGATIVE_INFINITY)) lane += 1
+        if (spec.intervalMaxRows && lane >= spec.intervalMaxRows) continue
         laneEnds[lane] = rawX2 + labelWidth + 5
       }
       const centerY = mode === 'collapsed' ? top + height / 2 : top + 9 + lane * rowHeight
       if (centerY + featureHeight > bottom) continue
-      const color = feature.itemRgb ?? spec.color
+      const color = spec.intervalColorMode === 'item-rgb' ? feature.itemRgb ?? spec.color
+        : spec.intervalColorMode === 'strand' ? feature.strand === '+' ? '#d95d74' : feature.strand === '-' ? '#3478c9' : spec.color
+          : spec.intervalColorMode === 'score' && feature.score !== undefined ? scoreColor(feature.score, scoreMin, scoreMax) : spec.color
       ctx.strokeStyle = color
       ctx.fillStyle = color
       ctx.lineWidth = 1
@@ -1316,7 +1323,7 @@ export class GenomeBrowser {
           ctx.stroke()
         }
       }
-      if (feature.name && mode !== 'squished' && x2 + labelWidth < width) {
+      if (feature.name && spec.intervalShowLabels !== false && mode !== 'squished' && x2 + labelWidth < width) {
         ctx.fillStyle = palette.ink
         ctx.fillText(feature.name, x2 + 4, centerY + 3)
       }
@@ -1371,7 +1378,12 @@ export class GenomeBrowser {
       : filterMode === 'visible-genes'
         ? (this.geneSource?.featuresFor(this.region) ?? []).map((gene) => ({ name: gene.name, gene }))
         : []
-    const visible = filterMode === 'all' ? inWindow : filterInteractionsForGenes(inWindow, geneTargets)
+    const geneFiltered = filterMode === 'all' ? inWindow : filterInteractionsForGenes(inWindow, geneTargets)
+    const visible = geneFiltered.filter((feature) => {
+      if (spec.interactionMinScore !== undefined && (feature.score ?? Number.NEGATIVE_INFINITY) < spec.interactionMinScore) return false
+      if (spec.interactionMaxDistance === undefined || feature.chrom1 !== feature.chrom2) return true
+      return Math.abs(((feature.start2 + feature.end2) / 2) - ((feature.start1 + feature.end1) / 2)) <= spec.interactionMaxDistance
+    })
     if (!visible.length) {
       const unavailable = filterMode === 'visible-genes' && !this.geneSource
       if (unavailable) {
@@ -1382,7 +1394,7 @@ export class GenomeBrowser {
       return 0
     }
 
-    const shown = selectInteractionFeatures(visible)
+    const shown = selectInteractionFeatures(visible, spec.interactionMaxFeatures ?? MAX_VISIBLE_INTERACTIONS)
     const scored = shown.map((feature) => feature.score).filter((score): score is number => Number.isFinite(score))
     const scoreMin = scored.length ? Math.min(...scored) : 0
     const scoreMax = scored.length ? Math.max(...scored) : 0
@@ -1393,35 +1405,43 @@ export class GenomeBrowser {
     ctx.beginPath(); ctx.rect(PLOT_LEFT, top + 2, plotWidth, height - 3); ctx.clip()
     for (const feature of shown) {
       const emphasis = interactionEmphasis(feature.score, scoreMin, scoreMax)
-      const color = feature.itemRgb ?? spec.color
+      const color = spec.interactionColorMode === 'item-rgb' ? feature.itemRgb ?? spec.color
+        : spec.interactionColorMode === 'score' && feature.score !== undefined ? scoreColor(feature.score, scoreMin, scoreMax)
+          : spec.color
       ctx.strokeStyle = color
       ctx.fillStyle = color
-      ctx.lineWidth = 0.8 + emphasis * 2.2
-      ctx.globalAlpha = 0.3 + emphasis * 0.62
+      ctx.lineWidth = (spec.interactionLineWidth ?? 1) * (0.8 + emphasis * 2.2)
+      ctx.globalAlpha = ((spec.interactionOpacity ?? 92) / 100) * (0.3 + emphasis * 0.62)
       if (feature.chrom1 === this.region.chr && feature.chrom2 === this.region.chr) {
         const x1 = PLOT_LEFT + (((feature.start1 + feature.end1) / 2) - this.region.start) * scale
         const x2 = PLOT_LEFT + (((feature.start2 + feature.end2) / 2) - this.region.start) * scale
-        const arcHeight = interactionArcHeight(Math.abs(x2 - x1), height)
+        const arcHeight = spec.interactionArcHeightMode === 'fixed' ? Math.max(8, (height - 14) * 0.55) : interactionArcHeight(Math.abs(x2 - x1), height)
         ctx.beginPath()
         ctx.moveTo(x1, baseline)
         ctx.bezierCurveTo(x1, baseline + arcDirection * arcHeight * 1.35, x2, baseline + arcDirection * arcHeight * 1.35, x2, baseline)
         ctx.stroke()
-        drawInteractionAnchor(ctx, feature.start1, feature.end1, this.region, scale, baseline, width)
-        drawInteractionAnchor(ctx, feature.start2, feature.end2, this.region, scale, baseline, width)
+        if (spec.interactionShowAnchors !== false) {
+          drawInteractionAnchor(ctx, feature.start1, feature.end1, this.region, scale, baseline, width)
+          drawInteractionAnchor(ctx, feature.start2, feature.end2, this.region, scale, baseline, width)
+        }
+        if (spec.interactionShowNames && feature.name) {
+          ctx.font = '9px Inter, system-ui, sans-serif'
+          ctx.fillText(feature.name, Math.min(width - 4, Math.max(PLOT_LEFT + 3, (x1 + x2) / 2 + 3)), baseline + arcDirection * arcHeight * 0.7)
+        }
       } else {
         const firstIsVisible = feature.chrom1 === this.region.chr
         const anchorStart = firstIsVisible ? feature.start1 : feature.start2
         const anchorEnd = firstIsVisible ? feature.end1 : feature.end2
         const otherChromosome = firstIsVisible ? feature.chrom2 : feature.chrom1
         const x = PLOT_LEFT + (((anchorStart + anchorEnd) / 2) - this.region.start) * scale
-        drawInteractionAnchor(ctx, anchorStart, anchorEnd, this.region, scale, baseline, width)
+        if (spec.interactionShowAnchors !== false) drawInteractionAnchor(ctx, anchorStart, anchorEnd, this.region, scale, baseline, width)
         ctx.setLineDash([3, 3])
         const markerEnd = arcDirection > 0 ? bottom - 16 : top + 16
         ctx.beginPath(); ctx.moveTo(x, baseline + arcDirection * 3); ctx.lineTo(x, markerEnd); ctx.stroke()
         ctx.setLineDash([])
         ctx.globalAlpha = Math.max(ctx.globalAlpha, 0.75)
         ctx.font = '9px Inter, system-ui, sans-serif'
-        ctx.fillText(otherChromosome, x + 3, arcDirection > 0 ? bottom - 6 : top + 12)
+        ctx.fillText(spec.interactionShowNames && feature.name ? `${feature.name} · ${otherChromosome}` : otherChromosome, x + 3, arcDirection > 0 ? bottom - 6 : top + 12)
       }
     }
     ctx.restore()
@@ -1872,7 +1892,7 @@ export class GenomeBrowser {
           ctx.lineTo(arrowX - direction * 3, centerY + arrowHalfHeight)
           ctx.stroke()
         }
-        if (this.showTssIndicators && mode === 'collapsed' && transcriptIndex === 0 && txX2 - txX1 >= 25) {
+        if ((spec.geneShowTssIndicators ?? this.showTssIndicators) && mode === 'collapsed' && transcriptIndex === 0 && txX2 - txX1 >= 25) {
           const rawTss = gene.strand === '+' ? transcript.start : transcript.end
           if (rawTss > this.region.start && rawTss < this.region.end) drawTssElbow(ctx, PLOT_LEFT + (rawTss - this.region.start) * scale, centerY, direction, color)
         }
@@ -1890,7 +1910,7 @@ export class GenomeBrowser {
     const mode = spec.geneDisplayMode ?? 'collapsed'
     const slotHeight = mode === 'squished' ? 9 : mode === 'expanded' ? 15 : 15
     const genes = this.geneSource?.featuresFor(this.region) ?? []
-    const transcriptCount = genes.reduce((sum, gene) => sum + gene.transcriptModels.length, 0)
+    const transcriptCount = genes.reduce((sum, gene) => sum + (spec.geneTranscriptMode === 'all' ? gene.transcriptModels.length : (preferredTranscript(gene) ? 1 : 0)), 0)
     const plotWidth = width - PLOT_LEFT
     const scale = plotWidth / (this.region.end - this.region.start)
     const slotEnds: number[] = []
@@ -1931,7 +1951,8 @@ export class GenomeBrowser {
       return { blocks: genes.map((gene) => ({ gene, transcripts: [], firstSlot: 0, geneX1: PLOT_LEFT, geneX2: width })), slotHeight, contentHeight: slotHeight + GENE_CONTENT_PADDING * 2, transcriptCount }
     }
     for (const gene of genes) {
-      const transcripts = gene.transcriptModels
+      const preferred = preferredTranscript(gene)
+      const transcripts = spec.geneTranscriptMode === 'all' ? gene.transcriptModels : preferred ? [preferred] : []
       if (!transcripts.length) continue
       const requiredSlots = transcripts.length + 1
       const geneX1 = Math.max(PLOT_LEFT, PLOT_LEFT + (gene.start - this.region.start) * scale)
@@ -2756,6 +2777,11 @@ function drawMatrixLegend(
 function interactionEmphasis(score: number | undefined, minimum: number, maximum: number): number {
   if (!Number.isFinite(score) || maximum <= minimum) return 0.55
   return Math.max(0, Math.min(1, (score! - minimum) / (maximum - minimum)))
+}
+
+function scoreColor(score: number, minimum: number, maximum: number): string {
+  const fraction = maximum > minimum ? Math.max(0, Math.min(1, (score - minimum) / (maximum - minimum))) : 0.65
+  return `hsl(${250 - fraction * 210} 62% 48%)`
 }
 
 function drawInteractionAnchor(
