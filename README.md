@@ -36,7 +36,7 @@ GeRAFE is currently developed and tested as a Windows desktop application.
 - Two independently scrollable and resizable track panes with a fixed coordinate header.
 - Reorder tracks by dragging and organize related tracks into groups.
 - Select one or multiple tracks and edit their colors, heights, height locks, grouping, and shared type-specific display settings.
-- Automatic visible-window scaling, fixed scales, linked scales, and optional zero-flooring for quantitative tracks.
+- Automatic visible-window or robust-percentile scaling, fixed ranges, linked scales, symmetric zero-centered domains, linear/log/symmetric-log transforms, filled/line/bar styles, opacity, and optional zero-flooring for quantitative tracks.
 - Automatic positive/negative signal pairing from common filename markers such as `plus`/`minus` and `pos`/`neg`, with one shared zero axis, red/blue strand colors, and independently scaled strand magnitudes.
 - Stranded pairs remain compatible with groups; grouped autoscaling and color controls keep ordinary, positive, and negative channels separate.
 - Collapsed, expanded, and squished layouts for interval and gene tracks.

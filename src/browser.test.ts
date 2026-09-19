@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, interactionArcHeight, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, interactionArcHeight, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
@@ -223,6 +223,13 @@ describe('contact-matrix rendering helpers', () => {
     expect(inspectMatrixPoint(matrix, { chr: 'chr1', start: 0, end: 100 }, 25, 49.5, 0, 100, 0, 60, 'up', 100)).toMatchObject({ bin1: 10, bin2: 30, value: 7.5 })
     expect(inspectMatrixPoint(matrix, { chr: 'chr1', start: 0, end: 100 }, 25, 10.5, 0, 100, 0, 60, 'down', 100)).toMatchObject({ bin1: 10, bin2: 30, value: 7.5 })
     expect(inspectMatrixPoint(matrix, { chr: 'chr1', start: 0, end: 100 }, 25, 39.5, 0, 100, 0, 60, 'up', 10)).toBeUndefined()
+  })
+
+  it('transforms signal values for linear, log, and signed-log scales', () => {
+    expect(signalTransform(12, 'linear')).toBe(12)
+    expect(signalTransform(99, 'log1p')).toBeCloseTo(Math.log(100))
+    expect(signalTransform(-99, 'log1p')).toBe(0)
+    expect(signalTransform(-99, 'symlog')).toBeCloseTo(-Math.log(100))
   })
 
 })

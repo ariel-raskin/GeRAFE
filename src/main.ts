@@ -1276,6 +1276,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const signalScaleIds = signalsOnly ? selected.flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter((id): id is string => Boolean(id)) : []
   const signalScales = store.current.scales.filter((scale) => signalScaleIds.includes(scale.id))
   const scaleModeLabel = signalScales.length && signalScales.every((scale) => scale.mode === 'auto-visible') ? 'Automatic'
+    : signalScales.length && signalScales.every((scale) => scale.mode === 'auto-percentile') ? 'Robust'
     : signalScales.length && signalScales.every((scale) => scale.mode === 'fixed') ? 'Fixed' : 'Mixed'
   const canShareSignalScales = signalsOnly && signalTracksCanShareScales(selected)
   const sharedSignalScales = signalsOnly && selected.length > 1 && signalTracksShareScales(selected)
@@ -1307,11 +1308,23 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   let typeItems = ''
   if (signalsOnly) {
     const scaleItems = action('scale-auto', 'Autoscale to visible data', signalScales.every((scale) => scale.mode === 'auto-visible') ? 'current' : '')
+      + action('scale-robust', 'Robust 99th-percentile autoscale', signalScales.every((scale) => scale.mode === 'auto-percentile') ? 'current' : '')
       + action('scale-fixed', 'Set fixed range…', signalScales.length > 0 && signalScales.every((scale) => scale.mode === 'fixed') ? 'current' : '')
+      + action('scale-symmetric', 'Use symmetric zero scale', signalScales.every((scale) => scale.symmetric) ? 'current' : '')
       + (canShareSignalScales ? action('scale-toggle-sharing', 'Share y-axis scale', sharedSignalScales ? 'current' : '') : '')
       + (selectedTrackSharesOutsideSelection ? action('unlink-scales', 'Unlink from shared scale') : '')
       + (ordinarySignalsOnly ? action('prevent-negative', 'Clamp negative values to zero', selected.every((track) => track.allowNegativeValues === false) ? 'current' : '') : '')
     typeItems += submenu('signal-scale', 'Y-axis scale', scaleModeLabel, scaleItems)
+    const style = selected.every((track) => (track.signalRenderStyle ?? 'fill') === (selected[0]?.signalRenderStyle ?? 'fill'))
+      ? (selected[0]?.signalRenderStyle ?? 'fill') : 'mixed'
+    typeItems += submenu('signal-presentation', 'Signal presentation', capitalize(style),
+      action('signal-style-fill', 'Filled area', selected.every((track) => (track.signalRenderStyle ?? 'fill') === 'fill') ? 'current' : '')
+      + action('signal-style-line', 'Line', selected.every((track) => track.signalRenderStyle === 'line') ? 'current' : '')
+      + action('signal-style-bar', 'Bars', selected.every((track) => track.signalRenderStyle === 'bar') ? 'current' : '')
+      + action('signal-transform-linear', 'Linear scale', signalScales.every((scale) => (scale.transform ?? 'linear') === 'linear') ? 'current' : '')
+      + action('signal-transform-log1p', 'Log scale', signalScales.every((scale) => scale.transform === 'log1p') ? 'current' : '')
+      + action('signal-transform-symlog', 'Symmetric log scale', signalScales.every((scale) => scale.transform === 'symlog') ? 'current' : '')
+      + action('signal-opacity', 'Set opacity…'))
     if (pairable) typeItems += action('strand-link', 'Link as stranded track')
     if (strandedOnly) typeItems += action('strand-unlink', one ? 'Separate stranded pair' : 'Separate stranded pairs')
   }
@@ -1678,6 +1691,29 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
     const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
     for (const scale of draft.scales) if (scaleIds.has(scale.id)) scale.mode = 'auto-visible'
   })
+  if (command === 'scale-robust') store.edit((draft) => {
+    const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
+    for (const scale of draft.scales) if (scaleIds.has(scale.id)) { scale.mode = 'auto-percentile'; scale.percentile = 0.99 }
+  })
+  if (command === 'scale-symmetric') store.edit((draft) => {
+    const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
+    const symmetric = !draft.scales.filter((scale) => scaleIds.has(scale.id)).every((scale) => scale.symmetric)
+    for (const scale of draft.scales) if (scaleIds.has(scale.id)) scale.symmetric = symmetric || undefined
+  })
+  if (command?.startsWith('signal-style-')) store.edit((draft) => {
+    const style = command.slice('signal-style-'.length) as 'fill' | 'line' | 'bar'
+    for (const track of draft.tracks) if (signalIds.includes(track.id) && (track.kind === 'signal' || track.kind === 'stranded')) track.signalRenderStyle = style
+  })
+  if (command?.startsWith('signal-transform-')) store.edit((draft) => {
+    const transform = command.slice('signal-transform-'.length) as 'linear' | 'log1p' | 'symlog'
+    const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
+    for (const scale of draft.scales) if (scaleIds.has(scale.id)) scale.transform = transform === 'linear' ? undefined : transform
+  })
+  if (command === 'signal-opacity') {
+    const entered = await requestText({ title: 'Set signal opacity', label: 'Opacity (10–100%)', initial: String(store.current.tracks.find((track) => signalIds.includes(track.id))?.signalOpacity ?? 84), submitLabel: 'Set opacity', validate: (value) => Number(value) >= 10 && Number(value) <= 100 ? undefined : 'Enter a value from 10 to 100.' })
+    const opacity = Number(entered)
+    if (Number.isFinite(opacity)) store.edit((draft) => { for (const track of draft.tracks) if (signalIds.includes(track.id)) track.signalOpacity = Math.round(opacity) })
+  }
   if (command === 'prevent-negative') store.edit((draft) => {
     const targets = draft.tracks.filter((track) => ids.includes(track.id) && track.kind === 'signal' && !track.signalStrand)
     const preventing = targets.length > 0 && targets.every((track) => track.allowNegativeValues === false)
