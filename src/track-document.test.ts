@@ -130,6 +130,11 @@ describe('track document', () => {
     })
   })
 
+  it('initializes a new gene track with the supplied global TSS preference', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 }, { geneShowTssIndicators: false })
+    expect(document.tracks.find((track) => track.kind === 'genes')).toMatchObject({ geneShowTssIndicators: false })
+  })
+
   it('creates alignment tracks with independent BAM display and filtering options', () => {
     const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
     const track = addAlignmentTrack(document, { id: 'bam-source', name: 'reads.bam', format: 'bam', files: [] }, { id: 'bam-track' })

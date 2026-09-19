@@ -226,7 +226,7 @@ export class TrackDocumentStore {
   }
 }
 
-export function createTrackDocument(referenceId: string, region: Region): TrackDocument {
+export function createTrackDocument(referenceId: string, region: Region, options: { geneShowTssIndicators?: boolean } = {}): TrackDocument {
   return {
     schemaVersion: TRACK_DOCUMENT_VERSION,
     referenceId,
@@ -242,6 +242,7 @@ export function createTrackDocument(referenceId: string, region: Region): TrackD
       height: 32,
       pane: 'bottom',
       geneDisplayMode: 'collapsed',
+      geneShowTssIndicators: options.geneShowTssIndicators,
     }],
     groups: [],
     scales: [],

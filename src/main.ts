@@ -435,7 +435,7 @@ const initialRegion = restoredDocument && restoredDocument.referenceId === activ
   : defaultRegion(activeReference)
 const store = new TrackDocumentStore(restoredDocument && restoredDocument.referenceId === activeReference.id
   ? { ...restoredDocument, region: initialRegion }
-  : createTrackDocument(activeReference.id, initialRegion))
+  : createTrackDocument(activeReference.id, initialRegion, { geneShowTssIndicators: savedTssIndicators() }))
 const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChromosomes, initialRegion, {
   onRegionChange(region) {
     locusInput.value = formatLocus(region)
@@ -585,7 +585,7 @@ document.querySelector<HTMLButtonElement>('#new-workspace-menu-item')!.addEventL
   bottomPaneAutoFit = true
   runtimeSources.clear()
   selectedTrackIds.clear()
-  store.replace(createTrackDocument(activeReference.id, browser.getRegion()))
+  store.replace(createTrackDocument(activeReference.id, browser.getRegion(), { geneShowTssIndicators: savedTssIndicators() }))
   showToast('Started a new workspace')
 })
 document.querySelector<HTMLButtonElement>('#open-workspace-menu-item')!.addEventListener('click', () => {
@@ -1344,7 +1344,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
       + action('interval-max-rows', 'Maximum rows…'))
   }
   if (interactionTracks.length) {
-    typeItems += action('interaction-flip', 'Draw arcs downward', interactionTracks.every((track) => track.interactionDirection === 'down') ? 'current' : '')
+    typeItems += action('interaction-flip', 'Toggle arc orientation')
     const filterLabel = interactionTracks.every((track) => track.interactionFilterMode === 'visible-genes') ? 'Visible genes'
       : interactionTracks.every((track) => track.interactionFilterMode === 'genes') ? 'Gene symbols'
         : interactionTracks.every((track) => !track.interactionFilterMode || track.interactionFilterMode === 'all') ? 'All' : 'Mixed'
@@ -1398,11 +1398,15 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
       action('genes-collapsed', 'Collapsed', geneTracks.every((track) => track.geneDisplayMode === 'collapsed' || !track.geneDisplayMode) ? 'current' : '')
       + action('genes-expanded', 'Expanded transcripts', geneTracks.every((track) => track.geneDisplayMode === 'expanded') ? 'current' : '')
       + action('genes-squished', 'Squished transcripts', geneTracks.every((track) => track.geneDisplayMode === 'squished') ? 'current' : ''))
+    const transcriptMode = sameValue(geneTracks.map((track) => track.geneTranscriptMode ?? 'canonical'))
+      ? geneTracks[0].geneTranscriptMode ?? 'canonical' : 'mixed'
+    const tssMode = sameValue(geneTracks.map((track) => track.geneShowTssIndicators === undefined ? 'global' : track.geneShowTssIndicators ? 'shown' : 'hidden'))
+      ? (geneTracks[0].geneShowTssIndicators === undefined ? 'global' : geneTracks[0].geneShowTssIndicators ? 'shown' : 'hidden') : 'mixed'
+    const tssLabel = tssMode === 'global' ? `TSS indicators: Global (${savedTssIndicators() ? 'shown' : 'hidden'})`
+      : tssMode === 'shown' ? 'TSS indicators: Shown' : tssMode === 'hidden' ? 'TSS indicators: Hidden' : 'TSS indicators: Mixed'
     typeItems += submenu('genes-options', 'Annotation options', '',
-      action('genes-transcripts-canonical', 'Representative transcript', geneTracks.every((track) => (track.geneTranscriptMode ?? 'canonical') === 'canonical') ? 'current' : '')
-      + action('genes-transcripts-all', 'All transcripts', geneTracks.every((track) => track.geneTranscriptMode === 'all') ? 'current' : '')
-      + action('genes-tss', 'Show TSS indicators', geneTracks.every((track) => track.geneShowTssIndicators !== false) ? 'current' : '')
-      + action('genes-tss-default', 'Use global TSS setting'))
+      action('genes-transcripts-toggle', transcriptMode === 'all' ? 'All transcripts' : transcriptMode === 'canonical' ? 'Representative transcript' : 'Transcript selection: Mixed', transcriptMode === 'all' ? 'Representative' : 'All')
+      + action('genes-tss-toggle', tssLabel, tssMode === 'global' ? (savedTssIndicators() ? 'Hidden' : 'Shown') : 'Global'))
   }
   let sourceItems = ''
   if (one && target.kind !== 'genes') {
@@ -1779,15 +1783,15 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
     lastSelectedTrackId = unlinkedIds.at(-1)
     browser.setSelectedTracks(selectedTrackIds)
   }
-  if (command === 'genes-tss') store.edit((draft) => {
+  if (command === 'genes-tss-toggle') store.edit((draft) => {
     const tracks = draft.tracks.filter((track) => geneIds.includes(track.id) && track.kind === 'genes')
-    const show = !tracks.every((track) => track.geneShowTssIndicators !== false)
-    for (const track of tracks) track.geneShowTssIndicators = show
+    const useGlobal = tracks.length > 0 && tracks.every((track) => track.geneShowTssIndicators !== undefined)
+    for (const track of tracks) track.geneShowTssIndicators = useGlobal ? undefined : !savedTssIndicators()
   })
-  if (command === 'genes-tss-default') store.edit((draft) => { for (const track of draft.tracks) if (geneIds.includes(track.id) && track.kind === 'genes') track.geneShowTssIndicators = undefined })
-  if (command === 'genes-transcripts-canonical' || command === 'genes-transcripts-all') store.edit((draft) => {
-    const transcriptMode = command === 'genes-transcripts-all' ? 'all' : 'canonical'
-    for (const track of draft.tracks) if (geneIds.includes(track.id) && track.kind === 'genes') track.geneTranscriptMode = transcriptMode
+  if (command === 'genes-transcripts-toggle') store.edit((draft) => {
+    const tracks = draft.tracks.filter((track) => geneIds.includes(track.id) && track.kind === 'genes')
+    const transcriptMode = tracks.length && tracks.every((track) => track.geneTranscriptMode === 'all') ? 'canonical' : 'all'
+    for (const track of tracks) track.geneTranscriptMode = transcriptMode
   })
   if (command === 'genes-collapsed' || command === 'genes-expanded' || command === 'genes-squished') {
     const mode = command.slice(6) as 'collapsed' | 'expanded' | 'squished'
