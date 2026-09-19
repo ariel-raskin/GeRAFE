@@ -229,7 +229,7 @@ Useful commands:
 | `npm run version:set -- 0.1.3` | Set all application version fields together |
 | `npm test` | Run the Vitest unit suite |
 | `npm run build` | Type-check and build the production frontend |
-| `npm run smoke` | Run the general browser smoke test against a running development server |
+| `npm run smoke` | Start an isolated temporary development server, run the general browser smoke test, then stop it |
 | `npm run benchmark:data -- "C:\path\to\signal.bw"` | Benchmark indexed BigWig reads |
 
 Parser and renderer changes should also be checked with the relevant scripts under `scripts/` using real local files. Genomic test data and generated executables must not be committed.
