@@ -1,12 +1,14 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 17 as const
+export const TRACK_DOCUMENT_VERSION = 18 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
 
 export type SourceFormat = 'bigwig' | 'bedgraph' | 'tdf' | 'bam' | 'bed' | 'bedpe' | 'hic' | 'cool' | 'mcool'
-export type ScaleMode = 'auto-visible' | 'fixed'
+export type ScaleMode = 'auto-visible' | 'auto-percentile' | 'fixed'
+export type SignalTransform = 'linear' | 'log1p' | 'symlog'
+export type SignalRenderStyle = 'fill' | 'line' | 'bar'
 export type SignalStrand = 'plus' | 'minus'
 export type SignalScaleChannel = 'ordinary' | SignalStrand
 export type InteractionDirection = 'up' | 'down'
@@ -51,6 +53,11 @@ export interface ScaleBinding {
   mode: ScaleMode
   includeZero: boolean
   limits?: { min: number; max: number }
+  /** Upper/lower quantiles used by robust visible-window scaling. */
+  percentile?: number
+  /** Use equal positive and negative magnitude around zero. */
+  symmetric?: boolean
+  transform?: SignalTransform
 }
 
 export interface TrackSpec {
@@ -115,6 +122,9 @@ export interface TrackSpec {
   strandAutoLinkDisabled?: boolean
   /** False clamps ordinary signal values to the zero baseline for display and autoscaling. */
   allowNegativeValues?: boolean
+  signalRenderStyle?: SignalRenderStyle
+  /** Opacity percentage from 10 through 100. */
+  signalOpacity?: number
 }
 
 export interface TrackDocument {
@@ -597,6 +607,9 @@ export function linkScales(draft: TrackDocument, trackIds: readonly string[]): v
       mode: previous?.mode ?? 'auto-visible',
       includeZero: previous?.includeZero ?? true,
       limits: previous?.limits ? { ...previous.limits } : undefined,
+      percentile: previous?.percentile,
+      symmetric: previous?.symmetric,
+      transform: previous?.transform,
     }
     draft.scales.push(binding)
     for (const ref of refs) setScaleChannelBinding(ref.track, channel, binding.id)
@@ -615,6 +628,9 @@ export function unlinkScales(draft: TrackDocument, trackIds: readonly string[]):
         mode: existing?.mode ?? 'auto-visible',
         includeZero: existing?.includeZero ?? true,
         limits: existing?.limits ? { ...existing.limits } : undefined,
+        percentile: existing?.percentile,
+        symmetric: existing?.symmetric,
+        transform: existing?.transform,
       }
       draft.scales.push(binding)
       setScaleChannelBinding(track, ref.channel, binding.id)
@@ -636,6 +652,7 @@ export function computeScaleDomains(
         : safeDomain(binding.limits.min, binding.limits.max, binding.includeZero))
       continue
     }
+    const values: number[] = []
     let min = binding.includeZero ? 0 : Number.POSITIVE_INFINITY
     let max = binding.includeZero ? 0 : Number.NEGATIVE_INFINITY
     for (const track of document.tracks) {
@@ -646,10 +663,24 @@ export function computeScaleDomains(
           const score = ref.channel === 'ordinary'
             ? (track.allowNegativeValues === false ? Math.max(0, feature.score) : feature.score)
             : Math.abs(feature.score)
+          values.push(score)
           min = Math.min(min, score)
           max = Math.max(max, score)
         }
       }
+    }
+    if (binding.mode === 'auto-percentile' && values.length) {
+      const sorted = values.sort((a, b) => a - b)
+      const percentile = Math.max(0.5, Math.min(1, binding.percentile ?? 0.99))
+      const high = sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * percentile))]!
+      const low = sorted[Math.max(0, Math.ceil((sorted.length - 1) * (1 - percentile)))]!
+      min = binding.includeZero ? Math.min(0, low) : low
+      max = binding.includeZero ? Math.max(0, high) : high
+    }
+    if (binding.symmetric) {
+      const magnitude = Math.max(Math.abs(min), Math.abs(max), 1e-9)
+      min = -magnitude
+      max = magnitude
     }
     if (!Number.isFinite(min) || !Number.isFinite(max)) { min = 0; max = 1 }
     result.set(binding.id, safeDomain(min, max, binding.includeZero))
@@ -658,7 +689,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -691,6 +722,9 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     negativeScaleBindingId: track.kind === 'stranded' && track.negativeScaleBindingId && scaleIds.has(track.negativeScaleBindingId) ? track.negativeScaleBindingId : undefined,
     strandAutoLinkDisabled: track.kind === 'signal' && track.strandAutoLinkDisabled === true ? true : undefined,
     allowNegativeValues: track.kind === 'signal' ? track.allowNegativeValues !== false : undefined,
+    signalRenderStyle: (track.kind === 'signal' || track.kind === 'stranded') && (track.signalRenderStyle === 'line' || track.signalRenderStyle === 'bar') ? track.signalRenderStyle as SignalRenderStyle : (track.kind === 'signal' || track.kind === 'stranded') ? 'fill' as SignalRenderStyle : undefined,
+    signalOpacity: (track.kind === 'signal' || track.kind === 'stranded') && typeof track.signalOpacity === 'number' && Number.isFinite(track.signalOpacity)
+      ? Math.max(10, Math.min(100, Math.round(track.signalOpacity))) : (track.kind === 'signal' || track.kind === 'stranded') ? 100 : undefined,
     geneDisplayMode: track.kind === 'genes' && (track.geneDisplayMode === 'collapsed' || track.geneDisplayMode === 'expanded' || track.geneDisplayMode === 'squished')
       ? track.geneDisplayMode
       : track.kind === 'genes' ? 'collapsed' : undefined,
@@ -896,7 +930,7 @@ function isGroup(value: unknown): value is DisplayGroup {
 
 function isScale(value: unknown): value is ScaleBinding {
   return isRecord(value) && typeof value.id === 'string' && typeof value.label === 'string'
-    && ['auto-visible', 'fixed'].includes(value.mode) && typeof value.includeZero === 'boolean'
+    && ['auto-visible', 'auto-percentile', 'fixed'].includes(value.mode) && typeof value.includeZero === 'boolean'
 }
 
 function isTrack(value: unknown, legacyHeight = false): value is TrackSpec {
@@ -939,5 +973,11 @@ function cloneScale(scale: ScaleBinding): ScaleBinding {
   const limits = scale.limits && Number.isFinite(scale.limits.min) && Number.isFinite(scale.limits.max)
     ? { ...scale.limits }
     : undefined
-  return { ...scale, limits }
+  return {
+    ...scale,
+    limits,
+    percentile: typeof scale.percentile === 'number' && Number.isFinite(scale.percentile) ? Math.max(0.5, Math.min(1, scale.percentile)) : undefined,
+    symmetric: scale.symmetric === true ? true : undefined,
+    transform: scale.transform === 'log1p' || scale.transform === 'symlog' ? scale.transform : undefined,
+  }
 }

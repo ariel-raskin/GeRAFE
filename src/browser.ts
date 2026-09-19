@@ -1088,6 +1088,11 @@ export class GenomeBrowser {
       max = Math.max(max, bin.max)
     }
     const amplitude = Math.max(1e-9, max - min)
+    const binding = spec.scaleBindingId ? this.document.scales.find((scale) => scale.id === spec.scaleBindingId) : undefined
+    const transform = binding?.transform ?? 'linear'
+    const transformedMin = signalTransform(min, transform)
+    const transformedMax = signalTransform(max, transform)
+    const transformedAmplitude = Math.max(1e-9, transformedMax - transformedMin)
     const { top: chartTop, bottom: chartBottom } = signalChartBounds(top, bottom, min >= 0 && spec.signalStrand !== 'minus')
     const chartHeight = chartBottom - chartTop
     const rawZeroY = chartBottom - ((0 - min) / amplitude) * chartHeight
@@ -1108,9 +1113,11 @@ export class GenomeBrowser {
       chartBottom,
       zeroY,
       (value) => spec.signalStrand === 'minus'
-        ? chartTop + (value / Math.max(1e-9, max)) * chartHeight
-        : chartBottom - ((value - min) / amplitude) * chartHeight,
+        ? chartTop + (signalTransform(value, transform) / Math.max(1e-9, transformedMax)) * chartHeight
+        : chartBottom - ((signalTransform(value, transform) - transformedMin) / transformedAmplitude) * chartHeight,
       spec.color,
+      spec.signalRenderStyle ?? 'fill',
+      (spec.signalOpacity ?? 100) / 100,
     )
     const scaleValue = max !== 0 ? max : min !== 0 ? Math.abs(min) : 0
     if (scaleValue !== 0) {
@@ -1163,6 +1170,8 @@ export class GenomeBrowser {
       .map((feature) => ({ ...feature, score: Math.abs(feature.score) }))
     const plusMax = plusDomain?.max ?? maximumMagnitude(plusVisible)
     const minusMax = minusDomain?.max ?? maximumMagnitude(minusVisible)
+    const plusBinding = spec.scaleBindingId ? this.document.scales.find((scale) => scale.id === spec.scaleBindingId) : undefined
+    const minusBinding = spec.negativeScaleBindingId ? this.document.scales.find((scale) => scale.id === spec.negativeScaleBindingId) : undefined
     const labels = [plusMax, minusMax].filter((value) => value > 0).map(formatScore)
     ctx.font = '10px ui-monospace, SFMono-Regular, Consolas, monospace'
     const scaleLaneWidth = labels.length ? Math.max(SCALE_LANE_MIN_WIDTH, ...labels.map((label) => Math.ceil(ctx.measureText(label).width) + 12)) : 0
@@ -1191,8 +1200,8 @@ export class GenomeBrowser {
       if (minusMax > 0) { ctx.moveTo(LABEL_WIDTH - 7, chartBottom - 0.5); ctx.lineTo(LABEL_WIDTH + 7, chartBottom - 0.5) }
       ctx.stroke()
     }
-    drawMagnitudeBins(ctx, binFeatures(plusVisible, this.region, Math.floor(plotWidth)), PLOT_LEFT, chartTop, zeroY, Math.max(1e-9, plusMax), spec.color, false)
-    drawMagnitudeBins(ctx, binFeatures(minusVisible, this.region, Math.floor(plotWidth)), PLOT_LEFT, zeroY, chartBottom, Math.max(1e-9, minusMax), spec.negativeColor ?? spec.color, true)
+    drawMagnitudeBins(ctx, binFeatures(plusVisible, this.region, Math.floor(plotWidth)), PLOT_LEFT, chartTop, zeroY, Math.max(1e-9, plusMax), spec.color, false, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 100) / 100, plusBinding?.transform ?? 'linear')
+    drawMagnitudeBins(ctx, binFeatures(minusVisible, this.region, Math.floor(plotWidth)), PLOT_LEFT, zeroY, chartBottom, Math.max(1e-9, minusMax), spec.negativeColor ?? spec.color, true, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 100) / 100, minusBinding?.transform ?? 'linear')
 
     const problems = [plus, minus].filter((runtime) => runtime.status === 'offline' || runtime.status === 'error')
     if (problems.length) {
@@ -2772,10 +2781,13 @@ function drawMagnitudeBins(
   maximum: number,
   color: string,
   downward: boolean,
+  style: 'fill' | 'line' | 'bar',
+  opacity: number,
+  transform: 'linear' | 'log1p' | 'symlog',
 ): void {
   const height = bottom - top
   ctx.fillStyle = color
-  ctx.globalAlpha = 0.84
+  ctx.globalAlpha = opacity
   ctx.save()
   ctx.beginPath(); ctx.rect(left, top, bins.length, height); ctx.clip()
   for (let start = 0; start < bins.length;) {
@@ -2784,18 +2796,27 @@ function drawMagnitudeBins(
     let end = start
     while (end + 1 < bins.length && bins[end + 1]) end += 1
     const baseline = downward ? top : bottom
+    const transformedMaximum = Math.max(1e-9, signalTransform(maximum, transform))
+    if (style === 'bar') {
+      for (let x = start; x <= end; x += 1) {
+        const magnitude = signalTransform(Math.max(Math.abs(bins[x]!.min), Math.abs(bins[x]!.max)), transform)
+        const y = downward ? top + (magnitude / transformedMaximum) * height : bottom - (magnitude / transformedMaximum) * height
+        ctx.fillRect(left + x, Math.min(baseline, y), 1, Math.max(1, Math.abs(y - baseline)))
+      }
+      start = end + 1
+      continue
+    }
     ctx.beginPath()
     ctx.moveTo(left + start, baseline)
     for (let x = start; x <= end; x += 1) {
       const bin = bins[x]!
-      const magnitude = Math.max(Math.abs(bin.min), Math.abs(bin.max))
-      const y = downward ? top + (magnitude / maximum) * height : bottom - (magnitude / maximum) * height
+      const magnitude = signalTransform(Math.max(Math.abs(bin.min), Math.abs(bin.max)), transform)
+      const y = downward ? top + (magnitude / transformedMaximum) * height : bottom - (magnitude / transformedMaximum) * height
       ctx.lineTo(left + x, y)
       ctx.lineTo(left + x + 1, y)
     }
     ctx.lineTo(left + end + 1, baseline)
-    ctx.closePath()
-    ctx.fill()
+    if (style === 'line') { ctx.strokeStyle = color; ctx.lineWidth = 1.25; ctx.stroke() } else { ctx.closePath(); ctx.fill() }
     start = end + 1
   }
   ctx.restore()
@@ -2811,9 +2832,11 @@ function drawSignalBins(
   zeroY: number,
   valueToY: (value: number) => number,
   color: string,
+  style: 'fill' | 'line' | 'bar',
+  opacity: number,
 ): void {
   ctx.fillStyle = color
-  ctx.globalAlpha = 0.84
+  ctx.globalAlpha = opacity
   ctx.save()
   ctx.beginPath(); ctx.rect(left, top, bins.length, bottom - top); ctx.clip()
   for (let start = 0; start < bins.length;) {
@@ -2821,6 +2844,17 @@ function drawSignalBins(
     if (start >= bins.length) break
     let end = start
     while (end + 1 < bins.length && bins[end + 1]) end += 1
+    if (style === 'bar') {
+      for (let x = start; x <= end; x += 1) {
+        const bin = bins[x]!
+        const upper = valueToY(Math.max(0, bin.max))
+        const lower = valueToY(Math.min(0, bin.min))
+        ctx.fillRect(left + x, Math.min(zeroY, upper), 1, Math.max(1, Math.abs(zeroY - upper)))
+        if (lower !== zeroY) ctx.fillRect(left + x, Math.min(zeroY, lower), 1, Math.max(1, Math.abs(zeroY - lower)))
+      }
+      start = end + 1
+      continue
+    }
     ctx.beginPath()
     ctx.moveTo(left + start, zeroY)
     for (let x = start; x <= end; x += 1) {
@@ -2833,12 +2867,17 @@ function drawSignalBins(
       ctx.lineTo(left + x + 1, y)
       ctx.lineTo(left + x, y)
     }
-    ctx.closePath()
-    ctx.fill()
+    if (style === 'line') { ctx.strokeStyle = color; ctx.lineWidth = 1.25; ctx.stroke() } else { ctx.closePath(); ctx.fill() }
     start = end + 1
   }
   ctx.restore()
   ctx.globalAlpha = 1
+}
+
+export function signalTransform(value: number, transform: 'linear' | 'log1p' | 'symlog'): number {
+  if (transform === 'linear') return value
+  if (transform === 'log1p') return Math.log1p(Math.max(0, value))
+  return Math.sign(value) * Math.log1p(Math.abs(value))
 }
 
 interface AlignmentRenderGroup {
