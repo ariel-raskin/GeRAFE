@@ -134,6 +134,9 @@ export interface TrackSpec {
   bamIncludeDuplicates?: boolean
   bamIncludeSecondary?: boolean
   bamIncludeSupplementary?: boolean
+  bamSortMode?: 'start' | 'strand' | 'mapq' | 'insert-size'
+  bamGroupMode?: 'none' | 'strand' | 'read-group'
+  bamMaxReads?: number
   displayGroupId?: string
   scaleBindingId?: string
   signalStrand?: SignalStrand
@@ -844,6 +847,9 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     bamIncludeDuplicates: track.kind === 'alignment' ? track.bamIncludeDuplicates === true : undefined,
     bamIncludeSecondary: track.kind === 'alignment' ? track.bamIncludeSecondary === true : undefined,
     bamIncludeSupplementary: track.kind === 'alignment' ? track.bamIncludeSupplementary === true : undefined,
+    bamSortMode: track.kind === 'alignment' && ['strand', 'mapq', 'insert-size'].includes(track.bamSortMode as string) ? track.bamSortMode as 'strand' | 'mapq' | 'insert-size' : track.kind === 'alignment' ? 'start' as const : undefined,
+    bamGroupMode: track.kind === 'alignment' && (track.bamGroupMode === 'strand' || track.bamGroupMode === 'read-group') ? track.bamGroupMode : track.kind === 'alignment' ? 'none' as const : undefined,
+    bamMaxReads: track.kind === 'alignment' && typeof track.bamMaxReads === 'number' && Number.isFinite(track.bamMaxReads) ? Math.max(100, Math.min(100_000, Math.round(track.bamMaxReads))) : track.kind === 'alignment' ? 10_000 : undefined,
   })) : []
   const document: TrackDocument = {
     schemaVersion: TRACK_DOCUMENT_VERSION,
