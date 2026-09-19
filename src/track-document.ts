@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 18 as const
+export const TRACK_DOCUMENT_VERSION = 19 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -13,6 +13,9 @@ export type SignalStrand = 'plus' | 'minus'
 export type SignalScaleChannel = 'ordinary' | SignalStrand
 export type InteractionDirection = 'up' | 'down'
 export type InteractionFilterMode = 'all' | 'genes' | 'visible-genes'
+export type IntervalColorMode = 'track' | 'item-rgb' | 'strand' | 'score'
+export type InteractionColorMode = 'track' | 'item-rgb' | 'score'
+export type InteractionArcHeightMode = 'distance' | 'fixed'
 export type MatrixPalette = 'monochrome' | 'warm' | 'blue-black' | 'custom'
 export type MatrixScaleMode = 'maximum' | 'percentile' | 'fixed'
 export type MatrixDepthMode = 'auto' | 'full' | 'fixed'
@@ -76,10 +79,28 @@ export interface TrackSpec {
   heightLocked?: boolean
   pane: 'main' | 'bottom'
   geneDisplayMode?: 'collapsed' | 'expanded' | 'squished'
+  /** In expanded views, show the representative transcript or every available isoform. */
+  geneTranscriptMode?: 'canonical' | 'all'
+  /** Undefined follows the browser-wide TSS preference. */
+  geneShowTssIndicators?: boolean
   intervalDisplayMode?: 'collapsed' | 'expanded' | 'squished'
+  intervalShowLabels?: boolean
+  intervalColorMode?: IntervalColorMode
+  intervalMinScore?: number
+  intervalMaxRows?: number
   interactionDirection?: InteractionDirection
   interactionFilterMode?: InteractionFilterMode
   interactionFilterGenes?: string[]
+  interactionMinScore?: number
+  /** Maximum cis-anchor separation in bases; trans interactions remain visible. */
+  interactionMaxDistance?: number
+  interactionMaxFeatures?: number
+  interactionLineWidth?: number
+  interactionOpacity?: number
+  interactionArcHeightMode?: InteractionArcHeightMode
+  interactionShowAnchors?: boolean
+  interactionShowNames?: boolean
+  interactionColorMode?: InteractionColorMode
   matrixDirection?: InteractionDirection
   matrixResolution?: number
   matrixNormalization?: string
@@ -689,7 +710,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -728,9 +749,15 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     geneDisplayMode: track.kind === 'genes' && (track.geneDisplayMode === 'collapsed' || track.geneDisplayMode === 'expanded' || track.geneDisplayMode === 'squished')
       ? track.geneDisplayMode
       : track.kind === 'genes' ? 'collapsed' : undefined,
+    geneTranscriptMode: track.kind === 'genes' && track.geneTranscriptMode === 'all' ? 'all' as const : track.kind === 'genes' ? 'canonical' as const : undefined,
+    geneShowTssIndicators: track.kind === 'genes' && typeof track.geneShowTssIndicators === 'boolean' ? track.geneShowTssIndicators : undefined,
     intervalDisplayMode: track.kind === 'interval' && (track.intervalDisplayMode === 'collapsed' || track.intervalDisplayMode === 'expanded' || track.intervalDisplayMode === 'squished')
       ? track.intervalDisplayMode
       : track.kind === 'interval' ? 'collapsed' : undefined,
+    intervalShowLabels: track.kind === 'interval' ? track.intervalShowLabels !== false : undefined,
+    intervalColorMode: track.kind === 'interval' && ['item-rgb', 'strand', 'score'].includes(track.intervalColorMode as string) ? track.intervalColorMode as IntervalColorMode : track.kind === 'interval' ? 'track' as IntervalColorMode : undefined,
+    intervalMinScore: track.kind === 'interval' && typeof track.intervalMinScore === 'number' && Number.isFinite(track.intervalMinScore) ? track.intervalMinScore : undefined,
+    intervalMaxRows: track.kind === 'interval' && typeof track.intervalMaxRows === 'number' && Number.isFinite(track.intervalMaxRows) ? Math.max(1, Math.min(100, Math.round(track.intervalMaxRows))) : undefined,
     interactionDirection: track.kind === 'interaction' && (track.interactionDirection === 'up' || track.interactionDirection === 'down')
       ? track.interactionDirection
       : track.kind === 'interaction' ? 'up' : undefined,
@@ -740,6 +767,15 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     interactionFilterGenes: track.kind === 'interaction' && Array.isArray(track.interactionFilterGenes)
       ? [...new Set(track.interactionFilterGenes.filter((gene: unknown): gene is string => typeof gene === 'string').map((gene: string) => gene.trim()).filter(Boolean))].slice(0, 100)
       : undefined,
+    interactionMinScore: track.kind === 'interaction' && typeof track.interactionMinScore === 'number' && Number.isFinite(track.interactionMinScore) ? track.interactionMinScore : undefined,
+    interactionMaxDistance: track.kind === 'interaction' && typeof track.interactionMaxDistance === 'number' && Number.isFinite(track.interactionMaxDistance) && track.interactionMaxDistance > 0 ? Math.round(track.interactionMaxDistance) : undefined,
+    interactionMaxFeatures: track.kind === 'interaction' && typeof track.interactionMaxFeatures === 'number' && Number.isFinite(track.interactionMaxFeatures) ? Math.max(1, Math.min(10_000, Math.round(track.interactionMaxFeatures))) : track.kind === 'interaction' ? 2_000 : undefined,
+    interactionLineWidth: track.kind === 'interaction' && typeof track.interactionLineWidth === 'number' && Number.isFinite(track.interactionLineWidth) ? Math.max(0.25, Math.min(10, track.interactionLineWidth)) : track.kind === 'interaction' ? 1 : undefined,
+    interactionOpacity: track.kind === 'interaction' && typeof track.interactionOpacity === 'number' && Number.isFinite(track.interactionOpacity) ? Math.max(10, Math.min(100, Math.round(track.interactionOpacity))) : track.kind === 'interaction' ? 92 : undefined,
+    interactionArcHeightMode: track.kind === 'interaction' && track.interactionArcHeightMode === 'fixed' ? 'fixed' as const : track.kind === 'interaction' ? 'distance' as const : undefined,
+    interactionShowAnchors: track.kind === 'interaction' ? track.interactionShowAnchors !== false : undefined,
+    interactionShowNames: track.kind === 'interaction' ? track.interactionShowNames === true : undefined,
+    interactionColorMode: track.kind === 'interaction' && (track.interactionColorMode === 'item-rgb' || track.interactionColorMode === 'score') ? track.interactionColorMode as InteractionColorMode : track.kind === 'interaction' ? 'track' as InteractionColorMode : undefined,
     matrixDirection: track.kind === 'matrix' && (track.matrixDirection === 'up' || track.matrixDirection === 'down')
       ? track.matrixDirection
       : track.kind === 'matrix' ? 'up' : undefined,

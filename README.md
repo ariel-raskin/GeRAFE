@@ -39,8 +39,8 @@ GeRAFE is currently developed and tested as a Windows desktop application.
 - Automatic visible-window or robust-percentile scaling, fixed ranges, linked scales, symmetric zero-centered domains, linear/log/symmetric-log transforms, filled/line/bar styles, opacity, and optional zero-flooring for quantitative tracks.
 - Automatic positive/negative signal pairing from common filename markers such as `plus`/`minus` and `pos`/`neg`, with one shared zero axis, red/blue strand colors, and independently scaled strand magnitudes.
 - Stranded pairs remain compatible with groups; grouped autoscaling and color controls keep ordinary, positive, and negative channels separate.
-- Collapsed, expanded, and squished layouts for interval and gene tracks.
-- Arc-style BEDPE interaction tracks with endpoint anchors, score-weighted emphasis, optional item colors, interchromosomal markers, top/bottom arc orientation, and annotation-aware gene filters.
+- Collapsed, expanded, and squished interval and gene layouts, with BED labels, item-RGB/strand/score coloring, score filtering, row limits, representative/all-transcript selection, and per-track TSS indicators.
+- Arc-style BEDPE interaction tracks with filters for score, cis distance, and displayed count; configurable anchors, names, color, width, opacity, and height; plus interchromosomal markers, top/bottom orientation, and annotation-aware gene filters.
 - Indexed cis contact-map tracks from `.hic`, `.cool`, and multiresolution `.mcool` files, with zoom-aware resolution selection and triangular heatmap rendering.
 - Persistent light and dark themes.
 - Automatic restoration of local desktop tracks between launches, with relinking when a source has moved or changed.
@@ -164,6 +164,8 @@ GeRAFE** to see the installed version.
 - The first-run interaction tip is also available later from **Help → Track interactions**.
 - Use **Fit tracks** to fit the visible upper tracks exactly into the available pane height. Long names retain enough height for two centered lines. **Lock track height** in a track's context menu reserves its current height and excludes it from manual and automatic fitting. The separate indicator on the right side of the button enables persistent automatic fitting as tracks or pane dimensions change. Each channel of a linked positive/negative pair receives the same height as a regular signal track.
 - The lower gene track sizes itself to the visible layout; its small reference provenance label is informational and does not reserve additional layout space. Collapsed mode overlays representative gene structures on one baseline and uses two collision-aware name lanes, keeping its height bounded at wide genomic spans. Expanded and squished modes retain transcript stacking.
+- BED menus can hide labels, color features by the track, BED item RGB, strand, or score, and set a minimum score or row ceiling. Gene menus choose a representative or all available transcripts and can override the global TSS-indicator preference for that track. The bundled RefSeq annotation does not include biotype metadata, so protein-coding-only filtering is not offered yet.
+- BEDPE menus filter by score or cis-anchor distance, set a responsive displayed-interaction limit, and control arc height, anchors, names, color, line width, and opacity. When a limit applies, the track reports the number shown and retains the highest-scoring interactions.
 
 ### BAM display controls
 
@@ -196,7 +198,7 @@ Use **File → Save workspace…** to export a `.gerafe.json` document and **Ope
 - The desktop application and release installer are currently built and tested on Windows x64 only.
 - Release updates have a required Tauri updater signature but not yet a Windows Authenticode certificate, so SmartScreen may warn on the first installer download.
 - The supported track formats are limited to those listed above.
-- BEDPE is currently an in-memory arc track for files up to 50 MB, with at most 2,000 highest-scoring interactions drawn per visible window.
+- BEDPE is currently an in-memory arc track for files up to 50 MB. New tracks draw at most 2,000 highest-scoring interactions per visible window by default; the per-track limit can be adjusted up to 10,000.
 - Contact-matrix tracks currently show one-dimensional cis windows as triangular heatmaps. Interchromosomal maps, two-axis navigation, expected/observed transforms, and matrix-derived annotations are not yet available.
 - Very deep or high-resolution contact-matrix queries can contain enough cells to slow panning. New tracks use full-visible-span depth by default; bounded automatic depth is available when responsiveness is more important than off-diagonal reach.
 - Custom references provide coordinate navigation but do not automatically include gene annotations or cytobands.

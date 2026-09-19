@@ -104,15 +104,30 @@ describe('track document', () => {
       format: 'bed',
       files: [{ name: 'peaks.bed', size: 42, lastModified: 123, role: 'signal', path: 'C:\\data\\peaks.bed' }],
     }, { id: 'bed-track' })
-    document.tracks.find((track) => track.id === 'bed-track')!.intervalDisplayMode = 'expanded'
+    Object.assign(document.tracks.find((track) => track.id === 'bed-track')!, {
+      intervalDisplayMode: 'expanded', intervalShowLabels: false, intervalColorMode: 'score', intervalMinScore: 120, intervalMaxRows: 4,
+    })
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
     expect(restored.sources[0].files[0].path).toBe('C:\\data\\peaks.bed')
-    expect(restored.tracks.find((track) => track.id === 'bed-track')).toMatchObject({ kind: 'interval', intervalDisplayMode: 'expanded' })
+    expect(restored.tracks.find((track) => track.id === 'bed-track')).toMatchObject({
+      kind: 'interval', intervalDisplayMode: 'expanded', intervalShowLabels: false, intervalColorMode: 'score', intervalMinScore: 120, intervalMaxRows: 4,
+    })
   })
 
   it('starts interval tracks at a compact label-fitting height', () => {
     expect(intervalLabelHeightScore('peaks.bed')).toBe(5)
     expect(intervalLabelHeightScore('a very long interval-track label that wraps')).toBeGreaterThan(5)
+  })
+
+  it('persists per-track gene transcript and TSS choices', () => {
+    const document = documentWithTwoTracks()
+    const genes = document.tracks.find((track) => track.kind === 'genes')!
+    genes.geneTranscriptMode = 'all'
+    genes.geneShowTssIndicators = false
+    const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
+    expect(restored.tracks.find((track) => track.kind === 'genes')).toMatchObject({
+      geneTranscriptMode: 'all', geneShowTssIndicators: false,
+    })
   })
 
   it('creates alignment tracks with independent BAM display and filtering options', () => {
@@ -154,12 +169,16 @@ describe('track document', () => {
     }, { id: 'interaction-track' })
     Object.assign(document.tracks.find((track) => track.id === 'interaction-track')!, {
       interactionDirection: 'down', interactionFilterMode: 'genes', interactionFilterGenes: ['RUNX1', 'MYC'],
+      interactionMinScore: 12, interactionMaxDistance: 50_000, interactionMaxFeatures: 300, interactionLineWidth: 2,
+      interactionOpacity: 70, interactionArcHeightMode: 'fixed', interactionShowAnchors: false, interactionShowNames: true, interactionColorMode: 'score',
     })
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
     expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
     expect(restored.sources[0]).toMatchObject({ format: 'bedpe', name: 'loops.bedpe' })
     expect(restored.tracks.find((track) => track.id === 'interaction-track')).toMatchObject({
       kind: 'interaction', height: 32, interactionDirection: 'down', interactionFilterMode: 'genes', interactionFilterGenes: ['RUNX1', 'MYC'],
+      interactionMinScore: 12, interactionMaxDistance: 50_000, interactionMaxFeatures: 300, interactionLineWidth: 2,
+      interactionOpacity: 70, interactionArcHeightMode: 'fixed', interactionShowAnchors: false, interactionShowNames: true, interactionColorMode: 'score',
     })
   })
 
