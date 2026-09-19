@@ -31,6 +31,7 @@ export interface BrowserCallbacks {
   onGroupContextMenu(groupId: string, x: number, y: number): void
   onTracksReorder(trackIds: readonly string[], pane: 'main' | 'bottom', insertionIndex: number, withinGroupId?: string): void
   onTrackHeightsResize(updates: readonly { id: string; pixels: number }[]): void
+  onAlignmentInspect(read: AlignmentFeature, navigateToMate: boolean): void
 }
 
 interface GeneRenderBlock {
@@ -501,6 +502,16 @@ export class GenomeBrowser {
         return
       }
       if (!this.dragging || this.dragging.canvas !== canvas) return
+      if (event.type === 'pointerup' && Math.abs(event.clientX - this.dragging.x) < 4) {
+        const hit = this.itemAt(canvas, pane, event.offsetX, event.offsetY)
+        const runtime = hit?.kind === 'track' ? this.runtimes.get(hit.id) : undefined
+        const spec = hit?.kind === 'track' ? this.document.tracks.find((track) => track.id === hit.id) : undefined
+        if (runtime && spec?.kind === 'alignment') {
+          const coordinate = this.region.start + (event.offsetX - PLOT_LEFT) * ((this.region.end - this.region.start) / Math.max(1, this.cssWidth(canvas) - PLOT_LEFT))
+          const read = runtime.features.filter((feature): feature is AlignmentFeature => 'featureType' in feature && feature.featureType === 'alignment').find((feature) => feature.start <= coordinate && feature.end >= coordinate)
+          if (read) this.callbacks.onAlignmentInspect(read, event.altKey)
+        }
+      }
       this.dragging = undefined
       canvas.classList.remove('is-dragging')
       void this.ensureData()
@@ -1610,7 +1621,8 @@ export class GenomeBrowser {
     }
     const visible = track.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end)
     const coverage = visible.filter((feature): feature is AlignmentCoverageFeature => 'featureType' in feature && feature.featureType === 'coverage')
-    const alignments = visible.filter((feature): feature is AlignmentFeature => 'featureType' in feature && feature.featureType === 'alignment')
+    const sourceAlignments = visible.filter((feature): feature is AlignmentFeature => 'featureType' in feature && feature.featureType === 'alignment')
+    const alignments = selectBamAlignments(sourceAlignments, spec.bamMaxReads ?? 10_000, spec.bamSortMode ?? 'start', spec.bamGroupMode ?? 'none')
     if (!visible.length) {
       if (track.status === 'loading') {
         ctx.fillStyle = palette.muted
@@ -1631,6 +1643,7 @@ export class GenomeBrowser {
         ctx.fillText('Zoom below 250 kb to draw individual reads', PLOT_LEFT + 22, Math.min(bottom - 10, readsTop + 18))
       }
     }
+    if (alignments.length < sourceAlignments.length) { ctx.fillStyle = palette.muted; ctx.font = '9px Inter, system-ui, sans-serif'; ctx.fillText(`Showing ${alignments.length.toLocaleString()} of ${sourceAlignments.length.toLocaleString()} reads`, PLOT_LEFT + 8, bottom - 4) }
     return alignments.length + coverage.length
   }
 
@@ -2910,6 +2923,18 @@ interface AlignmentRenderGroup {
   start: number
   end: number
   reads: AlignmentFeature[]
+}
+
+export function selectBamAlignments(features: readonly AlignmentFeature[], limit: number, sortMode: 'start' | 'strand' | 'mapq' | 'insert-size', groupMode: 'none' | 'strand' | 'read-group'): AlignmentFeature[] {
+  const compare = (a: AlignmentFeature, b: AlignmentFeature) => {
+    const group = groupMode === 'strand' ? a.strand.localeCompare(b.strand) : groupMode === 'read-group' ? (a.readGroup ?? '').localeCompare(b.readGroup ?? '') : 0
+    if (group) return group
+    if (sortMode === 'strand') return a.strand.localeCompare(b.strand) || a.start - b.start
+    if (sortMode === 'mapq') return b.mapq - a.mapq || a.start - b.start
+    if (sortMode === 'insert-size') return Math.abs(b.templateLength) - Math.abs(a.templateLength) || a.start - b.start
+    return a.start - b.start
+  }
+  return [...features].sort(compare).slice(0, limit)
 }
 
 function alignmentRenderGroups(features: readonly AlignmentFeature[], viewAsPairs: boolean): AlignmentRenderGroup[] {

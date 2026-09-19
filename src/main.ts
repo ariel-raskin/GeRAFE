@@ -499,6 +499,16 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
       }
     })
   },
+  onAlignmentInspect(read, navigateToMate) {
+    if (navigateToMate && read.mateOnSameChromosome && read.mateStart !== undefined) {
+      const span = browser.getRegion().end - browser.getRegion().start
+      browser.setRegion({ chr: browser.getRegion().chr, start: read.mateStart - span / 2, end: read.mateStart + span / 2 })
+      showToast(`Moved to mate of ${read.name}`)
+      return
+    }
+    const mate = read.mateOnSameChromosome && read.mateStart !== undefined ? ` · mate ${Math.round(read.mateStart).toLocaleString()}` : ''
+    showToast(`${read.name} · ${read.strand} · MAPQ ${read.mapq} · ${read.cigar}${mate}${read.mateOnSameChromosome ? ' · Alt-click to visit mate' : ''}`)
+  },
 })
 browser.setShowTssIndicators(savedTssIndicators())
 browser.setMatrixDisplayPreferences(savedMatrixDisplayPreferences())
@@ -1386,6 +1396,15 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
       + action('bam-color-strand', 'Strand', alignmentTracks.every((track) => track.bamColorMode === 'strand') ? 'current' : '')
       + action('bam-color-pair-orientation', 'Pair orientation', alignmentTracks.every((track) => track.bamColorMode === 'pair-orientation') ? 'current' : '')
       + action('bam-color-mapping-quality', 'Mapping quality', alignmentTracks.every((track) => track.bamColorMode === 'mapping-quality') ? 'current' : ''))
+    typeItems += submenu('bam-order', 'Read order', '',
+      action('bam-sort-start', 'Start position', alignmentTracks.every((track) => (track.bamSortMode ?? 'start') === 'start') ? 'current' : '')
+      + action('bam-sort-strand', 'Strand', alignmentTracks.every((track) => track.bamSortMode === 'strand') ? 'current' : '')
+      + action('bam-sort-mapq', 'Mapping quality', alignmentTracks.every((track) => track.bamSortMode === 'mapq') ? 'current' : '')
+      + action('bam-sort-insert-size', 'Insert size', alignmentTracks.every((track) => track.bamSortMode === 'insert-size') ? 'current' : '')
+      + action('bam-group-none', 'No grouping', alignmentTracks.every((track) => (track.bamGroupMode ?? 'none') === 'none') ? 'current' : '')
+      + action('bam-group-strand', 'Group by strand', alignmentTracks.every((track) => track.bamGroupMode === 'strand') ? 'current' : '')
+      + action('bam-group-read-group', 'Group by read group', alignmentTracks.every((track) => track.bamGroupMode === 'read-group') ? 'current' : '')
+      + action('bam-limit', 'Displayed-read limit…'))
     typeItems += submenu('bam-filters', 'Read filters', sameValue(alignmentTracks.map((track) => track.bamMinMapq ?? 0)) ? `MAPQ ≥ ${alignmentTracks[0].bamMinMapq ?? 0}` : 'Mixed',
       action('bam-mapq', 'Minimum mapping quality…', sameValue(alignmentTracks.map((track) => track.bamMinMapq ?? 0)) ? String(alignmentTracks[0].bamMinMapq ?? 0) : 'Mixed')
       + action('bam-duplicates', 'Include duplicate reads', alignmentTracks.every((track) => track.bamIncludeDuplicates) ? 'current' : '')
@@ -1877,6 +1896,9 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
     const mode = command.slice(10) as 'track' | 'strand' | 'pair-orientation' | 'mapping-quality'
     store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamColorMode = mode })
   }
+  if (command?.startsWith('bam-sort-')) { const mode = command.slice(9) as 'start' | 'strand' | 'mapq' | 'insert-size'; store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamSortMode = mode }) }
+  if (command?.startsWith('bam-group-')) { const mode = command.slice(10) as 'none' | 'strand' | 'read-group'; store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamGroupMode = mode }) }
+  if (command === 'bam-limit') { const entered = await requestText({ title: 'Set displayed-read limit', label: 'Reads (100–100,000)', initial: String(store.current.tracks.find((track) => alignmentIds.includes(track.id))?.bamMaxReads ?? 10_000), submitLabel: 'Apply' }); const value = Number(entered); if (Number.isFinite(value)) store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamMaxReads = Math.max(100, Math.min(100_000, Math.round(value))) }) }
   if (command === 'bam-pairs') store.edit((draft) => {
     const tracks = draft.tracks.filter((track) => alignmentIds.includes(track.id) && track.kind === 'alignment')
     const enabled = !tracks.every((track) => track.bamViewAsPairs)
