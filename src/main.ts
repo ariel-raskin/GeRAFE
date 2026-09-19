@@ -1710,7 +1710,7 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
     for (const scale of draft.scales) if (scaleIds.has(scale.id)) scale.transform = transform === 'linear' ? undefined : transform
   })
   if (command === 'signal-opacity') {
-    const entered = await requestText({ title: 'Set signal opacity', label: 'Opacity (10–100%)', initial: String(store.current.tracks.find((track) => signalIds.includes(track.id))?.signalOpacity ?? 84), submitLabel: 'Set opacity', validate: (value) => Number(value) >= 10 && Number(value) <= 100 ? undefined : 'Enter a value from 10 to 100.' })
+    const entered = await requestText({ title: 'Set signal opacity', label: 'Opacity (10–100%)', initial: String(store.current.tracks.find((track) => signalIds.includes(track.id))?.signalOpacity ?? 100), submitLabel: 'Set opacity', validate: (value) => Number(value) >= 10 && Number(value) <= 100 ? undefined : 'Enter a value from 10 to 100.' })
     const opacity = Number(entered)
     if (Number.isFinite(opacity)) store.edit((draft) => { for (const track of draft.tracks) if (signalIds.includes(track.id)) track.signalOpacity = Math.round(opacity) })
   }

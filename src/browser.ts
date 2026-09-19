@@ -1117,7 +1117,7 @@ export class GenomeBrowser {
         : chartBottom - ((signalTransform(value, transform) - transformedMin) / transformedAmplitude) * chartHeight,
       spec.color,
       spec.signalRenderStyle ?? 'fill',
-      (spec.signalOpacity ?? 84) / 100,
+      (spec.signalOpacity ?? 100) / 100,
     )
     const scaleValue = max !== 0 ? max : min !== 0 ? Math.abs(min) : 0
     if (scaleValue !== 0) {
@@ -1200,8 +1200,8 @@ export class GenomeBrowser {
       if (minusMax > 0) { ctx.moveTo(LABEL_WIDTH - 7, chartBottom - 0.5); ctx.lineTo(LABEL_WIDTH + 7, chartBottom - 0.5) }
       ctx.stroke()
     }
-    drawMagnitudeBins(ctx, binFeatures(plusVisible, this.region, Math.floor(plotWidth)), PLOT_LEFT, chartTop, zeroY, Math.max(1e-9, plusMax), spec.color, false, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 84) / 100, plusBinding?.transform ?? 'linear')
-    drawMagnitudeBins(ctx, binFeatures(minusVisible, this.region, Math.floor(plotWidth)), PLOT_LEFT, zeroY, chartBottom, Math.max(1e-9, minusMax), spec.negativeColor ?? spec.color, true, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 84) / 100, minusBinding?.transform ?? 'linear')
+    drawMagnitudeBins(ctx, binFeatures(plusVisible, this.region, Math.floor(plotWidth)), PLOT_LEFT, chartTop, zeroY, Math.max(1e-9, plusMax), spec.color, false, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 100) / 100, plusBinding?.transform ?? 'linear')
+    drawMagnitudeBins(ctx, binFeatures(minusVisible, this.region, Math.floor(plotWidth)), PLOT_LEFT, zeroY, chartBottom, Math.max(1e-9, minusMax), spec.negativeColor ?? spec.color, true, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 100) / 100, minusBinding?.transform ?? 'linear')
 
     const problems = [plus, minus].filter((runtime) => runtime.status === 'offline' || runtime.status === 'error')
     if (problems.length) {

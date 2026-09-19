@@ -724,7 +724,7 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     allowNegativeValues: track.kind === 'signal' ? track.allowNegativeValues !== false : undefined,
     signalRenderStyle: (track.kind === 'signal' || track.kind === 'stranded') && (track.signalRenderStyle === 'line' || track.signalRenderStyle === 'bar') ? track.signalRenderStyle as SignalRenderStyle : (track.kind === 'signal' || track.kind === 'stranded') ? 'fill' as SignalRenderStyle : undefined,
     signalOpacity: (track.kind === 'signal' || track.kind === 'stranded') && typeof track.signalOpacity === 'number' && Number.isFinite(track.signalOpacity)
-      ? Math.max(10, Math.min(100, Math.round(track.signalOpacity))) : (track.kind === 'signal' || track.kind === 'stranded') ? 84 : undefined,
+      ? Math.max(10, Math.min(100, Math.round(track.signalOpacity))) : (track.kind === 'signal' || track.kind === 'stranded') ? 100 : undefined,
     geneDisplayMode: track.kind === 'genes' && (track.geneDisplayMode === 'collapsed' || track.geneDisplayMode === 'expanded' || track.geneDisplayMode === 'squished')
       ? track.geneDisplayMode
       : track.kind === 'genes' ? 'collapsed' : undefined,
