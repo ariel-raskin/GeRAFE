@@ -50,6 +50,7 @@ export class NativeMatrixSource implements TrackSource {
         resolution: options?.matrixResolution,
         normalization: options?.matrixNormalization ?? this.matrixMetadata.defaultNormalization,
         maxDistance: options?.matrixMaxDistance,
+        valueMode: options?.matrixValueMode ?? 'observed',
       },
     })
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
@@ -61,6 +62,7 @@ export class NativeMatrixSource implements TrackSource {
       cells: result.cells,
       missingCells: result.missingCells,
       maskedBins: result.maskedBins,
+      valueMode: options?.matrixValueMode ?? 'observed',
     }]
   }
 }

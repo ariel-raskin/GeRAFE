@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 20 as const
+export const TRACK_DOCUMENT_VERSION = 21 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -104,6 +104,7 @@ export interface TrackSpec {
   matrixDirection?: InteractionDirection
   matrixResolution?: number
   matrixNormalization?: string
+  matrixValueMode?: 'observed' | 'observed-expected' | 'log2-observed-expected'
   matrixTransform?: 'linear' | 'log1p'
   matrixScaleMode?: MatrixScaleMode
   matrixScaleMin?: number
@@ -466,6 +467,7 @@ export function addMatrixTrack(
     pane: 'main',
     matrixDirection: 'up',
     matrixNormalization: options.defaultNormalization ?? 'raw',
+    matrixValueMode: 'observed',
     matrixTransform: 'log1p',
     matrixScaleMode: 'percentile',
     matrixScaleMin: 0,
@@ -722,7 +724,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -797,6 +799,7 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     matrixNormalization: track.kind === 'matrix' && typeof track.matrixNormalization === 'string' && track.matrixNormalization.trim()
       ? track.matrixNormalization.trim()
       : track.kind === 'matrix' ? 'raw' : undefined,
+    matrixValueMode: track.kind === 'matrix' && (track.matrixValueMode === 'observed-expected' || track.matrixValueMode === 'log2-observed-expected') ? track.matrixValueMode as 'observed-expected' | 'log2-observed-expected' : track.kind === 'matrix' ? 'observed' as const : undefined,
     matrixTransform: track.kind === 'matrix' && track.matrixTransform === 'linear' ? 'linear' as const : track.kind === 'matrix' ? 'log1p' as const : undefined,
     matrixScaleMode: track.kind === 'matrix' && (track.matrixScaleMode === 'maximum' || track.matrixScaleMode === 'percentile' || track.matrixScaleMode === 'fixed')
       ? track.matrixScaleMode

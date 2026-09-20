@@ -261,6 +261,7 @@ app.innerHTML = `
       <header><div><strong id="matrix-settings-title">Matrix settings</strong><small id="matrix-settings-scope"></small></div><button class="update-dialog-close" id="matrix-settings-close" type="button" aria-label="Close">×</button></header>
       <div class="matrix-settings-content">
         <div class="matrix-settings-grid">
+          <label><span>Contact values</span><select id="matrix-value-mode"><option value="observed">Observed contacts</option><option value="observed-expected">Observed / expected</option><option value="log2-observed-expected">Log2(observed / expected)</option></select></label>
           <label><span>Intensity range</span><select id="matrix-scale-mode"><option value="maximum">Automatic maximum</option><option value="percentile">Robust percentile</option><option value="fixed">Fixed range</option></select></label>
           <label><span>Scale minimum (z-min)</span><input id="matrix-scale-minimum" type="number" min="0" step="any" /></label>
           <label><span>Robust percentile</span><input id="matrix-scale-percentile" type="number" min="50" max="100" step="0.1" /></label>
@@ -272,7 +273,7 @@ app.innerHTML = `
           <label><span>Color palette</span><select id="matrix-palette"><option value="warm">Warm · yellow → red → deep red</option><option value="blue-black">Light blue → dark blue → black</option><option value="monochrome">Single-color gradient</option><option value="custom">Custom colors</option></select></label>
           <label id="matrix-group-scaling-row"><span>Matrix group scaling</span><select id="matrix-group-scaling"><option value="linked">Shared automatic scale</option><option value="independent">Independent automatic scales</option></select></label>
         </div>
-        <p class="matrix-settings-note">Diagonal exclusion affects automatic scale calculation only; it does not hide contacts. A value of 3 ignores the main diagonal and its first two neighboring diagonals when finding z-max.</p>
+        <p class="matrix-settings-note">Expected values are chromosome-wide distance means, including sparse zero contacts. Log2 ratios use a symmetric blue–white–red scale; fixed maximum is its positive and negative bound. Diagonal exclusion affects automatic scaling only.</p>
         <section class="matrix-palette-editor" id="matrix-palette-editor" hidden>
           <header><span>Low-to-high colors</span><button id="matrix-add-color" type="button">Add color</button></header>
           <div id="matrix-palette-colors"></div>
@@ -368,6 +369,7 @@ const matrixSettingsContent = matrixSettingsDialog.querySelector<HTMLElement>('.
 const matrixSettingsForm = document.querySelector<HTMLFormElement>('#matrix-settings-form')!
 const matrixSettingsScope = document.querySelector<HTMLElement>('#matrix-settings-scope')!
 const matrixScaleMode = document.querySelector<HTMLSelectElement>('#matrix-scale-mode')!
+const matrixValueMode = document.querySelector<HTMLSelectElement>('#matrix-value-mode')!
 const matrixScaleMinimum = document.querySelector<HTMLInputElement>('#matrix-scale-minimum')!
 const matrixScalePercentile = document.querySelector<HTMLInputElement>('#matrix-scale-percentile')!
 const matrixScaleMaximum = document.querySelector<HTMLInputElement>('#matrix-scale-maximum')!
@@ -624,6 +626,12 @@ trackOptionsClose.addEventListener('click', closeTrackOptionsDialog)
 document.querySelector<HTMLButtonElement>('#matrix-settings-close')!.addEventListener('click', closeMatrixSettingsDialog)
 document.querySelector<HTMLButtonElement>('#matrix-settings-cancel')!.addEventListener('click', closeMatrixSettingsDialog)
 matrixScaleMode.addEventListener('change', updateMatrixSettingsVisibility)
+matrixValueMode.addEventListener('change', () => {
+  matrixScaleMode.value = 'percentile'
+  matrixScaleMinimum.value = '0'
+  matrixScaleMaximum.value = ''
+  updateMatrixSettingsVisibility()
+})
 matrixDepth.addEventListener('change', updateMatrixSettingsVisibility)
 matrixZeroStyle.addEventListener('change', updateMatrixSettingsVisibility)
 matrixMissingStyle.addEventListener('change', updateMatrixSettingsVisibility)
@@ -2182,6 +2190,7 @@ function openMatrixSettingsDialog(trackIds: readonly string[]): void {
   matrixSettingsScope.textContent = tracks.length === 1 ? first.label : `${tracks.length} matrix tracks`
   matrixSettingsApply.textContent = tracks.length === 1 ? 'Apply' : `Apply to ${tracks.length} tracks`
   matrixScaleMode.value = first.matrixScaleMode ?? (first.matrixScaleMax === undefined ? 'percentile' : 'fixed')
+  matrixValueMode.value = first.matrixValueMode ?? 'observed'
   matrixScaleMinimum.value = String(first.matrixScaleMin ?? 0)
   matrixScalePercentile.value = String((first.matrixScalePercentile ?? 0.99) * 100)
   matrixScaleMaximum.value = first.matrixScaleMax === undefined ? '' : String(first.matrixScaleMax)
@@ -2227,18 +2236,25 @@ function renderMatrixPaletteColors(): void {
 }
 
 function updateMatrixSettingsVisibility(): void {
+  const signed = matrixValueMode.value === 'log2-observed-expected'
+  matrixScaleMinimum.disabled = signed
   matrixScalePercentile.disabled = matrixScaleMode.value !== 'percentile'
   matrixScaleMaximum.disabled = matrixScaleMode.value !== 'fixed'
   matrixIgnoreDiagonals.disabled = matrixScaleMode.value === 'fixed'
   matrixDepthDistance.disabled = matrixDepth.value !== 'custom'
-  matrixPaletteEditor.hidden = matrixPalette.value !== 'custom'
+  matrixPaletteEditor.hidden = signed || matrixPalette.value !== 'custom'
+  matrixTransform.disabled = signed
+  matrixPalette.disabled = signed
+  matrixPaletteReversed.disabled = signed
+  matrixZeroStyle.querySelector<HTMLOptionElement>('option[value="low-color"]')!.disabled = signed
+  if (signed && matrixZeroStyle.value === 'low-color') matrixZeroStyle.value = 'background'
   matrixZeroColor.disabled = matrixZeroStyle.value !== 'custom'
   matrixMissingColor.disabled = matrixMissingStyle.value !== 'custom'
   matrixMaskedColor.disabled = matrixMaskedStyle.value !== 'custom'
 }
 
 function applyMatrixSettingsDialog(): void {
-  const fixedMinimum = Number(matrixScaleMinimum.value)
+  const fixedMinimum = matrixValueMode.value === 'log2-observed-expected' ? 0 : Number(matrixScaleMinimum.value)
   const fixedMaximum = Number(matrixScaleMaximum.value)
   const percentile = Number(matrixScalePercentile.value)
   const ignoredDiagonals = Number(matrixIgnoreDiagonals.value)
@@ -2282,6 +2298,7 @@ function applyMatrixSettingsDialog(): void {
       track.matrixDepthMode = depthMode
       track.matrixMaxDistance = maximumDistance
       track.matrixTransform = matrixTransform.value === 'linear' ? 'linear' : 'log1p'
+      track.matrixValueMode = matrixValueMode.value === 'observed-expected' ? 'observed-expected' : matrixValueMode.value === 'log2-observed-expected' ? 'log2-observed-expected' : 'observed'
       track.matrixPalette = palette
       track.matrixPaletteColors = palette === 'custom' ? [...colors] : undefined
       track.matrixPaletteReversed = matrixPaletteReversed.checked || undefined

@@ -202,7 +202,7 @@ describe('track document', () => {
       files: [{ name: 'contacts.mcool', size: 84, lastModified: 123, role: 'signal', path: 'C:\\data\\contacts.mcool' }],
     }, { id: 'matrix-track', defaultNormalization: 'weight' })
     Object.assign(track, {
-      matrixDirection: 'down', matrixResolution: 10_000, matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMax: 42,
+      matrixDirection: 'down', matrixResolution: 10_000, matrixNormalization: 'raw', matrixValueMode: 'log2-observed-expected', matrixTransform: 'linear', matrixScaleMax: 42,
       matrixScaleMode: 'fixed', matrixScaleMin: 2, matrixScalePercentile: 0.98, matrixIgnoreDiagonals: 4,
       matrixDepthMode: 'fixed', matrixMaxDistance: 250_000,
       matrixPalette: 'custom', matrixPaletteColors: ['#ffffff', '#ff0000', '#111111'], matrixPaletteReversed: true,
@@ -214,12 +214,20 @@ describe('track document', () => {
     expect(restored.sources[0]).toMatchObject({ format: 'mcool', name: 'contacts.mcool' })
     expect(restored.tracks.find((item) => item.id === 'matrix-track')).toMatchObject({
       kind: 'matrix', matrixDirection: 'down', matrixResolution: 10_000,
-      matrixNormalization: 'raw', matrixTransform: 'linear', matrixScaleMode: 'fixed', matrixScaleMin: 2, matrixScaleMax: 42,
+      matrixNormalization: 'raw', matrixValueMode: 'log2-observed-expected', matrixTransform: 'linear', matrixScaleMode: 'fixed', matrixScaleMin: 2, matrixScaleMax: 42,
       matrixScalePercentile: 0.98, matrixIgnoreDiagonals: 4, matrixDepthMode: 'fixed', matrixMaxDistance: 250_000, matrixPalette: 'custom',
       matrixPaletteColors: ['#ffffff', '#ff0000', '#111111'], matrixPaletteReversed: true,
       matrixZeroStyle: 'custom', matrixZeroColor: '#eeeeee', matrixMissingStyle: 'custom', matrixMissingColor: '#999999',
       matrixMaskedStyle: 'custom', matrixMaskedColor: '#777777',
     })
+  })
+
+  it('upgrades version 20 matrices to observed values', () => {
+    const legacy = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 }) as any
+    const track = addMatrixTrack(legacy, { id: 'matrix-source', name: 'contacts.cool', format: 'cool', files: [] })
+    legacy.schemaVersion = 20
+    delete track.matrixValueMode
+    expect(normalizeTrackDocument(legacy).tracks.find((item) => item.kind === 'matrix')?.matrixValueMode).toBe('observed')
   })
 
   it('migrates the version 13 dark-warm palette to blue-black', () => {

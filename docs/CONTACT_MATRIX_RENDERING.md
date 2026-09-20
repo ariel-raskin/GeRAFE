@@ -36,7 +36,11 @@ The current baseline uses the source-selected matrix resolution, a bounded overs
 
 ## Scale and palette model
 
-Matrix presentation settings deliberately do not change the genomic query or the number of fetched cells. The only query-affecting setting in the matrix dialog is explicit genomic depth. Resolution and normalization also remain query-affecting controls in the track context menu.
+Matrix presentation settings deliberately do not change the genomic query or the number of fetched cells. Genomic depth and contact-value mode are query-affecting settings in the matrix dialog. Resolution and normalization also remain query-affecting controls in the track context menu.
+
+Observed/expected queries use the selected normalization. The `.hic` reader obtains its chromosome-specific expected vector from the file. For `.cool` and `.mcool`, GeRAFE scans all cis pixels on the active chromosome and computes one mean per distance from all valid bin pairs, including omitted sparse zeros. Invalid normalization weights exclude their bins from both sums and denominators. The resulting vector is cached by file stamp, chromosome, resolution, normalization, and queried depth. The computation is capped at 2,000 distance bins; choosing a shorter depth or coarser resolution makes wider views available. A positive contact at a distance with no valid expectation is marked missing. Sparse zero contacts stay zero; log2(0) is not materialized.
+
+Log2(O/E) uses a symmetric automatic magnitude based on absolute values or a fixed positive/negative magnitude. It has a fixed blue–white–red diverging palette centered on O/E = 1. The ordinary z-min, linear/log intensity, and sequential palette settings do not apply in that mode. Linked matrix groups share a scale only among tracks using the same contact-value mode.
 
 The matrix settings dialog supports three intensity-range modes:
 
@@ -48,7 +52,7 @@ Automatic modes can exclude a configurable number of diagonals, including the ma
 
 Palette stops are evenly spaced across the resolved intensity range. The warm preset follows the earlier figure-rendering workflow with light, yellow, orange, red, and deep-red stops. Robust percentile or fixed-range scaling now provides the explicit control for preventing a small number of outliers from flattening visible contact differences; the earlier high-color-threshold palette warp has been retired.
 
-Matrix tracks in a linked visual group share the largest automatic or fixed z-max calculated for the matrix members of that group. Independent groups retain a separate z-max for every matrix. Applying matrix settings to a matrix-only group also applies z-min and automatic-scale parameters consistently to every member. This is intentionally separate from the matrix normalization stored for each source. Mixed groups may contain other track kinds, but linked matrix scaling is calculated only from their matrix members.
+Matrix tracks in a linked visual group share the largest automatic or fixed z-max calculated for the matrix members of the same contact-value mode. Independent groups retain a separate z-max for every matrix. Applying matrix settings to a matrix-only group also applies z-min and automatic-scale parameters consistently to every member. This is intentionally separate from the matrix normalization stored for each source. Mixed groups may contain other track kinds, but linked matrix scaling is calculated only from their matrix members.
 
 The renderer clips every contact diamond to the inside of its track and redraws the lower track boundary after the matrix. Palette, legend, group scaling, intensity scaling, and track-height changes must remain presentation-only so they cannot reintroduce the height-dependent query expansion described above. `matrixDepthMode` and `matrixMaxDistance` are the sole persisted controls for off-diagonal query reach.
 

@@ -182,7 +182,8 @@ await page.mouse.click(bottomGeneBox.x + 60, bottomGeneBox.y + Math.min(30, bott
 await page.locator('[data-context-submenu="genes-display"]').hover()
 const geneMenuText = `${await page.locator('#track-context-menu').textContent()} ${await page.locator('#track-context-flyout').textContent()}`
 await page.locator(`[data-context-action="genes-${testGeneMode}"]`).click()
-await page.waitForTimeout(100)
+await page.waitForFunction((mode) => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').tracks?.find((track) => track.kind === 'genes')?.geneDisplayMode === mode, testGeneMode, { timeout: 5_000 })
+const geneModePersisted = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').tracks?.find((track) => track.kind === 'genes')?.geneDisplayMode) === testGeneMode
 const expandedBottomPaneHeight = await page.locator('#bottom-pane').evaluate((element) => element.getBoundingClientRect().height)
 const expandedBottomCanvasHeight = await page.locator('#bottom-canvas').evaluate((element) => element.getBoundingClientRect().height)
 await page.locator('#settings-menu-button').click()
@@ -447,16 +448,18 @@ await page.locator('#matrix-missing-style').selectOption('custom')
 await page.locator('#matrix-missing-color').fill('#8a8f99')
 await page.locator('#matrix-masked-style').selectOption('background')
 await page.locator('#matrix-group-scaling').selectOption('independent')
+await page.locator('#matrix-value-mode').selectOption('log2-observed-expected')
 await page.locator('.matrix-settings-content').evaluate((element) => { element.scrollTop = element.scrollHeight })
 await page.locator('#matrix-settings-form button[type="submit"]').click()
 await page.waitForTimeout(250)
 const matrixGroupSettingsApplied = await page.evaluate(() => {
   const document = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
   return document.tracks?.every((track) => track.kind !== 'matrix' || (
-    track.matrixPalette === 'custom' && track.matrixPaletteReversed === true && track.matrixPaletteColors?.length === 6
+    track.matrixValueMode === 'log2-observed-expected'
+    && track.matrixPalette === 'custom' && track.matrixPaletteReversed === true && track.matrixPaletteColors?.length === 6
     && track.matrixScaleMode === 'percentile' && track.matrixScalePercentile === 0.985
     && track.matrixDepthMode === 'fixed' && track.matrixMaxDistance === 250000
-    && track.matrixZeroStyle === 'low-color' && track.matrixMissingStyle === 'custom' && track.matrixMissingColor === '#8a8f99'
+    && track.matrixZeroStyle === 'background' && track.matrixMissingStyle === 'custom' && track.matrixMissingColor === '#8a8f99'
     && track.matrixMaskedStyle === 'background'
   ))
     && document.groups?.find((group) => group.id === 'matrix-group')?.scaleBehavior === 'independent'
@@ -465,6 +468,7 @@ await page.mouse.click(matrixCanvasBox.x + 8, matrixCanvasBox.y + 60, { button: 
 await page.locator('[data-context-action="matrix-settings"]').click()
 const matrixSettingsReopenedAtTop = await page.locator('.matrix-settings-content').evaluate((element) => element.scrollTop === 0)
   && await page.locator('#matrix-scale-mode').isVisible()
+  && await page.locator('#matrix-value-mode').inputValue() === 'log2-observed-expected'
 await page.screenshot({ path: 'dist/smoke-matrix-settings-reopened.png', fullPage: true })
 await page.locator('#matrix-settings-cancel').click()
 const matrixBottomBox = await page.locator('#bottom-canvas').boundingBox()
@@ -546,7 +550,7 @@ if (tssBeforeToggle === tssAfterToggle || tssAfterToggle !== tssAfterReload) pro
 if (!matrixDisplayDefaults.inspector || !matrixDisplayDefaults.value || matrixDisplayDefaults.bins || matrixDisplayDefaults.details || !matrixDisplayAfterReload.bins || matrixDisplayAfterReload.metadata) process.exitCode = 1
 if (autoFitBeforeToggle === autoFitAfterToggle || autoFitAfterToggle !== autoFitAfterReload) process.exitCode = 1
 if (Math.abs(initialBottomPaneHeight - initialBottomCanvasHeight - 1) > 2 || Math.abs(expandedBottomPaneHeight - expandedBottomCanvasHeight - 1) > 2) process.exitCode = 1
-if (testGene === 'RUNX1' && testGeneMode === 'expanded' && expandedBottomPaneHeight <= initialBottomPaneHeight) process.exitCode = 1
+if (!geneModePersisted || expandedBottomPaneHeight < initialBottomPaneHeight) process.exitCode = 1
 if (visualDataTrackCount > 1 && (!dragGhostVisible || dragCursor !== 'grabbing')) process.exitCode = 1
 if (visualDataTrackCount > 1 && Number(fitScrollRange) > 2) process.exitCode = 1
 if (visualDataTrackCount > 1 && (Math.abs(Number(fitPaneGap)) > 2 || fittedTrackHeights?.some((height) => !Number.isFinite(height)))) process.exitCode = 1

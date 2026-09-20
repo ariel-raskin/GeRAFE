@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, interactionArcHeight, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, interactionArcHeight, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { AlignmentFeature, InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
@@ -141,6 +141,7 @@ describe('contact-matrix rendering helpers', () => {
     expect(matrixQueryChanged(original, { ...original, manualPixelHeight: 240 })).toBe(false)
     expect(matrixQueryChanged(original, { ...original, matrixDepthMode: 'fixed', matrixMaxDistance: 250_000 })).toBe(true)
     expect(matrixQueryChanged(original, { ...original })).toBe(false)
+    expect(matrixQueryChanged(original, { ...original, matrixValueMode: 'observed-expected' })).toBe(true)
   })
 
   it('uses explicit viewport-based matrix depths rather than track height', () => {
@@ -165,6 +166,19 @@ describe('contact-matrix rendering helpers', () => {
     } satisfies MatrixFeature
     expect(matrixAutomaticMaximum(matrix, 1, 0)).toBe(1_000)
     expect(matrixAutomaticMaximum(matrix, 0.5, 3)).toBe(2)
+  })
+
+  it('scales signed log2 ratios symmetrically and preserves neutral cells', () => {
+    const matrix: MatrixFeature = {
+      featureType: 'matrix', start: 0, end: 100, resolution: 10,
+      cells: [{ bin1: 0, bin2: 10, value: -2 }, { bin1: 0, bin2: 20, value: 0 }, { bin1: 0, bin2: 30, value: 1 }],
+      missingCells: [], maskedBins: [], valueMode: 'log2-observed-expected',
+    }
+    expect(matrixAutomaticMagnitude(matrix, 1, 0)).toBe(2)
+    expect(inspectMatrixCell(matrix, 0, 20)).toMatchObject({ state: 'value', value: 0 })
+    expect(matrixSignedColor(-1)).toBe('#2166ac')
+    expect(matrixSignedColor(0)).toBe('#f7f7f7')
+    expect(matrixSignedColor(1)).toBe('#b2182b')
   })
 
   it('maps low contacts through yellow and red to a deep-red maximum', () => {
@@ -206,6 +220,7 @@ describe('contact-matrix rendering helpers', () => {
     ] as any
     expect([...resolveMatrixMaximums(tracks, [{ id: 'g', label: 'Matrices', scaleBehavior: 'linked' }], new Map([['a', 8], ['b', 21]])).values()]).toEqual([21, 21])
     expect([...resolveMatrixMaximums(tracks, [{ id: 'g', label: 'Matrices', scaleBehavior: 'independent' }], new Map([['a', 8], ['b', 21]])).values()]).toEqual([8, 21])
+    expect([...resolveMatrixMaximums([{ ...tracks[0], matrixValueMode: 'observed' }, { ...tracks[1], matrixValueMode: 'log2-observed-expected' }], [{ id: 'g', label: 'Matrices', scaleBehavior: 'linked' }], new Map([['a', 8], ['b', 21]])).values()]).toEqual([8, 21])
   })
 
   it('keeps an upward matrix baseline and clip inside its bottom track boundary', () => {
