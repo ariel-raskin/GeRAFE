@@ -692,8 +692,14 @@ export class GenomeBrowser {
     this.bamHover = { trackId: spec.id, read }
     const heading = document.createElement('strong'); heading.textContent = read.name
     const detail = document.createElement('span'); detail.textContent = `${read.strand} · MAPQ ${read.mapq} · ${read.cigar}`
-    const mate = document.createElement('small'); mate.textContent = read.mateOnSameChromosome && read.mateStart !== undefined ? `Mate at ${Math.round(read.mateStart).toLocaleString()} · Alt-click to visit` : read.paired ? 'Mate on another chromosome' : 'Unpaired read'
-    this.matrixInspector.replaceChildren(heading, detail, mate)
+    const mate = document.createElement('small'); mate.textContent = read.mateOnSameChromosome && read.mateStart !== undefined ? `Mate at ${Math.round(read.mateStart).toLocaleString()}` : read.paired ? 'Mate on another chromosome' : 'Unpaired read'
+    const content: HTMLElement[] = [heading, detail, mate]
+    if (read.mateOnSameChromosome && read.mateStart !== undefined) {
+      const jump = document.createElement('button'); jump.type = 'button'; jump.textContent = 'Go to mate'
+      jump.addEventListener('click', () => { const span = this.region.end - this.region.start; this.setRegion({ chr: this.region.chr, start: read.mateStart! - span / 2, end: read.mateStart! + span / 2 }) })
+      content.push(jump)
+    }
+    this.matrixInspector.replaceChildren(...content)
     this.matrixInspector.hidden = false
     const left = Math.max(8, Math.min(window.innerWidth - this.matrixInspector.offsetWidth - 8, event.clientX + 15))
     const top = Math.max(8, Math.min(window.innerHeight - this.matrixInspector.offsetHeight - 8, event.clientY + 15))
@@ -1641,7 +1647,7 @@ export class GenomeBrowser {
     const visible = track.features.filter((feature) => feature.end > this.region.start && feature.start < this.region.end)
     const coverage = visible.filter((feature): feature is AlignmentCoverageFeature => 'featureType' in feature && feature.featureType === 'coverage')
     const sourceAlignments = visible.filter((feature): feature is AlignmentFeature => 'featureType' in feature && feature.featureType === 'alignment')
-    const alignments = selectBamAlignments(sourceAlignments, spec.bamMaxReads ?? 10_000, spec.bamSortMode ?? 'start', spec.bamGroupMode ?? 'none')
+    const alignments = selectBamAlignments(sourceAlignments, spec.bamMaxReads ?? 10_000, spec.bamSortMode ?? 'start', spec.bamGroupMode ?? 'none', spec.bamGroupTag)
     if (!visible.length) {
       if (track.status === 'loading') {
         ctx.fillStyle = palette.muted
@@ -1652,7 +1658,7 @@ export class GenomeBrowser {
     }
     const viewMode = spec.bamViewMode ?? 'both'
     const coverageHeight = viewMode === 'both' ? Math.min(54, Math.max(28, height * 0.28)) : viewMode === 'coverage' ? height - 8 : 0
-    if (coverageHeight > 0 && coverage.length) this.drawBamCoverage(coverage, spec.color, top + 4, coverageHeight, width, palette)
+    if (coverageHeight > 0 && coverage.length) this.drawBamCoverage(coverage, spec.color, top + 4, coverageHeight, width, palette, spec.bamMinAlleleFrequency ?? 0)
     const readsTop = top + coverageHeight + (coverageHeight ? 7 : 4)
     if (viewMode !== 'coverage' && this.region.end - this.region.start <= BAM_READS_MAX_VISIBLE_SPAN) {
       if (alignments.length) this.drawBamReads(alignments, spec, readsTop, bottom - 3, width, palette)
@@ -1666,7 +1672,7 @@ export class GenomeBrowser {
     return alignments.length + coverage.length
   }
 
-  private drawBamCoverage(features: AlignmentCoverageFeature[], color: string, top: number, height: number, width: number, palette: CanvasPalette): void {
+  private drawBamCoverage(features: AlignmentCoverageFeature[], color: string, top: number, height: number, width: number, palette: CanvasPalette, minimumAlleleFrequency: number): void {
     const ctx = this.context
     const max = Math.max(1, ...features.map((feature) => feature.score))
     const scaleX = (width - PLOT_LEFT) / (this.region.end - this.region.start)
@@ -1678,6 +1684,13 @@ export class GenomeBrowser {
       const x2 = Math.min(width, PLOT_LEFT + (feature.end - this.region.start) * scaleX)
       const barHeight = (feature.score / max) * (height - 11)
       ctx.fillRect(x1, top + height - barHeight, Math.max(1, x2 - x1), barHeight)
+      if ((feature.alleleFrequency ?? 0) >= minimumAlleleFrequency && (feature.alleleFrequency ?? 0) > 0) {
+        ctx.fillStyle = '#ef8f2f'
+        ctx.globalAlpha = 0.88
+        ctx.fillRect(x1, top + height - barHeight, Math.max(1, x2 - x1), Math.max(2, barHeight * (feature.alleleFrequency ?? 0)))
+        ctx.fillStyle = color
+        ctx.globalAlpha = 0.76
+      }
     }
     ctx.globalAlpha = 1
     ctx.strokeStyle = palette.axisLine
@@ -1730,6 +1743,10 @@ export class GenomeBrowser {
         }
         ctx.globalAlpha = 1
         if (spec.bamShowMismatches !== false) for (const difference of read.differences) {
+          if (difference.kind === 'substitution' && (difference.quality ?? 0) < (spec.bamMinMismatchBaseq ?? 0)) continue
+          if (difference.kind === 'insertion' && spec.bamShowInsertions === false) continue
+          if ((difference.kind === 'deletion' || difference.kind === 'skip') && spec.bamShowDeletions === false) continue
+          if (difference.kind === 'soft-clip' && spec.bamShowSoftClips === false) continue
           const x = PLOT_LEFT + (difference.position - this.region.start) * scale
           if (x < PLOT_LEFT || x > width) continue
           if (difference.kind === 'substitution') {
@@ -2107,6 +2124,7 @@ export class GenomeBrowser {
         bamIncludeDuplicates: spec.bamIncludeDuplicates,
         bamIncludeSecondary: spec.bamIncludeSecondary,
         bamIncludeSupplementary: spec.bamIncludeSupplementary,
+        bamGroupTag: spec.bamGroupMode === 'tag' ? spec.bamGroupTag : undefined,
       } : spec?.kind === 'matrix' ? {
         matrixResolution: spec.matrixResolution,
         matrixNormalization: spec.matrixNormalization,
@@ -2950,9 +2968,9 @@ interface AlignmentRenderGroup {
   reads: AlignmentFeature[]
 }
 
-export function selectBamAlignments(features: readonly AlignmentFeature[], limit: number, sortMode: 'start' | 'strand' | 'mapq' | 'insert-size', groupMode: 'none' | 'strand' | 'read-group'): AlignmentFeature[] {
+export function selectBamAlignments(features: readonly AlignmentFeature[], limit: number, sortMode: 'start' | 'strand' | 'mapq' | 'insert-size', groupMode: 'none' | 'strand' | 'read-group' | 'tag', groupTag?: string): AlignmentFeature[] {
   const compare = (a: AlignmentFeature, b: AlignmentFeature) => {
-    const group = groupMode === 'strand' ? a.strand.localeCompare(b.strand) : groupMode === 'read-group' ? (a.readGroup ?? '').localeCompare(b.readGroup ?? '') : 0
+    const group = groupMode === 'strand' ? a.strand.localeCompare(b.strand) : groupMode === 'read-group' ? (a.readGroup ?? '').localeCompare(b.readGroup ?? '') : groupMode === 'tag' ? (a.tags?.[groupTag ?? ''] ?? '').localeCompare(b.tags?.[groupTag ?? ''] ?? '') : 0
     if (group) return group
     if (sortMode === 'strand') return a.strand.localeCompare(b.strand) || a.start - b.start
     if (sortMode === 'mapq') return b.mapq - a.mapq || a.start - b.start

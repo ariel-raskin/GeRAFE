@@ -55,11 +55,16 @@ export class BamAlignmentSource implements TrackSource {
     if (filtered.length > MAX_RECORDS) throw new Error('This locus contains over 500,000 passing reads. Zoom in or raise the MAPQ filter.')
     const output: TrackFeature[] = []
     const alignmentBlocks = new Map<BamRecord, Array<{ start: number; end: number }>>()
-    for (const record of filtered) alignmentBlocks.set(record, cigarBlocks(record.start, record.CIGAR))
-    if (viewMode !== 'alignments') output.push(...coverageFeatures(filtered, alignmentBlocks, region, pixelWidth))
+    const differencesByRecord = new Map<BamRecord, AlignmentDifference[]>()
+    for (const record of filtered) {
+      alignmentBlocks.set(record, cigarBlocks(record.start, record.CIGAR))
+      differencesByRecord.set(record, alignmentDifferences(record, region))
+    }
+    const alleleFrequencies = coverageAlleleFrequencies(filtered, alignmentBlocks, differencesByRecord, region, pixelWidth)
+    if (viewMode !== 'alignments') output.push(...coverageFeatures(filtered, alignmentBlocks, region, pixelWidth, alleleFrequencies.binMaximums))
     if (viewMode !== 'coverage' && span <= ALIGNMENT_VISIBILITY_SPAN) {
       const sampled = stableDownsample(filtered, MAX_DRAWN_ALIGNMENTS)
-      output.push(...sampled.map((record) => alignmentFeature(record, alignmentBlocks.get(record) ?? [], region)))
+      output.push(...sampled.map((record) => alignmentFeature(record, alignmentBlocks.get(record) ?? [], differencesByRecord.get(record) ?? [], alleleFrequencies.byAllele, options.bamGroupTag)))
     }
     return output
   }
@@ -73,7 +78,25 @@ function includeRecord(record: BamRecord, options: TrackQueryOptions): boolean {
   return (record.mq ?? 0) >= (options.bamMinMapq ?? 0)
 }
 
-function alignmentFeature(record: BamRecord, blocks: Array<{ start: number; end: number }>, region: Region): AlignmentFeature {
+function alignmentFeature(record: BamRecord, blocks: Array<{ start: number; end: number }>, differences: AlignmentDifference[], alleleFrequencies: ReadonlyMap<string, number>, groupTag?: string): AlignmentFeature {
+  const withAlleleFrequency = differences.map((difference) => difference.kind === 'substitution' && difference.bases
+    ? { ...difference, alleleFrequency: alleleFrequencies.get(alleleKey(difference.position, difference.bases)) ?? 0 }
+    : difference)
+  const readGroup = record.getTag('RG')
+  const tagValue = groupTag && /^[A-Za-z][A-Za-z0-9]$/.test(groupTag) ? record.getTag(groupTag) : undefined
+  return {
+    featureType: 'alignment', start: record.start, end: record.end, name: record.name, mapq: record.mq ?? 0,
+    strand: record.isReverseComplemented() ? '-' : '+', flags: record.flags, cigar: record.CIGAR, blocks,
+    differences: withAlleleFrequency, paired: record.isPaired(), properPair: record.isProperlyPaired(),
+    readNumber: record.isRead1() ? 1 : record.isRead2() ? 2 : undefined,
+    mateStart: record.isPaired() && !record.isMateUnmapped() ? record.next_pos : undefined,
+    mateOnSameChromosome: record.next_refid === record.ref_id, templateLength: record.template_length,
+    pairOrientation: record.pair_orientation, readGroup: typeof readGroup === 'string' ? readGroup : undefined,
+    tags: groupTag && tagValue !== undefined ? { [groupTag]: String(tagValue) } : undefined,
+  }
+}
+
+function alignmentDifferences(record: BamRecord, region: Region): AlignmentDifference[] {
   const differences: AlignmentDifference[] = []
   try {
     record.forEachMismatch((code, position, length, bases, quality, _referenceBase, clipLength) => {
@@ -82,27 +105,7 @@ function alignmentFeature(record: BamRecord, blocks: Array<{ start: number; end:
       differences.push({ kind, position, length: length || clipLength, bases: bases || undefined, quality: quality >= 0 ? quality : undefined })
     }, { start: region.start, end: region.end })
   } catch { /* malformed optional tags should not hide the alignment */ }
-  const readGroup = record.getTag('RG')
-  return {
-    featureType: 'alignment',
-    start: record.start,
-    end: record.end,
-    name: record.name,
-    mapq: record.mq ?? 0,
-    strand: record.isReverseComplemented() ? '-' : '+',
-    flags: record.flags,
-    cigar: record.CIGAR,
-    blocks,
-    differences,
-    paired: record.isPaired(),
-    properPair: record.isProperlyPaired(),
-    readNumber: record.isRead1() ? 1 : record.isRead2() ? 2 : undefined,
-    mateStart: record.isPaired() && !record.isMateUnmapped() ? record.next_pos : undefined,
-    mateOnSameChromosome: record.next_refid === record.ref_id,
-    templateLength: record.template_length,
-    pairOrientation: record.pair_orientation,
-    readGroup: typeof readGroup === 'string' ? readGroup : undefined,
-  }
+  return differences
 }
 
 function differenceKind(code: number): AlignmentDifference['kind'] | undefined {
@@ -129,7 +132,7 @@ export function cigarBlocks(start: number, cigar: string): Array<{ start: number
   return blocks
 }
 
-function coverageFeatures(records: BamRecord[], blocksByRecord: ReadonlyMap<BamRecord, Array<{ start: number; end: number }>>, region: Region, pixelWidth: number): AlignmentCoverageFeature[] {
+function coverageFeatures(records: BamRecord[], blocksByRecord: ReadonlyMap<BamRecord, Array<{ start: number; end: number }>>, region: Region, pixelWidth: number, alleleFrequencyMaximums: readonly number[]): AlignmentCoverageFeature[] {
   const binCount = Math.max(1, Math.ceil(pixelWidth))
   const span = region.end - region.start
   const deltas = new Int32Array(binCount + 1)
@@ -146,10 +149,48 @@ function coverageFeatures(records: BamRecord[], blocksByRecord: ReadonlyMap<BamR
   for (let index = 0; index < binCount; index += 1) {
     coverage += deltas[index]
     const start = region.start + index * binWidth
-    output.push({ featureType: 'coverage', start, end: start + binWidth, score: coverage })
+    output.push({ featureType: 'coverage', start, end: start + binWidth, score: coverage, alleleFrequency: alleleFrequencyMaximums[index] ?? 0 })
   }
   return output
 }
+
+/**
+ * Computes alternate-base support against the same screen bins used for coverage.
+ * A bin's value is the strongest position/base observation, not a sum across variants.
+ */
+export function coverageAlleleFrequencies(records: readonly BamRecord[], blocksByRecord: ReadonlyMap<BamRecord, Array<{ start: number; end: number }>>, differencesByRecord: ReadonlyMap<BamRecord, readonly AlignmentDifference[]>, region: Region, pixelWidth: number): { byAllele: Map<string, number>; binMaximums: number[] } {
+  const binCount = Math.max(1, Math.ceil(pixelWidth))
+  const span = region.end - region.start
+  const coverage = new Int32Array(binCount)
+  const supports = new Map<string, number>()
+  for (const record of records) {
+    for (const block of blocksByRecord.get(record) ?? []) {
+      if (block.end <= region.start || block.start >= region.end) continue
+      const from = Math.max(0, Math.min(binCount - 1, Math.floor(((block.start - region.start) / span) * binCount)))
+      const to = Math.max(from, Math.min(binCount - 1, Math.ceil(((block.end - region.start) / span) * binCount) - 1))
+      for (let index = from; index <= to; index += 1) coverage[index] += 1
+    }
+    for (const difference of differencesByRecord.get(record) ?? []) {
+      if (difference.kind !== 'substitution' || !difference.bases || difference.position < region.start || difference.position >= region.end) continue
+      const base = difference.bases[0]?.toUpperCase()
+      if (!base || !/^[ACGTN]$/.test(base)) continue
+      const key = alleleKey(difference.position, base)
+      supports.set(key, (supports.get(key) ?? 0) + 1)
+    }
+  }
+  const byAllele = new Map<string, number>()
+  const binMaximums = Array.from({ length: binCount }, () => 0)
+  for (const [key, support] of supports) {
+    const position = Number(key.slice(0, key.indexOf('\u0000')))
+    const index = Math.max(0, Math.min(binCount - 1, Math.floor(((position - region.start) / span) * binCount)))
+    const frequency = coverage[index] ? Math.min(1, support / coverage[index]) : 0
+    byAllele.set(key, frequency)
+    binMaximums[index] = Math.max(binMaximums[index], frequency)
+  }
+  return { byAllele, binMaximums }
+}
+
+function alleleKey(position: number, base: string): string { return `${position}\u0000${base[0]?.toUpperCase() ?? ''}` }
 
 function stableDownsample(records: BamRecord[], limit: number): BamRecord[] {
   if (records.length <= limit) return records

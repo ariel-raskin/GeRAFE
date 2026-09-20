@@ -173,9 +173,11 @@ BAM track menus provide:
 
 - coverage plus alignments, coverage-only, or alignments-only views;
 - expanded, collapsed, and squished read packing;
-- paired-read display and mismatch visibility;
+- paired-read display, independent mismatch/insertion/deletion-or-skip/soft-clip visibility, and a mismatch base-quality threshold;
 - coloring by track, strand, pair orientation, or mapping quality;
-- minimum MAPQ and duplicate, secondary, or supplementary-alignment filters.
+- start/strand/MAPQ/insert-size ordering and strand/read-group/tag grouping;
+- a displayed-read limit, safe hover-inspector mate navigation, and minimum MAPQ plus duplicate, secondary, or supplementary-alignment filters;
+- a coverage alternate-allele-frequency highlight threshold. The orange coverage accent indicates the highest observed non-reference base in that screen bin. Its frequency is supporting reads divided by all passing reads overlapping the bin; total coverage is not filtered.
 
 ### Contact-matrix display controls
 
@@ -202,7 +204,7 @@ Use **File → Save workspace…** to export a `.gerafe.json` document and **Ope
 - Contact-matrix tracks currently show one-dimensional cis windows as triangular heatmaps. Interchromosomal maps, two-axis navigation, expected/observed transforms, and matrix-derived annotations are not yet available.
 - Very deep or high-resolution contact-matrix queries can contain enough cells to slow panning. New tracks use full-visible-span depth by default; bounded automatic depth is available when responsiveness is more important than off-diagonal reach.
 - Custom references provide coordinate navigation but do not automatically include gene annotations or cytobands.
-- Individual BAM reads are drawn below a 250 kb visible span; BAM requests are limited to 2 Mb to avoid unbounded pileups.
+- Individual BAM reads are drawn below a 150 kb visible span; BAM requests are limited to 2 Mb to avoid unbounded pileups.
 - Mismatches can be read from BAM MD tags. Reconstructing mismatches for BAMs without MD tags is unavailable because reference-sequence bases are not currently loaded.
 - Browser-only development sessions cannot retain JavaScript `File` objects across a page reload; native desktop sessions can retain file paths.
 - Stranded signals currently use the shared-baseline diverging presentation with independent positive and negative magnitude scales. Symmetric, stacked, and fully separate paired presentations are planned but not yet available.

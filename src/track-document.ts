@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 19 as const
+export const TRACK_DOCUMENT_VERSION = 20 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -135,8 +135,15 @@ export interface TrackSpec {
   bamIncludeSecondary?: boolean
   bamIncludeSupplementary?: boolean
   bamSortMode?: 'start' | 'strand' | 'mapq' | 'insert-size'
-  bamGroupMode?: 'none' | 'strand' | 'read-group'
+  bamGroupMode?: 'none' | 'strand' | 'read-group' | 'tag'
+  bamGroupTag?: string
   bamMaxReads?: number
+  bamShowInsertions?: boolean
+  bamShowDeletions?: boolean
+  bamShowSoftClips?: boolean
+  bamMinMismatchBaseq?: number
+  /** Minimum alternate-base frequency (0–1) for BAM coverage highlighting. */
+  bamMinAlleleFrequency?: number
   displayGroupId?: string
   scaleBindingId?: string
   signalStrand?: SignalStrand
@@ -496,6 +503,7 @@ export function addAlignmentTrack(
     bamViewAsPairs: false,
     bamShowMismatches: true,
     bamMinMapq: 0,
+    bamMinAlleleFrequency: 0,
   }
   draft.sources.push(source)
   const bottomIndex = draft.tracks.findIndex((item) => item.pane === 'bottom')
@@ -714,7 +722,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -848,8 +856,14 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     bamIncludeSecondary: track.kind === 'alignment' ? track.bamIncludeSecondary === true : undefined,
     bamIncludeSupplementary: track.kind === 'alignment' ? track.bamIncludeSupplementary === true : undefined,
     bamSortMode: track.kind === 'alignment' && ['strand', 'mapq', 'insert-size'].includes(track.bamSortMode as string) ? track.bamSortMode as 'strand' | 'mapq' | 'insert-size' : track.kind === 'alignment' ? 'start' as const : undefined,
-    bamGroupMode: track.kind === 'alignment' && (track.bamGroupMode === 'strand' || track.bamGroupMode === 'read-group') ? track.bamGroupMode : track.kind === 'alignment' ? 'none' as const : undefined,
+    bamGroupMode: track.kind === 'alignment' && (track.bamGroupMode === 'strand' || track.bamGroupMode === 'read-group' || track.bamGroupMode === 'tag') ? track.bamGroupMode : track.kind === 'alignment' ? 'none' as const : undefined,
+    bamGroupTag: track.kind === 'alignment' && typeof track.bamGroupTag === 'string' && /^[A-Za-z][A-Za-z0-9]$/.test(track.bamGroupTag) ? track.bamGroupTag : undefined,
     bamMaxReads: track.kind === 'alignment' && typeof track.bamMaxReads === 'number' && Number.isFinite(track.bamMaxReads) ? Math.max(100, Math.min(100_000, Math.round(track.bamMaxReads))) : track.kind === 'alignment' ? 10_000 : undefined,
+    bamShowInsertions: track.kind === 'alignment' ? track.bamShowInsertions !== false : undefined,
+    bamShowDeletions: track.kind === 'alignment' ? track.bamShowDeletions !== false : undefined,
+    bamShowSoftClips: track.kind === 'alignment' ? track.bamShowSoftClips !== false : undefined,
+    bamMinMismatchBaseq: track.kind === 'alignment' && typeof track.bamMinMismatchBaseq === 'number' && Number.isFinite(track.bamMinMismatchBaseq) ? Math.max(0, Math.min(93, Math.round(track.bamMinMismatchBaseq))) : track.kind === 'alignment' ? 0 : undefined,
+    bamMinAlleleFrequency: track.kind === 'alignment' && typeof track.bamMinAlleleFrequency === 'number' && Number.isFinite(track.bamMinAlleleFrequency) ? Math.max(0, Math.min(1, track.bamMinAlleleFrequency)) : track.kind === 'alignment' ? 0 : undefined,
   })) : []
   const document: TrackDocument = {
     schemaVersion: TRACK_DOCUMENT_VERSION,

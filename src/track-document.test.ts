@@ -140,9 +140,17 @@ describe('track document', () => {
     const track = addAlignmentTrack(document, { id: 'bam-source', name: 'reads.bam', format: 'bam', files: [] }, { id: 'bam-track' })
     expect(track).toMatchObject({
       kind: 'alignment', alignmentDisplayMode: 'expanded', bamViewMode: 'both', bamColorMode: 'track',
-      bamViewAsPairs: false, bamShowMismatches: true, bamMinMapq: 0,
+      bamViewAsPairs: false, bamShowMismatches: true, bamMinMapq: 0, bamMinAlleleFrequency: 0,
     })
     expect(track.scaleBindingId).toBeUndefined()
+  })
+
+  it('persists a bounded BAM coverage allele-frequency threshold', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
+    const track = addAlignmentTrack(document, { id: 'bam-source', name: 'reads.bam', format: 'bam', files: [] }, { id: 'bam-track' })
+    track.bamMinAlleleFrequency = 1.5
+    const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
+    expect(restored.tracks.find((item) => item.id === 'bam-track')?.bamMinAlleleFrequency).toBe(1)
   })
 
   it('migrates earlier BAM signal tracks into alignment tracks', () => {

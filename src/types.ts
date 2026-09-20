@@ -70,6 +70,8 @@ export interface AlignmentDifference {
   length: number
   bases?: string
   quality?: number
+  /** Approximate alternate-allele frequency in the visible coverage bin. */
+  alleleFrequency?: number
 }
 
 export interface AlignmentFeature {
@@ -91,10 +93,13 @@ export interface AlignmentFeature {
   templateLength: number
   pairOrientation?: string
   readGroup?: string
+  tags?: Record<string, string>
 }
 
 export interface AlignmentCoverageFeature extends SignalFeature {
   featureType: 'coverage'
+  /** Highest observed alternate-base frequency in this screen-coverage bin. */
+  alleleFrequency?: number
 }
 
 export type TrackFeature = SignalFeature | IntervalFeature | InteractionFeature | MatrixFeature | AlignmentFeature | AlignmentCoverageFeature
@@ -106,6 +111,7 @@ export interface TrackQueryOptions {
   bamIncludeDuplicates?: boolean
   bamIncludeSecondary?: boolean
   bamIncludeSupplementary?: boolean
+  bamGroupTag?: string
   matrixResolution?: number
   matrixNormalization?: string
   matrixMaxDistance?: number

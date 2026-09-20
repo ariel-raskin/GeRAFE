@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, interactionArcHeight, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
-import type { InteractionFeature, MatrixFeature } from './types.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, interactionArcHeight, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import type { AlignmentFeature, InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
 
@@ -87,6 +87,17 @@ describe('track layout and ruler formatting', () => {
       { id: 'second', height: 60, resizable: true },
       { id: 'genes', height: 44, resizable: false },
     ])).toEqual([{ trackIds: ['first'], y: 80 }, { trackIds: ['second'], y: 140 }])
+  })
+})
+
+describe('BAM read ordering and grouping', () => {
+  it('groups by selected tags before applying a stable requested sort', () => {
+    const reads = [
+      { featureType: 'alignment', name: 'late-b', start: 30, end: 40, mapq: 10, strand: '+', flags: 0, cigar: '10M', blocks: [], differences: [], paired: false, properPair: false, mateOnSameChromosome: false, templateLength: 100, tags: { CB: 'B' } },
+      { featureType: 'alignment', name: 'early-a', start: 20, end: 30, mapq: 60, strand: '-', flags: 0, cigar: '10M', blocks: [], differences: [], paired: false, properPair: false, mateOnSameChromosome: false, templateLength: 50, tags: { CB: 'A' } },
+      { featureType: 'alignment', name: 'late-a', start: 10, end: 20, mapq: 20, strand: '+', flags: 0, cigar: '10M', blocks: [], differences: [], paired: false, properPair: false, mateOnSameChromosome: false, templateLength: 25, tags: { CB: 'A' } },
+    ] satisfies AlignmentFeature[]
+    expect(selectBamAlignments(reads, 10, 'mapq', 'tag', 'CB').map((read) => read.name)).toEqual(['early-a', 'late-a', 'late-b'])
   })
 })
 
