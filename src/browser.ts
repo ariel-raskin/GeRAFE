@@ -658,7 +658,8 @@ export class GenomeBrowser {
     bins.textContent = `${formatLocus({ chr: this.region.chr, start: inspection.bin1, end: inspection.bin1 + matrix.resolution })} × ${formatLocus({ chr: this.region.chr, start: inspection.bin2, end: inspection.bin2 + matrix.resolution })}`
     const details = document.createElement('small')
     const valueMode = spec.matrixValueMode ?? 'observed'
-    details.textContent = `${formatBases(inspection.separation)} separation · ${formatBases(matrix.resolution)} bins · ${spec.matrixNormalization ?? 'raw'} · ${valueMode === 'observed' ? 'observed' : valueMode === 'observed-expected' ? 'observed/expected' : 'log2(observed/expected)'}`
+    const comparisonLabel = spec.matrixComparisonMode ? `${spec.matrixComparisonMode} · ` : ''
+    details.textContent = `${formatBases(inspection.separation)} separation · ${formatBases(matrix.resolution)} bins · ${spec.matrixNormalization ?? 'raw'} · ${comparisonLabel}${valueMode === 'observed' ? 'observed' : valueMode === 'observed-expected' ? 'observed/expected' : 'log2(observed/expected)'}`
     const content: HTMLElement[] = []
     if (this.matrixDisplayPreferences.inspectorValue) content.push(heading)
     if (this.matrixDisplayPreferences.inspectorBins) content.push(bins)
@@ -906,7 +907,7 @@ export class GenomeBrowser {
       if (spec.kind !== 'matrix') continue
       const matrix = this.runtimes.get(spec.id)?.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
       const automaticPercentile = spec.matrixScaleMode === 'maximum' ? 1 : spec.matrixScalePercentile ?? 0.99
-      const automaticMaximum = spec.matrixValueMode === 'log2-observed-expected'
+      const automaticMaximum = spec.matrixValueMode === 'log2-observed-expected' || spec.matrixComparisonMode === 'difference' || spec.matrixComparisonMode === 'log2-ratio'
         ? matrixAutomaticMagnitude(matrix, automaticPercentile, spec.matrixIgnoreDiagonals ?? 3)
         : matrixAutomaticMaximum(matrix, automaticPercentile, spec.matrixIgnoreDiagonals ?? 3)
       maxima.set(spec.id, spec.matrixScaleMode === 'fixed' && spec.matrixScaleMax !== undefined ? spec.matrixScaleMax : automaticMaximum)
@@ -1517,7 +1518,7 @@ export class GenomeBrowser {
     ctx.beginPath(); ctx.moveTo(0, bottom - 0.5); ctx.lineTo(width, bottom - 0.5); ctx.stroke()
 
     const matrix = track.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
-    const signed = spec.matrixValueMode === 'log2-observed-expected'
+    const signed = spec.matrixValueMode === 'log2-observed-expected' || spec.matrixComparisonMode === 'difference' || spec.matrixComparisonMode === 'log2-ratio'
     const minimum = signed ? 0 : Math.max(0, spec.matrixScaleMin ?? 0)
     const minimumRange = Math.max(1e-9, Math.abs(minimum) * 1e-9)
     const automaticPercentile = spec.matrixScaleMode === 'maximum' ? 1 : spec.matrixScalePercentile ?? 0.99
@@ -1542,7 +1543,7 @@ export class GenomeBrowser {
     if (this.matrixDisplayPreferences.metadata) {
       const resolution = matrix?.resolution ?? spec.matrixResolution
       const normalization = spec.matrixNormalization ?? 'raw'
-      const valueLabel = signed ? 'log2 O/E' : spec.matrixValueMode === 'observed-expected' ? 'O/E' : 'observed'
+      const valueLabel = spec.matrixComparisonMode ? `${spec.matrixComparisonMode} ${spec.matrixValueMode === 'observed-expected' ? 'O/E' : 'observed'}` : signed ? 'log2 O/E' : spec.matrixValueMode === 'observed-expected' ? 'O/E' : 'observed'
       const metadata = ellipsize(ctx, `${resolution ? formatBases(resolution) : 'auto resolution'} · ${normalization} · ${valueLabel}`, labelBounds.width)
       ctx.fillText(metadata, labelBounds.center, Math.min(bottom - 7, labelTop + labelLines.length * 15 + 3))
     }
@@ -2134,6 +2135,7 @@ export class GenomeBrowser {
         matrixResolution: spec.matrixResolution,
         matrixNormalization: spec.matrixNormalization,
         matrixValueMode: spec.matrixValueMode,
+        matrixComparisonMode: spec.matrixComparisonMode,
         matrixMaxDistance: matrixQueryMaximumDistance(span, spec.matrixDepthMode ?? 'full', spec.matrixMaxDistance),
       } : undefined
       const queryPixelWidth = plotWidth * (1 + overscanFactor * 2)
@@ -2612,7 +2614,7 @@ export function resolveMatrixMaximums(
   for (const group of groups) {
     if (group.scaleBehavior !== 'linked') continue
     for (const mode of ['observed', 'observed-expected', 'log2-observed-expected']) {
-      const memberIds = specs.filter((spec) => spec.kind === 'matrix' && spec.displayGroupId === group.id && (spec.matrixValueMode ?? 'observed') === mode).map((spec) => spec.id)
+      const memberIds = specs.filter((spec) => spec.kind === 'matrix' && !spec.matrixComparisonMode && spec.displayGroupId === group.id && (spec.matrixValueMode ?? 'observed') === mode).map((spec) => spec.id)
       if (memberIds.length < 2) continue
       const shared = Math.max(...memberIds.map((id) => resolved.get(id) ?? 1))
       for (const id of memberIds) resolved.set(id, shared)
@@ -2844,7 +2846,8 @@ function drawMatrixLegend(
   for (let step = 20; step >= 0; step -= 1) {
     const scoreIntensity = step / 20
     const intensity = matrixPaletteIntensity(scoreIntensity, spec.matrixPaletteReversed === true)
-    const style = spec.matrixValueMode === 'log2-observed-expected'
+    const signed = spec.matrixValueMode === 'log2-observed-expected' || spec.matrixComparisonMode === 'difference' || spec.matrixComparisonMode === 'log2-ratio'
+    const style = signed
       ? { color: matrixSignedColor(scoreIntensity * 2 - 1), alpha: 1 }
       : matrixPaletteStyle(spec, intensity)
     gradient.addColorStop(1 - scoreIntensity, style.alpha === 1 ? style.color : colorWithAlpha(style.color, style.alpha))
@@ -2855,7 +2858,7 @@ function drawMatrixLegend(
   ctx.fillRect(gradientX, legendTop, gradientWidth, Math.max(1, legendBottom - legendTop))
   ctx.strokeRect(gradientX + 0.5, legendTop + 0.5, gradientWidth - 1, Math.max(1, legendBottom - legendTop - 1))
 
-  const labels = (spec.matrixValueMode === 'log2-observed-expected' ? [maximum, 0, -maximum] : matrixLegendValues(minimum, maximum, spec.matrixTransform ?? 'log1p')).map(formatScore)
+  const labels = (spec.matrixValueMode === 'log2-observed-expected' || spec.matrixComparisonMode === 'difference' || spec.matrixComparisonMode === 'log2-ratio' ? [maximum, 0, -maximum] : matrixLegendValues(minimum, maximum, spec.matrixTransform ?? 'log1p')).map(formatScore)
   ctx.fillStyle = palette.axisInk
   ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
   ctx.textAlign = 'right'
@@ -3098,6 +3101,7 @@ export function matrixQueryChanged(previous: TrackSpec, next: TrackSpec): boolea
   return previous.matrixResolution !== next.matrixResolution
     || previous.matrixNormalization !== next.matrixNormalization
     || previous.matrixValueMode !== next.matrixValueMode
+    || previous.matrixComparisonMode !== next.matrixComparisonMode
     || previous.matrixDepthMode !== next.matrixDepthMode
     || previous.matrixMaxDistance !== next.matrixMaxDistance
 }

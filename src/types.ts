@@ -116,6 +116,7 @@ export interface TrackQueryOptions {
   matrixResolution?: number
   matrixNormalization?: string
   matrixValueMode?: 'observed' | 'observed-expected' | 'log2-observed-expected'
+  matrixComparisonMode?: 'difference' | 'ratio' | 'log2-ratio'
   matrixMaxDistance?: number
 }
 

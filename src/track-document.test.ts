@@ -30,6 +30,18 @@ function documentWithTwoTracks() {
 }
 
 describe('track document', () => {
+  it('migrates v21 workspaces and preserves a two-file matrix comparison', () => {
+    const legacy = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
+    expect(normalizeTrackDocument({ ...legacy, schemaVersion: 21 }).schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
+    const source = { id: 'comparison', name: 'A − B', format: 'matrix-comparison' as const, files: [
+      { name: 'a.cool', size: 1, lastModified: 1, role: 'signal' as const, path: 'C:\\a.cool' },
+      { name: 'b.hic', size: 2, lastModified: 2, role: 'comparison' as const, path: 'C:\\b.hic' },
+    ] }
+    addMatrixTrack(legacy, source, { id: 'difference' }).matrixComparisonMode = 'difference'
+    const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(legacy)))
+    expect(restored.tracks.find((track) => track.id === 'difference')?.matrixComparisonMode).toBe('difference')
+    expect(restored.sources.find((item) => item.id === 'comparison')?.files).toEqual(source.files)
+  })
   it('links scales automatically for a new visual group and can opt out', () => {
     const document = documentWithTwoTracks()
     assignDisplayGroup(document, ['t1', 't2'], 'Condition A')

@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { MatrixFeature, Region, TrackQueryOptions, TrackSource } from '../types.ts'
+import { compareMatrixFeatures } from './matrix-comparison.ts'
 
 export type MatrixFormat = 'hic' | 'cool' | 'mcool'
 
@@ -69,6 +70,54 @@ export class NativeMatrixSource implements TrackSource {
 
 export function isNativeMatrixSource(source: TrackSource | undefined): source is NativeMatrixSource {
   return source instanceof NativeMatrixSource
+}
+
+/** One runtime source, backed by two independently cached native matrix readers. */
+export class MatrixComparisonSource implements TrackSource {
+  readonly chromosomes: ReadonlyMap<string, number>
+  readonly matrixMetadata: ContactMatrixMetadata
+
+  constructor(readonly name: string, readonly first: NativeMatrixSource, readonly second: NativeMatrixSource) {
+    const resolutions = first.matrixMetadata.resolutions.filter((value) => second.matrixMetadata.resolutions.includes(value))
+    if (!resolutions.length) throw new Error('The matrices have no shared resolution; comparison needs matching bin sizes.')
+    const firstNormalizations = first.matrixMetadata.normalizations.map((value) => value === 'NONE' ? 'raw' : value)
+    const secondNormalizations = second.matrixMetadata.normalizations.map((value) => value === 'NONE' ? 'raw' : value)
+    const normalizations = [...new Set(firstNormalizations.filter((value) => secondNormalizations.includes(value)))]
+    if (!normalizations.length) throw new Error('The matrices have no shared normalization.')
+    this.chromosomes = new Map([...first.chromosomes].flatMap(([name, length]) => {
+      const counterpart = resolveFileChromosome(name, second.matrixMetadata.chromosomes)
+      const secondLength = counterpart ? second.chromosomes.get(counterpart) : undefined
+      return secondLength ? [[name, Math.min(length, secondLength)] as const] : []
+    }))
+    if (!this.chromosomes.size) throw new Error('The matrices have no shared chromosomes.')
+    this.matrixMetadata = {
+      format: first.format, chromosomes: [...this.chromosomes].map(([name, length]) => ({ name, length })),
+      resolutions, normalizations, defaultNormalization: normalizations.includes('raw') ? 'raw' : normalizations[0],
+    }
+  }
+
+  async getFeatures(region: Region, pixelWidth: number, signal?: AbortSignal, options?: TrackQueryOptions): Promise<MatrixFeature[]> {
+    const available = this.matrixMetadata.resolutions
+    const target = Math.ceil((region.end - region.start) / Math.max(1, Math.min(1_200, Math.round(pixelWidth / 2))))
+    const resolution = options?.matrixResolution ?? available.filter((value) => value >= target).sort((a, b) => a - b)[0] ?? Math.max(...available)
+    if (!available.includes(resolution)) throw new Error(`The ${resolution} bp resolution is not shared by the matrices.`)
+    const normalization = options?.matrixNormalization ?? this.matrixMetadata.defaultNormalization
+    if (!this.matrixMetadata.normalizations.includes(normalization)) throw new Error(`The ${normalization} normalization is not shared by the matrices.`)
+    const commonOptions = {
+      ...options, matrixResolution: resolution, matrixNormalization: normalization,
+      matrixValueMode: options?.matrixValueMode === 'log2-observed-expected' ? 'observed-expected' as const : options?.matrixValueMode,
+    }
+    const query = (source: NativeMatrixSource): Promise<MatrixFeature[]> => source.getFeatures(region, pixelWidth, signal, {
+      ...commonOptions, matrixNormalization: normalization === 'raw' && source.format === 'hic' ? 'NONE' : normalization,
+    })
+    const [first, second] = await Promise.all([query(this.first), query(this.second)])
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+    return [compareMatrixFeatures(first[0], second[0], options?.matrixComparisonMode ?? 'difference')]
+  }
+}
+
+export function isMatrixSource(source: TrackSource | undefined): source is NativeMatrixSource | MatrixComparisonSource {
+  return source instanceof NativeMatrixSource || source instanceof MatrixComparisonSource
 }
 
 function resolveFileChromosome(requested: string, chromosomes: readonly { name: string }[]): string | undefined {
