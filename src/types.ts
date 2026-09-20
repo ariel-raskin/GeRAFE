@@ -62,6 +62,7 @@ export interface MatrixFeature {
   missingCells: MatrixCellPosition[]
   /** Genomic bin starts masked by the active normalization, when exposed by the source. */
   maskedBins: number[]
+  valueMode?: 'observed' | 'observed-expected' | 'log2-observed-expected'
 }
 
 export interface AlignmentDifference {
@@ -114,6 +115,7 @@ export interface TrackQueryOptions {
   bamGroupTag?: string
   matrixResolution?: number
   matrixNormalization?: string
+  matrixValueMode?: 'observed' | 'observed-expected' | 'log2-observed-expected'
   matrixMaxDistance?: number
 }
 

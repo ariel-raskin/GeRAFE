@@ -15,8 +15,10 @@ use std::{
 const AUTO_TARGET_CELL_PIXELS: f64 = 2.0;
 const MAX_MATRIX_BINS: usize = 1_200;
 const MAX_CACHED_MATRIX_FILES: usize = 8;
+const MAX_EXPECTED_DISTANCE_BINS: usize = 2_000;
+const EXPECTED_PIXEL_CHUNK: u64 = 250_000;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct FileStamp {
     length: u64,
     modified: Option<SystemTime>,
@@ -26,6 +28,17 @@ struct FileStamp {
 struct MatrixFileCache {
     hic: HashMap<PathBuf, (FileStamp, Arc<HiCReader>)>,
     cooler: HashMap<PathBuf, (FileStamp, Hdf5File)>,
+    expected: HashMap<ExpectedCacheKey, Arc<Vec<f64>>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ExpectedCacheKey {
+    path: PathBuf,
+    stamp: FileStamp,
+    chromosome: String,
+    resolution: u64,
+    normalization: String,
+    maximum_distance: u64,
 }
 
 static MATRIX_FILE_CACHE: OnceLock<Mutex<MatrixFileCache>> = OnceLock::new();
@@ -59,6 +72,17 @@ pub struct MatrixQuery {
     pub resolution: Option<u64>,
     pub normalization: String,
     pub max_distance: Option<u64>,
+    #[serde(default)]
+    pub value_mode: MatrixValueMode,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum MatrixValueMode {
+    #[default]
+    Observed,
+    ObservedExpected,
+    Log2ObservedExpected,
 }
 
 #[derive(Debug, Serialize)]
@@ -280,7 +304,11 @@ fn query_hic(options: &MatrixQuery) -> Result<MatrixQueryResult, String> {
     request.full_bin = true;
     request.triangle = true;
     request.normalization = options.normalization.to_ascii_lowercase();
-    request.mode = HiCMode::Observed;
+    request.mode = if options.value_mode == MatrixValueMode::Observed {
+        HiCMode::Observed
+    } else {
+        HiCMode::Oe
+    };
     let location = reader
         .parse_loc(&request)
         .map_err(|error| format!("Could not resolve the .hic window: {error}"))?;
@@ -310,7 +338,7 @@ fn query_hic(options: &MatrixQuery) -> Result<MatrixQueryResult, String> {
             cells.push(MatrixCell {
                 bin1,
                 bin2,
-                value: value as f64,
+                value: transform_matrix_value(value as f64, options.value_mode),
             });
         }
     }
@@ -432,6 +460,18 @@ fn query_cool(
         None
     };
     let divisive = is_divisive_cooler_weight(&options.normalization);
+    let expected = if options.value_mode == MatrixValueMode::Observed {
+        None
+    } else {
+        Some(cooler_expected(
+            &file,
+            options,
+            &prefix,
+            resolution,
+            chromosome_bin_start,
+            chromosome_bin_end,
+        )?)
+    };
     let masked_bins = weights
         .as_ref()
         .map(|weights| masked_bin_starts(weights, &bin_starts))
@@ -475,10 +515,23 @@ fn query_cool(
         if masked {
             continue;
         }
+        if let Some(expected) = &expected {
+            let distance = (bin2_id - bin1_id) as usize;
+            let denominator = expected.get(distance).copied().unwrap_or(0.0);
+            if denominator <= 0.0 || !denominator.is_finite() {
+                missing_cells.push(MatrixCellPosition { bin1, bin2 });
+                continue;
+            }
+            value /= denominator;
+        }
         if !value.is_finite() {
             missing_cells.push(MatrixCellPosition { bin1, bin2 });
         } else if value > 0.0 {
-            cells.push(MatrixCell { bin1, bin2, value });
+            cells.push(MatrixCell {
+                bin1,
+                bin2,
+                value: transform_matrix_value(value, options.value_mode),
+            });
         }
     }
     Ok(MatrixQueryResult {
@@ -487,6 +540,187 @@ fn query_cool(
         missing_cells,
         masked_bins,
     })
+}
+
+fn transform_matrix_value(value: f64, mode: MatrixValueMode) -> f64 {
+    if mode == MatrixValueMode::Log2ObservedExpected {
+        value.log2()
+    } else {
+        value
+    }
+}
+
+fn cooler_expected(
+    file: &Hdf5File,
+    options: &MatrixQuery,
+    prefix: &str,
+    resolution: u64,
+    chromosome_bin_start: u64,
+    chromosome_bin_end: u64,
+) -> Result<Arc<Vec<f64>>, String> {
+    let chromosome_bins = chromosome_bin_end.saturating_sub(chromosome_bin_start);
+    let requested_distance = options
+        .max_distance
+        .unwrap_or(options.end - options.start)
+        .min(options.end - options.start);
+    let distance_bins = requested_distance
+        .div_ceil(resolution)
+        .saturating_add(1)
+        .min(chromosome_bins.saturating_sub(1)) as usize;
+    if distance_bins > MAX_EXPECTED_DISTANCE_BINS {
+        return Err(format!("Observed/expected supports at most {MAX_EXPECTED_DISTANCE_BINS} bins of genomic depth at this resolution. Choose a coarser resolution or shorter depth."));
+    }
+    let key = ExpectedCacheKey {
+        path: matrix_file_key(Path::new(&options.path)),
+        stamp: file_stamp(Path::new(&options.path))?,
+        chromosome: options.chromosome.clone(),
+        resolution,
+        normalization: options.normalization.clone(),
+        maximum_distance: distance_bins as u64,
+    };
+    let cache = MATRIX_FILE_CACHE.get_or_init(|| Mutex::new(MatrixFileCache::default()));
+    if let Some(values) = cache
+        .lock()
+        .map_err(|_| "The contact-matrix expected-value cache is unavailable.".to_string())?
+        .expected
+        .get(&key)
+        .cloned()
+    {
+        return Ok(values);
+    }
+    let bins = chromosome_bins as usize;
+    let weights = if options.normalization.eq_ignore_ascii_case("raw") {
+        None
+    } else {
+        Some(read_f64_rows(
+            file,
+            &cooler_path(prefix, &format!("bins/{}", options.normalization)),
+            chromosome_bin_start,
+            chromosome_bins,
+        )?)
+    };
+    let valid = (0..bins)
+        .map(|index| {
+            weights.as_ref().is_none_or(|weights| {
+                weights
+                    .get(index)
+                    .is_some_and(|weight| weight.is_finite() && *weight > 0.0)
+            })
+        })
+        .collect::<Vec<_>>();
+    let counts = expected_pair_counts(&valid, distance_bins);
+    let offsets = read_u64_rows(
+        file,
+        &cooler_path(prefix, "indexes/bin1_offset"),
+        chromosome_bin_start,
+        chromosome_bins + 1,
+    )?;
+    let pixel_start = offsets[0];
+    let pixel_end = *offsets
+        .last()
+        .ok_or("The Cooler pixel index is incomplete.")?;
+    let divisive = is_divisive_cooler_weight(&options.normalization);
+    let mut sums = vec![0.0_f64; distance_bins + 1];
+    let mut position = pixel_start;
+    while position < pixel_end {
+        let count = EXPECTED_PIXEL_CHUNK.min(pixel_end - position);
+        let first_ids = read_u64_rows(
+            file,
+            &cooler_path(prefix, "pixels/bin1_id"),
+            position,
+            count,
+        )?;
+        let second_ids = read_u64_rows(
+            file,
+            &cooler_path(prefix, "pixels/bin2_id"),
+            position,
+            count,
+        )?;
+        let values = read_f64_rows(file, &cooler_path(prefix, "pixels/count"), position, count)?;
+        if first_ids.len() != second_ids.len() || first_ids.len() != values.len() {
+            return Err("The Cooler pixel columns have different sizes.".into());
+        }
+        for ((first_id, second_id), mut value) in first_ids.into_iter().zip(second_ids).zip(values)
+        {
+            if first_id < chromosome_bin_start
+                || second_id >= chromosome_bin_end
+                || second_id < first_id
+            {
+                continue;
+            }
+            let first = (first_id - chromosome_bin_start) as usize;
+            let second = (second_id - chromosome_bin_start) as usize;
+            let distance = second - first;
+            if distance > distance_bins || !valid[first] || !valid[second] || !value.is_finite() {
+                continue;
+            }
+            if let Some(weights) = &weights {
+                value = if divisive {
+                    value / (weights[first] * weights[second])
+                } else {
+                    value * weights[first] * weights[second]
+                };
+            }
+            if value.is_finite() {
+                sums[distance] += value;
+            }
+        }
+        position += count;
+    }
+    let expected = Arc::new(expected_distance_means(&sums, &counts));
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "The contact-matrix expected-value cache is unavailable.".to_string())?;
+    if cache.expected.len() >= MAX_CACHED_MATRIX_FILES {
+        cache.expected.clear();
+    }
+    cache.expected.insert(key, Arc::clone(&expected));
+    Ok(expected)
+}
+
+fn expected_pair_counts(valid: &[bool], distance_bins: usize) -> Vec<u64> {
+    let mut counts = vec![0_u64; distance_bins + 1];
+    if valid.iter().all(|valid| *valid) {
+        for (distance, count) in counts.iter_mut().enumerate() {
+            *count = valid.len().saturating_sub(distance) as u64;
+        }
+        return counts;
+    }
+    let mut bits = vec![0_u64; valid.len().div_ceil(64)];
+    for (index, present) in valid.iter().enumerate() {
+        if *present {
+            bits[index / 64] |= 1_u64 << (index % 64);
+        }
+    }
+    for (distance, count) in counts.iter_mut().enumerate() {
+        let word_shift = distance / 64;
+        let bit_shift = distance % 64;
+        for (index, left) in bits.iter().enumerate() {
+            let right = bits.get(index + word_shift).copied().unwrap_or(0) >> bit_shift;
+            let carry = if bit_shift == 0 {
+                0
+            } else {
+                bits.get(index + word_shift + 1).copied().unwrap_or(0) << (64 - bit_shift)
+            };
+            *count += (left & (right | carry)).count_ones() as u64;
+        }
+    }
+    counts
+}
+
+fn expected_distance_means(sums: &[f64], counts: &[u64]) -> Vec<f64> {
+    sums.iter()
+        .zip(counts)
+        .map(
+            |(sum, count)| {
+                if *count > 0 {
+                    sum / *count as f64
+                } else {
+                    0.0
+                }
+            },
+        )
+        .collect()
 }
 
 fn masked_bin_starts(weights: &[f64], bin_starts: &[u64]) -> Vec<u64> {
@@ -725,15 +959,16 @@ mod tests {
             let span = chromosome.length.min(2_000_000);
             let start = chromosome.length.saturating_sub(span) / 2;
             let result = query(MatrixQuery {
-                path,
+                path: path.clone(),
                 format: format.into(),
                 chromosome: chromosome.name.clone(),
                 start,
                 end: start + span,
                 pixel_width: 800,
                 resolution: None,
-                normalization: metadata.default_normalization,
+                normalization: metadata.default_normalization.clone(),
                 max_distance: None,
+                value_mode: MatrixValueMode::Observed,
             })
             .unwrap_or_else(|error| panic!("{variable} query failed: {error}"));
             assert!(metadata.resolutions.contains(&result.resolution));
@@ -743,6 +978,72 @@ mod tests {
                     && cell.bin2 + result.resolution > start
                     && cell.bin2 < start + span
             }));
+            let normalized = query(MatrixQuery {
+                path: path.clone(),
+                format: format.into(),
+                chromosome: chromosome.name.clone(),
+                start,
+                end: start + span,
+                pixel_width: 800,
+                resolution: Some(result.resolution),
+                normalization: metadata.default_normalization.clone(),
+                max_distance: Some(100_000),
+                value_mode: MatrixValueMode::ObservedExpected,
+            })
+            .unwrap_or_else(|error| panic!("{variable} observed/expected query failed: {error}"));
+            assert!(normalized
+                .cells
+                .iter()
+                .all(|cell| cell.value.is_finite() && cell.value > 0.0));
+            let log2 = query(MatrixQuery {
+                path: path.clone(),
+                format: format.into(),
+                chromosome: chromosome.name.clone(),
+                start,
+                end: start + span,
+                pixel_width: 800,
+                resolution: Some(result.resolution),
+                normalization: metadata.default_normalization.clone(),
+                max_distance: Some(100_000),
+                value_mode: MatrixValueMode::Log2ObservedExpected,
+            })
+            .unwrap_or_else(|error| {
+                panic!("{variable} log2 observed/expected query failed: {error}")
+            });
+            let ratios = normalized
+                .cells
+                .iter()
+                .map(|cell| ((cell.bin1, cell.bin2), cell.value))
+                .collect::<HashMap<_, _>>();
+            assert!(log2.cells.iter().all(|cell| ratios
+                .get(&(cell.bin1, cell.bin2))
+                .is_some_and(|ratio| (cell.value - ratio.log2()).abs() < 0.001)));
+            if format != "hic"
+                && metadata
+                    .normalizations
+                    .iter()
+                    .any(|value| value == "weight")
+            {
+                let balanced = query(MatrixQuery {
+                    path,
+                    format: format.into(),
+                    chromosome: chromosome.name.clone(),
+                    start,
+                    end: start + span,
+                    pixel_width: 800,
+                    resolution: Some(result.resolution),
+                    normalization: "weight".into(),
+                    max_distance: Some(100_000),
+                    value_mode: MatrixValueMode::ObservedExpected,
+                })
+                .unwrap_or_else(|error| {
+                    panic!("{variable} balanced observed/expected query failed: {error}")
+                });
+                assert!(balanced
+                    .cells
+                    .iter()
+                    .all(|cell| cell.value.is_finite() && cell.value > 0.0));
+            }
         }
     }
 
@@ -760,6 +1061,32 @@ mod tests {
         assert_eq!(
             masked_bin_starts(&weights, &starts),
             vec![5_000, 10_000, 15_000]
+        );
+    }
+
+    #[test]
+    fn expected_means_include_sparse_zero_pairs_and_exclude_masked_bins() {
+        let counts = expected_pair_counts(&[true, true, true], 2);
+        assert_eq!(counts, [3, 2, 1]);
+        assert_eq!(
+            expected_distance_means(&[12.0, 6.0, 0.0], &counts),
+            [4.0, 3.0, 0.0]
+        );
+        assert_eq!(expected_pair_counts(&[true, false, true], 2), [2, 0, 1]);
+        let mut masked = vec![true; 70];
+        masked[2] = false;
+        masked[63] = false;
+        masked[68] = false;
+        let actual = expected_pair_counts(&masked, 69);
+        for (distance, count) in actual.iter().enumerate() {
+            let brute_force = (0..masked.len() - distance)
+                .filter(|index| masked[*index] && masked[index + distance])
+                .count() as u64;
+            assert_eq!(*count, brute_force, "distance {distance}");
+        }
+        assert_eq!(
+            transform_matrix_value(0.5, MatrixValueMode::Log2ObservedExpected),
+            -1.0
         );
     }
 
@@ -785,6 +1112,7 @@ mod tests {
                 resolution: Some(5_000),
                 normalization: normalization.into(),
                 max_distance: None,
+                value_mode: MatrixValueMode::Observed,
             })
             .unwrap()
         };
