@@ -1381,6 +1381,11 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
       + action('bam-display-squished', 'Squished', alignmentTracks.every((track) => track.alignmentDisplayMode === 'squished') ? 'current' : ''))
     typeItems += action('bam-pairs', 'View as pairs', alignmentTracks.every((track) => track.bamViewAsPairs) ? 'current' : '')
       + action('bam-mismatches', 'Show mismatches', alignmentTracks.every((track) => track.bamShowMismatches !== false) ? 'current' : '')
+    typeItems += submenu('bam-marks', 'Read marks', '',
+      action('bam-insertions', 'Show insertions', alignmentTracks.every((track) => track.bamShowInsertions !== false) ? 'current' : '')
+      + action('bam-deletions', 'Show deletions and skips', alignmentTracks.every((track) => track.bamShowDeletions !== false) ? 'current' : '')
+      + action('bam-soft-clips', 'Show soft clips', alignmentTracks.every((track) => track.bamShowSoftClips !== false) ? 'current' : '')
+      + action('bam-baseq', 'Minimum mismatch base quality…'))
     typeItems += submenu('bam-color', 'Color by', bamColorModeLabel(colorMode),
       action('bam-color-track', 'Track', alignmentTracks.every((track) => track.bamColorMode === 'track' || !track.bamColorMode) ? 'current' : '')
       + action('bam-color-strand', 'Strand', alignmentTracks.every((track) => track.bamColorMode === 'strand') ? 'current' : '')
@@ -1394,9 +1399,11 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
       + action('bam-group-none', 'No grouping', alignmentTracks.every((track) => (track.bamGroupMode ?? 'none') === 'none') ? 'current' : '')
       + action('bam-group-strand', 'Group by strand', alignmentTracks.every((track) => track.bamGroupMode === 'strand') ? 'current' : '')
       + action('bam-group-read-group', 'Group by read group', alignmentTracks.every((track) => track.bamGroupMode === 'read-group') ? 'current' : '')
+      + action('bam-group-tag', 'Group by BAM tag…', alignmentTracks.every((track) => track.bamGroupMode === 'tag') ? 'current' : '')
       + action('bam-limit', 'Displayed-read limit…'))
     typeItems += submenu('bam-filters', 'Read filters', sameValue(alignmentTracks.map((track) => track.bamMinMapq ?? 0)) ? `MAPQ ≥ ${alignmentTracks[0].bamMinMapq ?? 0}` : 'Mixed',
       action('bam-mapq', 'Minimum mapping quality…', sameValue(alignmentTracks.map((track) => track.bamMinMapq ?? 0)) ? String(alignmentTracks[0].bamMinMapq ?? 0) : 'Mixed')
+      + action('bam-allele-frequency', 'Coverage alternate-allele frequency…', sameValue(alignmentTracks.map((track) => track.bamMinAlleleFrequency ?? 0)) ? `≥ ${Math.round((alignmentTracks[0].bamMinAlleleFrequency ?? 0) * 100)}%` : 'Mixed')
       + action('bam-duplicates', 'Include duplicate reads', alignmentTracks.every((track) => track.bamIncludeDuplicates) ? 'current' : '')
       + action('bam-secondary', 'Include secondary alignments', alignmentTracks.every((track) => track.bamIncludeSecondary) ? 'current' : '')
       + action('bam-supplementary', 'Include supplementary alignments', alignmentTracks.every((track) => track.bamIncludeSupplementary) ? 'current' : ''))
@@ -1887,7 +1894,8 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
     store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamColorMode = mode })
   }
   if (command?.startsWith('bam-sort-')) { const mode = command.slice(9) as 'start' | 'strand' | 'mapq' | 'insert-size'; store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamSortMode = mode }) }
-  if (command?.startsWith('bam-group-')) { const mode = command.slice(10) as 'none' | 'strand' | 'read-group'; store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamGroupMode = mode }) }
+  if (command === 'bam-group-tag') { const entered = await requestText({ title: 'Group by BAM tag', label: 'Two-character tag', initial: 'RG', submitLabel: 'Group reads', validate: (value) => /^[A-Za-z][A-Za-z0-9]$/.test(value) ? undefined : 'Enter a two-character BAM tag.' }); if (entered) store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') { track.bamGroupMode = 'tag'; track.bamGroupTag = entered } }) }
+  if (command === 'bam-group-none' || command === 'bam-group-strand' || command === 'bam-group-read-group') { const mode = command.slice(10) as 'none' | 'strand' | 'read-group'; store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamGroupMode = mode }) }
   if (command === 'bam-limit') { const entered = await requestText({ title: 'Set displayed-read limit', label: 'Reads (100–100,000)', initial: String(store.current.tracks.find((track) => alignmentIds.includes(track.id))?.bamMaxReads ?? 10_000), submitLabel: 'Apply' }); const value = Number(entered); if (Number.isFinite(value)) store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamMaxReads = Math.max(100, Math.min(100_000, Math.round(value))) }) }
   if (command === 'bam-pairs') store.edit((draft) => {
     const tracks = draft.tracks.filter((track) => alignmentIds.includes(track.id) && track.kind === 'alignment')
@@ -1899,6 +1907,14 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
     const enabled = !tracks.every((track) => track.bamShowMismatches !== false)
     for (const track of tracks) track.bamShowMismatches = enabled
   })
+  if (command === 'bam-insertions' || command === 'bam-deletions' || command === 'bam-soft-clips') store.edit((draft) => {
+    const tracks = draft.tracks.filter((track) => alignmentIds.includes(track.id) && track.kind === 'alignment')
+    const property = command === 'bam-insertions' ? 'bamShowInsertions' : command === 'bam-deletions' ? 'bamShowDeletions' : 'bamShowSoftClips'
+    const enabled = !tracks.every((track) => track[property] !== false)
+    for (const track of tracks) track[property] = enabled
+  })
+  if (command === 'bam-baseq') { const entered = await requestText({ title: 'Minimum mismatch base quality', label: 'Phred quality (0–93)', initial: String(store.current.tracks.find((track) => alignmentIds.includes(track.id))?.bamMinMismatchBaseq ?? 0), submitLabel: 'Apply' }); const value = Number(entered); if (Number.isFinite(value)) store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamMinMismatchBaseq = Math.max(0, Math.min(93, Math.round(value))) }) }
+  if (command === 'bam-allele-frequency') { const entered = await requestText({ title: 'Coverage alternate-allele frequency', label: 'Minimum percentage to highlight (0–100)', initial: String(Math.round((store.current.tracks.find((track) => alignmentIds.includes(track.id))?.bamMinAlleleFrequency ?? 0) * 100)), submitLabel: 'Apply threshold' }); const value = Number(entered); if (Number.isFinite(value)) store.edit((draft) => { for (const track of draft.tracks) if (alignmentIds.includes(track.id) && track.kind === 'alignment') track.bamMinAlleleFrequency = Math.max(0, Math.min(100, value)) / 100 }) }
   if (command === 'bam-mapq') {
     const tracks = store.current.tracks.filter((item) => alignmentIds.includes(item.id) && item.kind === 'alignment')
     const initial = sameValue(tracks.map((track) => track.bamMinMapq ?? 0)) ? tracks[0]?.bamMinMapq ?? 0 : 0
