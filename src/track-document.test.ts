@@ -42,6 +42,17 @@ describe('track document', () => {
     expect(restored.tracks.find((track) => track.id === 'difference')?.matrixComparisonMode).toBe('difference')
     expect(restored.sources.find((item) => item.id === 'comparison')?.files).toEqual(source.files)
   })
+  it('migrates v22 and persists the original matrix for derived signals', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
+    const source = { id: 'derived', name: 'Compartment PC1', format: 'matrix-derived' as const,
+      matrixDerivedMode: 'compartment' as const, matrixDerivedNormalization: 'NONE', matrixDerivedResolution: 100_000,
+      files: [{ name: 'sample.hic', path: 'C:\\sample.hic', size: 1000, lastModified: 25, role: 'signal' as const }] }
+    addSignalTrack(document, source, { id: 'pc1', autoPair: false })
+    const restored = normalizeTrackDocument({ ...document, schemaVersion: 22 })
+    expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
+    expect(restored.sources.find((item) => item.id === 'derived')).toEqual(source)
+    expect(restored.tracks.find((track) => track.id === 'pc1')?.kind).toBe('signal')
+  })
   it('links scales automatically for a new visual group and can opt out', () => {
     const document = documentWithTwoTracks()
     assignDisplayGroup(document, ['t1', 't2'], 'Condition A')

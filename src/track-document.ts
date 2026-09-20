@@ -1,11 +1,11 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 22 as const
+export const TRACK_DOCUMENT_VERSION = 23 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
 
-export type SourceFormat = 'bigwig' | 'bedgraph' | 'tdf' | 'bam' | 'bed' | 'bedpe' | 'hic' | 'cool' | 'mcool' | 'matrix-comparison'
+export type SourceFormat = 'bigwig' | 'bedgraph' | 'tdf' | 'bam' | 'bed' | 'bedpe' | 'hic' | 'cool' | 'mcool' | 'matrix-comparison' | 'matrix-derived'
 export type ScaleMode = 'auto-visible' | 'auto-percentile' | 'fixed'
 export type SignalTransform = 'linear' | 'log1p' | 'symlog'
 export type SignalRenderStyle = 'fill' | 'line' | 'bar'
@@ -37,6 +37,10 @@ export interface TrackSourceSpec {
   name: string
   format: SourceFormat
   files: SourceFileSpec[]
+  /** Derived signal computed from a native matrix; no data pixels are stored in the workspace. */
+  matrixDerivedMode?: 'insulation' | 'compartment'
+  matrixDerivedNormalization?: string
+  matrixDerivedResolution?: number
   strand?: SignalStrand
   strandBaseLabel?: string
 }
@@ -726,7 +730,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -972,8 +976,11 @@ function isRegion(value: unknown): value is Region {
 
 function isSourceSpec(value: unknown): value is TrackSourceSpec {
   return isRecord(value) && typeof value.id === 'string' && typeof value.name === 'string'
-    && ['bigwig', 'bedgraph', 'tdf', 'bam', 'bed', 'bedpe', 'hic', 'cool', 'mcool', 'matrix-comparison'].includes(value.format) && Array.isArray(value.files) && value.files.every(isSourceFileSpec)
+    && ['bigwig', 'bedgraph', 'tdf', 'bam', 'bed', 'bedpe', 'hic', 'cool', 'mcool', 'matrix-comparison', 'matrix-derived'].includes(value.format) && Array.isArray(value.files) && value.files.every(isSourceFileSpec)
     && (value.format !== 'matrix-comparison' || (value.files.length === 2 && value.files[0].role === 'signal' && value.files[1].role === 'comparison'))
+    && (value.format !== 'matrix-derived' || (value.files.length === 1 && value.files[0].role === 'signal'
+      && ['insulation', 'compartment'].includes(value.matrixDerivedMode) && typeof value.matrixDerivedNormalization === 'string'
+      && (value.matrixDerivedResolution === undefined || (Number.isSafeInteger(value.matrixDerivedResolution) && value.matrixDerivedResolution > 0))))
     && (value.strand === undefined || value.strand === 'plus' || value.strand === 'minus')
     && (value.strandBaseLabel === undefined || typeof value.strandBaseLabel === 'string')
 }

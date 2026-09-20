@@ -1,5 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { MatrixFeature, Region, TrackQueryOptions, TrackSource } from '../types.ts'
+import type { MatrixFeature, Region, SignalFeature, TrackQueryOptions, TrackSource } from '../types.ts'
+import { describeNativeFile } from '../native-file.ts'
+import { deriveCompartment, deriveInsulation, type MatrixDerivedMode } from './matrix-derived.ts'
 import { compareMatrixFeatures } from './matrix-comparison.ts'
 
 export type MatrixFormat = 'hic' | 'cool' | 'mcool'
@@ -118,6 +120,51 @@ export class MatrixComparisonSource implements TrackSource {
 
 export function isMatrixSource(source: TrackSource | undefined): source is NativeMatrixSource | MatrixComparisonSource {
   return source instanceof NativeMatrixSource || source instanceof MatrixComparisonSource
+}
+
+/** Derives stable chromosome-wide signal, cached until the underlying file stamp changes. */
+export class NativeMatrixDerivedSource implements TrackSource {
+  readonly chromosomes: ReadonlyMap<string, number>
+  private readonly cache = new Map<string, Promise<SignalFeature[]>>()
+
+  constructor(readonly name: string, readonly matrix: NativeMatrixSource, readonly mode: MatrixDerivedMode,
+    readonly normalization: string, readonly preferredResolution?: number) {
+    this.chromosomes = matrix.chromosomes
+  }
+
+  async getFeatures(region: Region, _pixelWidth: number, signal?: AbortSignal): Promise<SignalFeature[]> {
+    const chromosome = resolveFileChromosome(region.chr, this.matrix.matrixMetadata.chromosomes)
+    if (!chromosome) throw new Error(`No chromosome named ${region.chr} in this matrix.`)
+    const length = this.chromosomes.get(chromosome)!
+    const available = this.matrix.matrixMetadata.resolutions
+    const minimum = Math.ceil(length / 1_000)
+    const resolution = this.preferredResolution && this.preferredResolution >= minimum && available.includes(this.preferredResolution)
+      ? this.preferredResolution : available.filter((value) => value >= minimum).sort((a, b) => a - b)[0]
+    if (!resolution) throw new Error('No suitable matrix resolution: chromosome analysis needs at most 1,000 bins.')
+    const { size, lastModified } = await describeNativeFile(this.matrix.path)
+    const key = `${chromosome}:${length}:${resolution}:${this.normalization}:${this.mode}:${size}:${lastModified}`
+    let computed = this.cache.get(key)
+    if (!computed) {
+      this.cache.clear()
+      computed = (async () => {
+        const windowBins = Math.max(2, Math.min(25, Math.round(500_000 / resolution)))
+        const [matrix] = await this.matrix.getFeatures({ chr: chromosome, start: 0, end: length }, 2_400, undefined, {
+          matrixResolution: resolution,
+          matrixNormalization: this.normalization,
+          matrixValueMode: 'observed-expected',
+          matrixMaxDistance: this.mode === 'insulation' ? 2 * windowBins * resolution : undefined,
+        })
+        return this.mode === 'insulation'
+          ? deriveInsulation(matrix, length, windowBins)
+          : deriveCompartment(matrix, length)
+      })()
+      this.cache.set(key, computed)
+      void computed.catch(() => { if (this.cache.get(key) === computed) this.cache.delete(key) })
+    }
+    const features = await computed
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+    return features.filter((feature) => feature.end > region.start && feature.start < region.end)
+  }
 }
 
 function resolveFileChromosome(requested: string, chromosomes: readonly { name: string }[]): string | undefined {
