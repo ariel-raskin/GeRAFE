@@ -9,7 +9,8 @@ import { BedPeSource } from './data/bedpe.ts'
 import { BigWigSource } from './data/bigwig.ts'
 import { TdfSource } from './data/tdf.ts'
 import { BamAlignmentSource, findBamIndex } from './data/bam.ts'
-import { isNativeMatrixSource, NativeMatrixSource } from './data/matrix.ts'
+import { isMatrixSource, isNativeMatrixSource, MatrixComparisonSource, NativeMatrixSource } from './data/matrix.ts'
+import type { MatrixComparisonMode } from './data/matrix-comparison.ts'
 import type { MatrixFormat } from './data/matrix.ts'
 import { formatBases, formatLocus, formatZoomPercentage, hg38, parseLocus, resolveChromosome } from './genome.ts'
 import { parseCytobands } from './cytoband.ts'
@@ -1114,7 +1115,11 @@ async function restorePersistedSources(): Promise<void> {
         return current
       }))
       const primary = descriptors.find((_, index) => sourceSpec.files[index].role === 'signal')!
-      const source = (await sourceFromNativeFile(primary, descriptors)).source
+      const source = sourceSpec.format === 'matrix-comparison'
+        ? new MatrixComparisonSource(sourceSpec.name,
+          await NativeMatrixSource.open(descriptors[0].name, descriptors[0].path, matrixFormatForName(descriptors[0].name)!),
+          await NativeMatrixSource.open(descriptors[1].name, descriptors[1].path, matrixFormatForName(descriptors[1].name)!))
+        : (await sourceFromNativeFile(primary, descriptors)).source
       runtimeSources.set(sourceSpec.id, source)
       restored += 1
     } catch (error) {
@@ -1452,7 +1457,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     if (target.kind === 'stranded') {
       sourceItems += action('relink-plus', runtimeSources.has(target.sourceIds[0]) ? 'Replace positive-strand source…' : 'Relink positive-strand source…')
         + action('relink-minus', runtimeSources.has(target.sourceIds[1]) ? 'Replace negative-strand source…' : 'Relink negative-strand source…')
-    } else sourceItems += action('relink', target.kind === 'alignment'
+    } else if (store.current.sources.find((source) => source.id === target.sourceIds[0])?.format !== 'matrix-comparison') sourceItems += action('relink', target.kind === 'alignment'
       ? runtimeSources.has(target.sourceIds[0]) ? 'Replace BAM and index…' : 'Relink BAM and index…'
       : runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…')
   }
@@ -1583,7 +1588,7 @@ function matrixContextMenuMarkup(
   if (!matrixTracks.length) return ''
   const metadata = matrixTracks.map((track) => {
     const source = runtimeSources.get(track.sourceIds[0])
-    return isNativeMatrixSource(source) ? source.matrixMetadata : undefined
+    return isMatrixSource(source) ? source.matrixMetadata : undefined
   })
   const commonResolutions = commonValues(metadata.map((item) => item?.resolutions ?? []))
   const commonNormalizations = commonValues(metadata.map((item) => item?.normalizations ?? []))
@@ -1593,6 +1598,8 @@ function matrixContextMenuMarkup(
   const normalizationLabel = sameValue(matrixTracks.map((track) => track.matrixNormalization))
     ? matrixTracks[0].matrixNormalization ?? metadata[0]?.defaultNormalization ?? 'raw'
     : 'Mixed'
+  const canCompare = matrixTracks.length === 2 && matrixTracks.every((track) => isNativeMatrixSource(runtimeSources.get(track.sourceIds[0])))
+  const comparison = matrixTracks.length === 1 && store.current.sources.find((source) => source.id === matrixTracks[0].sourceIds[0])?.format === 'matrix-comparison'
   return [
     action('matrix-flip', 'Draw matrix downward', matrixTracks.every((track) => track.matrixDirection === 'down') ? 'current' : ''),
     submenu('matrix-resolution', 'Resolution', resolutionLabel,
@@ -1600,6 +1607,14 @@ function matrixContextMenuMarkup(
       + commonResolutions.map((resolution) => action(`matrix-resolution-value-${resolution}`, formatBases(resolution), matrixTracks.every((track) => track.matrixResolution === resolution) ? 'current' : '')).join('')),
     commonNormalizations.length ? submenu('matrix-normalization', 'Normalization', escapeHtml(normalizationLabel),
       commonNormalizations.map((normalization) => action(`matrix-normalization-value-${encodeURIComponent(normalization)}`, escapeHtml(normalization), matrixTracks.every((track) => track.matrixNormalization === normalization) ? 'current' : '')).join('')) : '',
+    canCompare ? submenu('matrix-compare-create', 'Compare selected matrices', 'First −/÷ second',
+      action('matrix-compare-create-difference', 'Difference (first − second)')
+      + action('matrix-compare-create-ratio', 'Ratio (first ÷ second)')
+      + action('matrix-compare-create-log2-ratio', 'Log2 ratio (first ÷ second)')) : '',
+    comparison ? submenu('matrix-compare-mode', 'Comparison', matrixTracks[0].matrixComparisonMode ?? 'difference',
+      action('matrix-compare-mode-difference', 'Difference', matrixTracks[0].matrixComparisonMode === 'difference' ? 'current' : '')
+      + action('matrix-compare-mode-ratio', 'Ratio', matrixTracks[0].matrixComparisonMode === 'ratio' ? 'current' : '')
+      + action('matrix-compare-mode-log2-ratio', 'Log2 ratio', matrixTracks[0].matrixComparisonMode === 'log2-ratio' ? 'current' : '')) : '',
     action('matrix-settings', 'Matrix settings…', matrixTracks.length > 1 ? `${matrixTracks.length} tracks` : ''),
   ].join('')
 }
@@ -1983,6 +1998,18 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
 
 async function applyMatrixContextAction(command: string | undefined, matrixIds: readonly string[]): Promise<void> {
   if (!command?.startsWith('matrix-') || !matrixIds.length) return
+  if (command.startsWith('matrix-compare-create-')) {
+    await createMatrixComparison(matrixIds, command.slice('matrix-compare-create-'.length) as MatrixComparisonMode)
+    return
+  }
+  if (command.startsWith('matrix-compare-mode-')) {
+    const mode = command.slice('matrix-compare-mode-'.length)
+    if (mode === 'difference' || mode === 'ratio' || mode === 'log2-ratio') store.edit((draft) => {
+      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix'
+        && draft.sources.find((source) => source.id === track.sourceIds[0])?.format === 'matrix-comparison') track.matrixComparisonMode = mode
+    })
+    return
+  }
   if (command === 'matrix-settings') {
     openMatrixSettingsDialog(matrixIds)
     return
@@ -2038,6 +2065,40 @@ async function applyMatrixContextAction(command: string | undefined, matrixIds: 
     const reversed = !tracks.every((track) => track.matrixPaletteReversed)
     for (const track of tracks) track.matrixPaletteReversed = reversed || undefined
   })
+}
+
+async function createMatrixComparison(ids: readonly string[], mode: MatrixComparisonMode): Promise<void> {
+  if (!['difference', 'ratio', 'log2-ratio'].includes(mode) || ids.length !== 2) return
+  const tracks = store.current.tracks.filter((track) => ids.includes(track.id) && track.kind === 'matrix')
+  if (tracks.length !== 2) return
+  const sources = tracks.map((track) => runtimeSources.get(track.sourceIds[0]))
+  if (!isNativeMatrixSource(sources[0]) || !isNativeMatrixSource(sources[1])) return
+  const files = tracks.map((track) => store.current.sources.find((item) => item.id === track.sourceIds[0])?.files[0])
+  if (!files[0]?.path || !files[1]?.path) {
+    showToast('Comparison needs two desktop-opened matrix files.', true)
+    return
+  }
+  try {
+    const name = `${tracks[0].label} ${mode === 'difference' ? '−' : '÷'} ${tracks[1].label}`
+    const source = new MatrixComparisonSource(name, sources[0], sources[1])
+    const sourceSpec: TrackSourceSpec = { id: crypto.randomUUID(), name, format: 'matrix-comparison', files: [
+      { ...files[0], role: 'signal' }, { ...files[1], role: 'comparison' },
+    ] }
+    const id = crypto.randomUUID()
+    runtimeSources.set(sourceSpec.id, source)
+    store.edit((draft) => {
+      const track = addMatrixTrack(draft, sourceSpec, { id, label: name, defaultNormalization: source.matrixMetadata.defaultNormalization })
+      track.matrixComparisonMode = mode
+      track.matrixResolution = tracks[0].matrixResolution && source.matrixMetadata.resolutions.includes(tracks[0].matrixResolution) ? tracks[0].matrixResolution : undefined
+      track.matrixValueMode = tracks[0].matrixValueMode
+      track.matrixTransform = mode === 'ratio' ? 'log1p' : 'linear'
+      track.matrixIgnoreDiagonals = 0
+    })
+    await browser.attachSource(sourceSpec.id, source)
+    showToast(`Created ${mode} comparison from ${tracks[0].label} and ${tracks[1].label}`)
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error), true)
+  }
 }
 
 async function handleGroupContextAction(command: string | undefined, groupId: string): Promise<void> {
@@ -2251,6 +2312,10 @@ function renderMatrixPaletteColors(): void {
 
 function updateMatrixSettingsVisibility(): void {
   const signed = matrixValueMode.value === 'log2-observed-expected'
+    || pendingMatrixTrackIds.some((id) => {
+      const track = store.current.tracks.find((candidate) => candidate.id === id)
+      return track?.matrixComparisonMode === 'difference' || track?.matrixComparisonMode === 'log2-ratio'
+    })
   matrixScaleMinimum.disabled = signed
   matrixScalePercentile.disabled = matrixScaleMode.value !== 'percentile'
   matrixScaleMaximum.disabled = matrixScaleMode.value !== 'fixed'
@@ -2268,7 +2333,8 @@ function updateMatrixSettingsVisibility(): void {
 }
 
 function applyMatrixSettingsDialog(): void {
-  const fixedMinimum = matrixValueMode.value === 'log2-observed-expected' ? 0 : Number(matrixScaleMinimum.value)
+  const comparisonTrack = store.current.tracks.find((track) => pendingMatrixTrackIds.includes(track.id) && track.matrixComparisonMode)
+  const fixedMinimum = matrixValueMode.value === 'log2-observed-expected' || comparisonTrack?.matrixComparisonMode === 'difference' || comparisonTrack?.matrixComparisonMode === 'log2-ratio' ? 0 : Number(matrixScaleMinimum.value)
   const fixedMaximum = Number(matrixScaleMaximum.value)
   const percentile = Number(matrixScalePercentile.value)
   const ignoredDiagonals = Number(matrixIgnoreDiagonals.value)
@@ -2312,7 +2378,7 @@ function applyMatrixSettingsDialog(): void {
       track.matrixDepthMode = depthMode
       track.matrixMaxDistance = maximumDistance
       track.matrixTransform = matrixTransform.value === 'linear' ? 'linear' : 'log1p'
-      track.matrixValueMode = matrixValueMode.value === 'observed-expected' ? 'observed-expected' : matrixValueMode.value === 'log2-observed-expected' ? 'log2-observed-expected' : 'observed'
+      track.matrixValueMode = matrixValueMode.value === 'observed-expected' || (track.matrixComparisonMode && matrixValueMode.value === 'log2-observed-expected') ? 'observed-expected' : matrixValueMode.value === 'log2-observed-expected' ? 'log2-observed-expected' : 'observed'
       track.matrixPalette = palette
       track.matrixPaletteColors = palette === 'custom' ? [...colors] : undefined
       track.matrixPaletteReversed = matrixPaletteReversed.checked || undefined
