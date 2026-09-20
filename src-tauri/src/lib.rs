@@ -64,6 +64,25 @@ fn read_file_range(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+#[tauri::command]
+fn read_text_file(path: String) -> Result<String, String> {
+    const MAX_WORKSPACE_BYTES: u64 = 16 * 1024 * 1024;
+    let metadata =
+        fs::metadata(&path).map_err(|error| format!("Could not access {path}: {error}"))?;
+    if !metadata.is_file() {
+        return Err(format!("{path} is not a file"));
+    }
+    if metadata.len() > MAX_WORKSPACE_BYTES {
+        return Err("Workspace files cannot exceed 16 MB".to_string());
+    }
+    fs::read_to_string(&path).map_err(|error| format!("Could not read {path}: {error}"))
+}
+
+#[tauri::command]
+fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    fs::write(&path, contents).map_err(|error| format!("Could not save {path}: {error}"))
+}
+
 fn cursor_dimension(value: u8) -> u16 {
     if value == 0 {
         256
@@ -338,6 +357,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             stat_file,
             read_file_range,
+            read_text_file,
+            write_text_file,
             windows_cursor_asset,
             windows_text_scale_percent,
             prepare_bedgraph_cache,

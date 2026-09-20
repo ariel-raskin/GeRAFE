@@ -38,12 +38,13 @@ import {
 } from './track-document.ts'
 import type { MatrixPalette, SignalScaleChannel, SourceFormat, TrackDocument, TrackSourceSpec, TrackSpec } from './track-document.ts'
 import type { TrackSource, TrackRuntime } from './types.ts'
-import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { describeNativeFile, isDesktopApp, NativeFileHandle, prepareBedGraphCache } from './native-file.ts'
+import { describeNativeFile, isDesktopApp, NativeFileHandle, prepareBedGraphCache, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
 import type { LocalFileDescriptor } from './native-file.ts'
 import { SUPPORTED_TRACK_DIALOG_EXTENSIONS, SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
 import { migrateLegacyStorage, STORAGE_KEYS } from './storage.ts'
+import { workspaceDirectory, workspaceFileName, workspaceSaveDefaultPath } from './workspace-save.ts'
 import { AppUpdateController, createTauriUpdateBackend, updateProgressPercent } from './app-update.ts'
 import type { AppUpdateState } from './app-update.ts'
 import { installWindowsCursorScaleCorrection } from './platform-cursors.ts'
@@ -68,6 +69,8 @@ const {
   reference: REFERENCE_KEY,
   customReferences: CUSTOM_REFERENCES_KEY,
   workspace: WORKSPACE_KEY,
+  workspacePath: WORKSPACE_PATH_KEY,
+  workspaceDirectory: WORKSPACE_DIRECTORY_KEY,
   tssIndicators: TSS_INDICATORS_KEY,
   strandedAutoLink: STRANDED_AUTO_LINK_KEY,
   groupAutoscale: GROUP_AUTOSCALE_KEY,
@@ -110,7 +113,8 @@ app.innerHTML = `
             <span class="menu-separator"></span>
             <button class="menu-item" id="new-workspace-menu-item" type="button" role="menuitem"><span>New workspace</span></button>
             <button class="menu-item" id="open-workspace-menu-item" type="button" role="menuitem"><span>Open workspace…</span></button>
-            <button class="menu-item" id="save-workspace-menu-item" type="button" role="menuitem"><span>Save workspace…</span><kbd>Ctrl+S</kbd></button>
+            <button class="menu-item" id="save-workspace-menu-item" type="button" role="menuitem"><span>Save workspace</span><kbd>Ctrl+S</kbd></button>
+            <button class="menu-item" id="save-workspace-as-menu-item" type="button" role="menuitem"><span>Save workspace as…</span><kbd>Ctrl+Shift+S</kbd></button>
           </div>
         </div>
         <div class="app-menu" id="edit-menu-root">
@@ -424,6 +428,8 @@ let upperAutoFitFrame: number | undefined
 let colorHsv = { h: 250, s: 62, v: 88 }
 let appUpdater: AppUpdateController | undefined
 let appUpdaterPromise: Promise<AppUpdateController> | undefined
+let currentWorkspacePath = savedWorkspacePath()
+let lastWorkspaceSaveDirectory = savedWorkspaceDirectory() ?? workspaceDirectory(currentWorkspacePath ?? '')
 
 interface OpenedSource {
   source: TrackSource
@@ -588,15 +594,20 @@ document.querySelector<HTMLButtonElement>('#new-workspace-menu-item')!.addEventL
   runtimeSources.clear()
   selectedTrackIds.clear()
   store.replace(createTrackDocument(activeReference.id, browser.getRegion(), { geneShowTssIndicators: savedTssIndicators() }))
+  clearWorkspacePath()
   showToast('Started a new workspace')
 })
 document.querySelector<HTMLButtonElement>('#open-workspace-menu-item')!.addEventListener('click', () => {
   closeMenus()
-  workspaceFileInput.click()
+  void openWorkspacePicker()
 })
 document.querySelector<HTMLButtonElement>('#save-workspace-menu-item')!.addEventListener('click', () => {
   closeMenus()
-  saveWorkspace()
+  void saveWorkspace()
+})
+document.querySelector<HTMLButtonElement>('#save-workspace-as-menu-item')!.addEventListener('click', () => {
+  closeMenus()
+  void saveWorkspaceAs()
 })
 document.querySelector<HTMLButtonElement>('#undo-menu-item')!.addEventListener('click', () => { closeMenus(); store.undo() })
 document.querySelector<HTMLButtonElement>('#redo-menu-item')!.addEventListener('click', () => { closeMenus(); store.redo() })
@@ -696,9 +707,12 @@ document.addEventListener('keydown', (event) => {
     pendingOpenGroupId = undefined
     void openTrackPicker()
   }
-  if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 's') {
+  if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLocaleLowerCase() === 's') {
     event.preventDefault()
-    saveWorkspace()
+    void saveWorkspaceAs()
+  } else if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 's') {
+    event.preventDefault()
+    void saveWorkspace()
   }
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'a') {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || (event.target as HTMLElement).isContentEditable) return
@@ -2659,21 +2673,85 @@ async function applyRelink(id: string, opened: OpenedSource, channel?: 'plus' | 
     await browser.attachSource(expectedSourceId, source)
 }
 
-function saveWorkspace(): void {
+function workspaceContents(): string {
+  return JSON.stringify(store.current, null, 2)
+}
+
+function downloadWorkspace(): void {
   const blob = new Blob([JSON.stringify(store.current, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
-  anchor.download = `gerafe-${store.current.referenceId}.gerafe.json`
+  anchor.download = workspaceFileName(store.current.referenceId)
   anchor.click()
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
-  showToast('Saved workspace layout')
+  showToast('Downloaded workspace layout')
+}
+
+async function saveWorkspace(): Promise<void> {
+  if (!isDesktopApp()) return downloadWorkspace()
+  if (!currentWorkspacePath) return saveWorkspaceAs()
+  await writeWorkspace(currentWorkspacePath)
+}
+
+async function saveWorkspaceAs(): Promise<void> {
+  if (!isDesktopApp()) return downloadWorkspace()
+  try {
+    const path = await saveDialog({
+      title: 'Save GeRAFE workspace',
+      defaultPath: workspaceSaveDefaultPath(lastWorkspaceSaveDirectory, workspaceFileName(store.current.referenceId)),
+      filters: [{ name: 'GeRAFE workspace', extensions: ['gerafe.json', 'json'] }],
+    })
+    if (!path) return
+    await writeWorkspace(path)
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error), true)
+  }
+}
+
+async function writeWorkspace(path: string): Promise<void> {
+  try {
+    await writeNativeTextFile(path, workspaceContents())
+    rememberWorkspacePath(path)
+    showToast(`Saved ${workspacePathLabel(path)}`)
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error), true)
+  }
+}
+
+async function openWorkspacePicker(): Promise<void> {
+  if (!isDesktopApp()) {
+    workspaceFileInput.click()
+    return
+  }
+  try {
+    const path = await openDialog({
+      title: 'Open GeRAFE workspace',
+      multiple: false,
+      defaultPath: lastWorkspaceSaveDirectory,
+      filters: [{ name: 'GeRAFE workspace', extensions: ['gerafe.json', 'locus.json', 'json'] }],
+    })
+    if (!path) return
+    await openWorkspaceContents(await readNativeTextFile(path), workspacePathLabel(path), path)
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error), true)
+  }
 }
 
 async function openWorkspace(file: File | undefined): Promise<void> {
   if (!file) return
   try {
-    const next = normalizeTrackDocument(JSON.parse(await file.text()))
+    await openWorkspaceContents(await file.text(), file.name)
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error), true)
+  } finally {
+    workspaceFileInput.value = ''
+  }
+}
+
+async function openWorkspaceContents(contents: string, name: string, path?: string): Promise<void> {
+  try {
+    const next = normalizeTrackDocument(JSON.parse(contents))
     if (!references.has(next.referenceId)) throw new Error(`The workspace uses unavailable reference “${next.referenceId}”.`)
     bottomPaneAutoFit = true
     selectedTrackIds.clear()
@@ -2682,12 +2760,38 @@ async function openWorkspace(file: File | undefined): Promise<void> {
     await switchReference(next.referenceId)
     browser.setRegion(next.region)
     if (isDesktopApp()) await restorePersistedSources()
-    showToast(`Opened ${file.name}${isDesktopApp() ? '' : '; relink local data files to draw them.'}`)
+    if (path) rememberWorkspacePath(path)
+    else clearWorkspacePath()
+    showToast(`Opened ${name}${isDesktopApp() ? '' : '; relink local data files to draw them.'}`)
   } catch (error) {
     showToast(error instanceof Error ? error.message : String(error), true)
-  } finally {
-    workspaceFileInput.value = ''
   }
+}
+
+function rememberWorkspacePath(path: string): void {
+  currentWorkspacePath = path
+  localStorage.setItem(WORKSPACE_PATH_KEY, path)
+  const directory = workspaceDirectory(path)
+  if (!directory) return
+  lastWorkspaceSaveDirectory = directory
+  localStorage.setItem(WORKSPACE_DIRECTORY_KEY, directory)
+}
+
+function clearWorkspacePath(): void {
+  currentWorkspacePath = undefined
+  localStorage.removeItem(WORKSPACE_PATH_KEY)
+}
+
+function savedWorkspacePath(): string | undefined {
+  return localStorage.getItem(WORKSPACE_PATH_KEY) || undefined
+}
+
+function savedWorkspaceDirectory(): string | undefined {
+  return localStorage.getItem(WORKSPACE_DIRECTORY_KEY) || undefined
+}
+
+function workspacePathLabel(path: string): string {
+  return path.split(/[\\/]/).at(-1) || path
 }
 
 function updateUndoControls(): void {

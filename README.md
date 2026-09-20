@@ -195,7 +195,9 @@ GeRAFE reads genomic coordinates from each Cooler's stored bin table and canonic
 
 Desktop-opened source paths are retained locally and reopened on the same computer when GeRAFE starts again. If a file is missing or has changed, its track remains in the workspace and can be relinked.
 
-Use **File → Save workspace…** to export a `.gerafe.json` document and **Open workspace…** to restore it. GeRAFE also opens legacy `.locus.json` workspaces. Workspace files contain layout, settings, paths, and provenance—not copies of genomic data. A workspace moved to another computer therefore requires access to, or relinking of, its source files.
+In the desktop app, **File → Save workspace** writes back to the opened workspace. For a new or browser-opened workspace it opens the native **Save workspace as…** dialog first; use that command (or Ctrl+Shift+S) any time you want a copy in another location. GeRAFE remembers the last folder used for a workspace save and opens the next Save As dialog there. **Open workspace…** associates the selected file with later Save operations. In a web browser, both save commands download a `.gerafe.json` export because browser security does not allow GeRAFE to overwrite a chosen local file.
+
+GeRAFE also opens legacy `.locus.json` workspaces. Workspace files contain layout, settings, paths, and provenance—not copies of genomic data. A workspace moved to another computer therefore requires access to, or relinking of, its source files.
 
 ## Current limitations
 
