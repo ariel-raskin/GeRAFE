@@ -1,1 +1,1 @@
-{"main-window":{"identifier":"main-window","description":"File selection for genomics tracks opened in the main GeRAFE window.","local":true,"windows":["main"],"permissions":["core:default","dialog:allow-open","process:allow-restart","updater:default"]}}
+{"main-window":{"identifier":"main-window","description":"File selection for genomics tracks opened in the main GeRAFE window.","local":true,"windows":["main"],"permissions":["core:default","dialog:allow-open","dialog:allow-save","process:allow-restart","updater:default"]}}

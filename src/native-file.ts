@@ -26,6 +26,14 @@ export async function describeNativeFile(path: string): Promise<LocalFileDescrip
   return { name: fileNameFromPath(path), path, size: stat.size, lastModified: stat.lastModified }
 }
 
+export async function readNativeTextFile(path: string): Promise<string> {
+  return invoke<string>('read_text_file', { path })
+}
+
+export async function writeNativeTextFile(path: string, contents: string): Promise<void> {
+  await invoke('write_text_file', { path, contents })
+}
+
 export async function prepareBedGraphCache(path: string, chromosomes: ReadonlyMap<string, number>): Promise<PreparedBedGraphCache> {
   const chromosomeSizes = cacheChromosomeSizes(chromosomes)
   const cache = await invoke<Omit<PreparedBedGraphCache, 'name'>>('prepare_bedgraph_cache', { path, chromosomeSizes })
