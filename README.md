@@ -97,7 +97,7 @@ npm ci
 npm run desktop:dev
 ```
 
-This compiles the Rust shell, starts the frontend development server, and opens the desktop application.
+This compiles the Rust shell, starts the frontend development server, and opens the desktop application. Vite keeps its development dependency cache under `%LOCALAPPDATA%\\GeRAFE\\vite-cache` rather than inside the checkout, avoiding Dropbox and OneDrive file-lock conflicts.
 
 ### Install a development build locally
 
