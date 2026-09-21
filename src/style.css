@@ -328,12 +328,12 @@ button, label { -webkit-tap-highlight-color: transparent; }
 .empty-workspace {
   position: absolute;
   z-index: 2;
-  inset: 70px 0 0 176px;
+  inset: 70px 0 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  padding-top: clamp(18px, 8vh, 80px);
+  padding-top: clamp(12px, 2vh, 22px);
   color: var(--muted);
   pointer-events: none;
   user-select: none;
@@ -342,9 +342,9 @@ button, label { -webkit-tap-highlight-color: transparent; }
 .empty-workspace[hidden] { display: none; }
 .empty-workspace > strong { color: var(--ink); font-size: 18px; font-weight: 600; }
 .empty-workspace > span { margin-top: 6px; font-size: 13px; }
-.empty-workspace-brand { display: flex; flex-direction: column; align-items: center; width: min(70vw, 700px); margin-top: 12px; color: var(--ink); }
-.empty-workspace-brand img { width: 100%; height: clamp(160px, 56vh, min(570px, calc(100vh - 360px))); object-fit: contain; filter: drop-shadow(0 6px 11px rgba(39, 31, 12, .21)); }
-.empty-workspace-brand strong { margin-top: 6px; padding-left: .16em; font-family: Bahnschrift, 'Segoe UI Variable Display', 'Segoe UI', sans-serif; font-size: clamp(30px, 4vw, 52px); font-stretch: condensed; font-weight: 650; line-height: 1.05; letter-spacing: .16em; }
+.empty-workspace-brand { display: flex; flex-direction: column; align-items: center; width: min(76vw, 780px); margin-top: 8px; color: var(--ink); }
+.empty-workspace-brand img { width: 100%; height: clamp(160px, 62vh, min(630px, calc(100vh - 330px))); object-fit: contain; filter: drop-shadow(0 7px 13px rgba(39, 31, 12, .22)); }
+.empty-workspace-brand strong { margin-top: 6px; padding-left: .16em; font-family: Bahnschrift, 'Segoe UI Variable Display', 'Segoe UI', sans-serif; font-size: clamp(32px, 4.5vw, 60px); font-stretch: condensed; font-weight: 650; line-height: 1.05; letter-spacing: .16em; }
 html[data-theme='dark'] .empty-workspace-brand img { filter: drop-shadow(0 3px 6px rgba(0, 0, 0, .45)); }
 #genome-canvas, #bottom-canvas { display: block; min-width: 100%; cursor: var(--cursor-grab); touch-action: none; user-select: none; }
 #genome-header.is-dragging,
