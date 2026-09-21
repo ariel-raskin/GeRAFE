@@ -329,6 +329,7 @@ fn query_hic(options: &MatrixQuery) -> Result<MatrixQueryResult, String> {
     } else {
         resolution
     };
+    ensure_safe_query_bins(options, resolution, &available)?;
     let mut request = HiCRequest::new(
         options
             .chromosome2
@@ -448,6 +449,13 @@ fn query_cool(
         }
         (String::new(), resolution)
     };
+
+    let safety_resolutions = if options.format == "mcool" {
+        cooler_resolutions(&file)?
+    } else {
+        vec![resolution]
+    };
+    ensure_safe_query_bins(options, resolution, &safety_resolutions)?;
 
     if let Some(chromosome2) = &options.chromosome2 {
         return query_cool_rectangle(&file, options, &prefix, resolution, chromosome2);
@@ -1155,6 +1163,46 @@ fn choose_resolution(
         .unwrap_or_else(|| *available.iter().max().expect("checked non-empty")))
 }
 
+fn query_bin_count(start: u64, end: u64, resolution: u64) -> u64 {
+    end.div_ceil(resolution).saturating_sub(start / resolution)
+}
+
+fn ensure_safe_query_bins(
+    options: &MatrixQuery,
+    resolution: u64,
+    available: &[u64],
+) -> Result<(), String> {
+    let x_bins = query_bin_count(options.start, options.end, resolution);
+    let y_bins = options
+        .start2
+        .zip(options.end2)
+        .map(|(start, end)| query_bin_count(start, end, resolution));
+    let (axis, bins) = if x_bins > MAX_MATRIX_BINS as u64 {
+        ("horizontal", x_bins)
+    } else if let Some(bins) = y_bins.filter(|bins| *bins > MAX_MATRIX_BINS as u64) {
+        ("vertical", bins)
+    } else {
+        return Ok(());
+    };
+    let coarser = available.iter().copied().any(|candidate| {
+        candidate > resolution
+            && query_bin_count(options.start, options.end, candidate) <= MAX_MATRIX_BINS as u64
+            && options.start2.zip(options.end2).is_none_or(|(start, end)| {
+                query_bin_count(start, end, candidate) <= MAX_MATRIX_BINS as u64
+            })
+    });
+    let guidance = if coarser {
+        "Choose Automatic or a coarser resolution, or zoom in."
+    } else if options.format == "cool" {
+        "Zoom in or use a multiresolution .mcool or .hic file for wider views."
+    } else {
+        "Zoom in; this file has no coarser resolution that fits the view."
+    };
+    Err(format!(
+        "The {axis} matrix query needs {bins} bins at {resolution} bp resolution; the safe limit is {MAX_MATRIX_BINS}. {guidance}"
+    ))
+}
+
 fn normalization_order(value: &str) -> usize {
     match value {
         "KR" => 0,
@@ -1181,6 +1229,52 @@ mod tests {
             choose_resolution(&available, Some(5_000), 1_000_000, 1_000).unwrap(),
             5_000
         );
+    }
+
+    #[test]
+    fn rejects_unsafe_wide_queries_before_reading_pixels() {
+        let query = MatrixQuery {
+            path: "unused.cool".into(),
+            format: "cool".into(),
+            chromosome: "chr1".into(),
+            chromosome2: None,
+            start: 0,
+            end: 20_000_000,
+            start2: None,
+            end2: None,
+            pixel_width: 800,
+            pixel_height: None,
+            resolution: None,
+            normalization: "raw".into(),
+            max_distance: None,
+            value_mode: MatrixValueMode::Observed,
+        };
+        let error = ensure_safe_query_bins(&query, 10_000, &[10_000]).unwrap_err();
+        assert!(error.contains("2,000 bins") || error.contains("2000 bins"));
+        assert!(error.contains("multiresolution .mcool"));
+        assert!(ensure_safe_query_bins(&query, 25_000, &[10_000, 25_000]).is_ok());
+    }
+
+    #[test]
+    fn unsafe_selected_resolution_recommends_automatic_when_coarser_data_exists() {
+        let query = MatrixQuery {
+            path: "unused.mcool".into(),
+            format: "mcool".into(),
+            chromosome: "chr1".into(),
+            chromosome2: Some("chr2".into()),
+            start: 0,
+            end: 20_000_000,
+            start2: Some(5_000_000),
+            end2: Some(25_000_000),
+            pixel_width: 800,
+            pixel_height: Some(400),
+            resolution: Some(10_000),
+            normalization: "raw".into(),
+            max_distance: None,
+            value_mode: MatrixValueMode::Observed,
+        };
+        let error = ensure_safe_query_bins(&query, 10_000, &[10_000, 25_000]).unwrap_err();
+        assert!(error.contains("Choose Automatic or a coarser resolution"));
     }
 
     #[test]

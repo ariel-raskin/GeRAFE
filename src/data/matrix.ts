@@ -24,6 +24,7 @@ interface ContactMatrixResult {
 
 export class NativeMatrixSource implements TrackSource {
   readonly chromosomes: ReadonlyMap<string, number>
+  private readonly queryGate = new MatrixQueryGate()
 
   private constructor(
     readonly name: string,
@@ -46,7 +47,8 @@ export class NativeMatrixSource implements TrackSource {
     const axis2 = options?.matrixSecondaryRegion
     const chromosome2 = axis2 && resolveFileChromosome(axis2.chr, this.matrixMetadata.chromosomes)
     if (axis2 && !chromosome2) throw new Error(`No chromosome named ${axis2.chr} in this matrix.`)
-    const result = await invoke<ContactMatrixResult>('query_contact_matrix', {
+    const started = now()
+    const result = await this.queryGate.run(signal, () => invoke<ContactMatrixResult>('query_contact_matrix', {
       options: {
         path: this.path,
         format: this.format,
@@ -63,7 +65,7 @@ export class NativeMatrixSource implements TrackSource {
         maxDistance: options?.matrixMaxDistance,
         valueMode: options?.matrixValueMode ?? 'observed',
       },
-    })
+    }))
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
     return [{
       featureType: 'matrix',
@@ -76,8 +78,38 @@ export class NativeMatrixSource implements TrackSource {
       maskedBins2: result.maskedBins2,
       axis2,
       valueMode: options?.matrixValueMode ?? 'observed',
+      diagnostics: {
+        format: this.format,
+        region: { ...region },
+        requestedResolution: options?.matrixResolution,
+        normalization: options?.matrixNormalization ?? this.matrixMetadata.defaultNormalization,
+        valueMode: options?.matrixValueMode ?? 'observed',
+        queryMs: now() - started,
+      },
     }]
   }
+}
+
+/** Allows one native read per source; aborted queued reads are discarded before invoking Rust. */
+export class MatrixQueryGate {
+  private tail: Promise<void> = Promise.resolve()
+
+  async run<T>(signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> {
+    const previous = this.tail
+    let release = (): void => undefined
+    this.tail = new Promise<void>((resolve) => { release = resolve })
+    await previous
+    try {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+      return await work()
+    } finally {
+      release()
+    }
+  }
+}
+
+function now(): number {
+  return globalThis.performance?.now() ?? Date.now()
 }
 
 export function isNativeMatrixSource(source: TrackSource | undefined): source is NativeMatrixSource {
@@ -109,6 +141,7 @@ export class MatrixComparisonSource implements TrackSource {
   }
 
   async getFeatures(region: Region, pixelWidth: number, signal?: AbortSignal, options?: TrackQueryOptions): Promise<MatrixFeature[]> {
+    const started = now()
     const available = this.matrixMetadata.resolutions
     const target = Math.ceil((region.end - region.start) / Math.max(1, Math.min(1_200, Math.round(pixelWidth / 2))))
     const resolution = options?.matrixResolution ?? available.filter((value) => value >= target).sort((a, b) => a - b)[0] ?? Math.max(...available)
@@ -124,7 +157,12 @@ export class MatrixComparisonSource implements TrackSource {
     })
     const [first, second] = await Promise.all([query(this.first), query(this.second)])
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
-    return [compareMatrixFeatures(first[0], second[0], options?.matrixComparisonMode ?? 'difference')]
+    const compared = compareMatrixFeatures(first[0], second[0], options?.matrixComparisonMode ?? 'difference')
+    compared.diagnostics = {
+      format: 'comparison', region: { ...region }, requestedResolution: options?.matrixResolution,
+      normalization, valueMode: commonOptions.matrixValueMode ?? 'observed', queryMs: now() - started,
+    }
+    return [compared]
   }
 }
 

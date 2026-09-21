@@ -51,6 +51,15 @@ export interface MatrixCellPosition {
   bin2: number
 }
 
+export interface MatrixQueryDiagnostics {
+  format: 'hic' | 'cool' | 'mcool' | 'comparison'
+  region: Region
+  requestedResolution?: number
+  normalization: string
+  valueMode: 'observed' | 'observed-expected' | 'log2-observed-expected'
+  queryMs: number
+}
+
 /** Sparse cells from a square cis contact-matrix query. */
 export interface MatrixFeature {
   featureType: 'matrix'
@@ -66,6 +75,8 @@ export interface MatrixFeature {
   axis2?: Region
   maskedBins2?: number[]
   valueMode?: 'observed' | 'observed-expected' | 'log2-observed-expected'
+  /** Runtime-only details about the native query that produced this feature. */
+  diagnostics?: MatrixQueryDiagnostics
 }
 
 export interface AlignmentDifference {
@@ -153,4 +164,7 @@ export interface TrackRuntime {
   status: TrackStatus
   error?: string
   requestVersion: number
+  queryStartedAt?: number
+  lastQueryMs?: number
+  lastQueryRegion?: Region
 }
