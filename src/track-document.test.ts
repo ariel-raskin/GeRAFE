@@ -53,6 +53,16 @@ describe('track document', () => {
     expect(restored.sources.find((item) => item.id === 'derived')).toEqual(source)
     expect(restored.tracks.find((track) => track.id === 'pc1')?.kind).toBe('signal')
   })
+  it('preserves legacy insulation tracks when reopening a current workspace', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr8', start: 1_000_000, end: 2_000_000 })
+    const source = { id: 'insulation-source', name: 'Insulation', format: 'matrix-derived' as const,
+      matrixDerivedMode: 'insulation' as const, matrixDerivedNormalization: 'raw', matrixDerivedResolution: 250_000,
+      files: [{ name: 'sample.cool', path: 'C:\\sample.cool', size: 1000, lastModified: 25, role: 'signal' as const }] }
+    addSignalTrack(document, source, { id: 'insulation-track', autoPair: false })
+    const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
+    expect(restored.sources.find((item) => item.id === source.id)).toEqual(source)
+    expect(restored.tracks.find((track) => track.id === 'insulation-track')?.kind).toBe('signal')
+  })
   it('links scales automatically for a new visual group and can opt out', () => {
     const document = documentWithTwoTracks()
     assignDisplayGroup(document, ['t1', 't2'], 'Condition A')

@@ -11,7 +11,6 @@ import { TdfSource } from './data/tdf.ts'
 import { BamAlignmentSource, findBamIndex } from './data/bam.ts'
 import { isMatrixSource, isNativeMatrixSource, MatrixComparisonSource, NativeMatrixDerivedSource, NativeMatrixSource } from './data/matrix.ts'
 import type { MatrixComparisonMode } from './data/matrix-comparison.ts'
-import type { MatrixDerivedMode } from './data/matrix-derived.ts'
 import type { MatrixFormat } from './data/matrix.ts'
 import { formatBases, formatLocus, formatZoomPercentage, hg38, parseLocus, resolveChromosome } from './genome.ts'
 import { resolveMatrixAxisInput } from './matrix-axis-input.ts'
@@ -1608,7 +1607,7 @@ function matrixContextMenuMarkup(
     ? matrixTracks[0].matrixNormalization ?? metadata[0]?.defaultNormalization ?? 'raw'
     : 'Mixed'
   const canCompare = matrixTracks.length === 2 && matrixTracks.every((track) => isNativeMatrixSource(runtimeSources.get(track.sourceIds[0])))
-  const canDerive = matrixTracks.length === 1 && isNativeMatrixSource(runtimeSources.get(matrixTracks[0].sourceIds[0]))
+  const canSetVerticalAxis = matrixTracks.length === 1 && isNativeMatrixSource(runtimeSources.get(matrixTracks[0].sourceIds[0]))
   const comparison = matrixTracks.length === 1 && store.current.sources.find((source) => source.id === matrixTracks[0].sourceIds[0])?.format === 'matrix-comparison'
   return [
     action('matrix-flip', 'Draw matrix downward', matrixTracks.every((track) => track.matrixDirection === 'down') ? 'current' : ''),
@@ -1621,11 +1620,8 @@ function matrixContextMenuMarkup(
       action('matrix-compare-create-difference', 'Difference (first − second)')
       + action('matrix-compare-create-ratio', 'Ratio (first ÷ second)')
       + action('matrix-compare-create-log2-ratio', 'Log2 ratio (first ÷ second)')) : '',
-    canDerive ? submenu('matrix-derive', 'Derive signal track', '',
-      action('matrix-derive-insulation', 'Insulation (boundary contacts)')
-      + action('matrix-derive-compartment', 'Compartment PC1 (arbitrary sign)')) : '',
-    canDerive ? action('matrix-axis-set', 'Set vertical locus…', matrixTracks[0].matrixSecondaryRegion ? formatLocus(matrixTracks[0].matrixSecondaryRegion) : '') : '',
-    canDerive && matrixTracks[0].matrixSecondaryRegion ? action('matrix-axis-clear', 'Return to triangular view') : '',
+    canSetVerticalAxis ? action('matrix-axis-set', 'Set vertical locus…', matrixTracks[0].matrixSecondaryRegion ? formatLocus(matrixTracks[0].matrixSecondaryRegion) : '') : '',
+    canSetVerticalAxis && matrixTracks[0].matrixSecondaryRegion ? action('matrix-axis-clear', 'Return to triangular view') : '',
     comparison ? submenu('matrix-compare-mode', 'Comparison', matrixTracks[0].matrixComparisonMode ?? 'difference',
       action('matrix-compare-mode-difference', 'Difference', matrixTracks[0].matrixComparisonMode === 'difference' ? 'current' : '')
       + action('matrix-compare-mode-ratio', 'Ratio', matrixTracks[0].matrixComparisonMode === 'ratio' ? 'current' : '')
@@ -2046,10 +2042,6 @@ async function applyMatrixContextAction(command: string | undefined, matrixIds: 
     store.edit((draft) => { for (const track of draft.tracks) if (matrixIds.includes(track.id)) track.matrixSecondaryRegion = undefined })
     return
   }
-  if (command === 'matrix-derive-insulation' || command === 'matrix-derive-compartment') {
-    await createMatrixDerivedTrack(matrixIds[0], command === 'matrix-derive-insulation' ? 'insulation' : 'compartment')
-    return
-  }
   if (command.startsWith('matrix-compare-create-')) {
     await createMatrixComparison(matrixIds, command.slice('matrix-compare-create-'.length) as MatrixComparisonMode)
     return
@@ -2148,36 +2140,6 @@ async function createMatrixComparison(ids: readonly string[], mode: MatrixCompar
     })
     await browser.attachSource(sourceSpec.id, source)
     showToast(`Created ${mode} comparison from ${tracks[0].label} and ${tracks[1].label}`)
-  } catch (error) {
-    showToast(error instanceof Error ? error.message : String(error), true)
-  }
-}
-
-async function createMatrixDerivedTrack(id: string, mode: MatrixDerivedMode): Promise<void> {
-  const original = store.current.tracks.find((track) => track.id === id && track.kind === 'matrix')
-  const source = original && runtimeSources.get(original.sourceIds[0])
-  if (!original || !isNativeMatrixSource(source)) return
-  const originalFile = store.current.sources.find((item) => item.id === original.sourceIds[0])?.files[0]
-  if (!originalFile?.path) { showToast('Derived matrix tracks need a desktop-opened file.', true); return }
-  const label = `${mode === 'insulation' ? 'Insulation' : 'Compartment PC1 (sign arbitrary)'} · ${original.label}`
-  const normalization = original.matrixNormalization ?? source.matrixMetadata.defaultNormalization
-  const derived = new NativeMatrixDerivedSource(label, source, mode, normalization, original.matrixResolution)
-  const sourceSpec: TrackSourceSpec = {
-    id: crypto.randomUUID(), name: label, format: 'matrix-derived', files: [{ ...originalFile, role: 'signal' }],
-    matrixDerivedMode: mode, matrixDerivedNormalization: normalization, matrixDerivedResolution: original.matrixResolution,
-  }
-  const derivedId = crypto.randomUUID()
-  runtimeSources.set(sourceSpec.id, derived)
-  store.edit((draft) => {
-    const added = addSignalTrack(draft, sourceSpec, { id: derivedId, color: mode === 'insulation' ? '#ba5c90' : '#507ad5', autoPair: false })
-    added.allowNegativeValues = true
-    added.signalRenderStyle = mode === 'compartment' ? 'bar' : 'line'
-    const scale = draft.scales.find((item) => item.id === added.scaleBindingId)
-    if (scale) scale.symmetric = true
-  })
-  try {
-    await browser.attachSource(sourceSpec.id, derived)
-    showToast(`Created ${label}`)
   } catch (error) {
     showToast(error instanceof Error ? error.message : String(error), true)
   }
