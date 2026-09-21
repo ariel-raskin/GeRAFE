@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import bundledGeneIndex from '../static/reference/hg38-refseq-genes.tsv?raw'
 import { hg38 } from './genome.ts'
 import { resolveMatrixAxisInput } from './matrix-axis-input.ts'
 import { GeneSource } from './reference.ts'
@@ -42,7 +42,7 @@ describe('vertical matrix locus input', () => {
   })
 
   it('resolves MYC from the bundled hg38 RefSeq index', () => {
-    const genes = GeneSource.fromTsv(readFileSync(new URL('../static/reference/hg38-refseq-genes.tsv', import.meta.url), 'utf8'))
+    const genes = GeneSource.fromTsv(bundledGeneIndex)
     const result = resolveMatrixAxisInput('myc', { ...options, findGene: (name) => genes.find(name) })
     expect(result).toMatchObject({ kind: 'gene', label: 'MYC' })
     if (!('region' in result)) return
