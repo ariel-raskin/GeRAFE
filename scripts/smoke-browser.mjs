@@ -55,9 +55,18 @@ const initialTrackStatus = await page.locator('#track-status').textContent()
 const emptyWorkspaceVisible = await page.locator('#empty-workspace').isVisible()
 const emptyWorkspaceText = await page.locator('#empty-workspace').textContent()
 const emptyWorkspaceBrand = await page.locator('.empty-workspace-brand').evaluate((element) => {
+  const workspace = element.parentElement.getBoundingClientRect()
+  const heading = element.parentElement.querySelector(':scope > strong')
+  const formats = element.parentElement.querySelector(':scope > span')
   const image = element.querySelector('img').getBoundingClientRect()
   const wordmark = element.querySelector('strong').getBoundingClientRect()
-  return { imageHeight: image.height, wordmarkHeight: wordmark.height }
+  return {
+    headingOffset: heading.getBoundingClientRect().top - workspace.top,
+    headingFontSize: parseFloat(getComputedStyle(heading).fontSize),
+    imageGap: image.top - formats.getBoundingClientRect().bottom,
+    imageHeight: image.height,
+    wordmarkHeight: wordmark.height,
+  }
 })
 const cornerBrandCount = await page.locator('.corner-brand').count()
 const footerHeight = await page.locator('.browser-footer').evaluate((element) => element.getBoundingClientRect().height)
@@ -662,7 +671,7 @@ await browser.close()
 console.log(JSON.stringify({ ...result, matrixInspectorSizing, emptyWorkspaceVisible, emptyWorkspaceText: emptyWorkspaceText?.trim(), emptyWorkspaceBrand, emptyWorkspaceHiddenAfterLoad, cornerBrandCount, footerHeight, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixMetadataOptionCount, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, matrixDetailsMenuVisible, matrixDetailsText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 console.log('Matrix tile fidelity and synthetic 100k-cell pan benchmark:', matrixTileFidelity, matrixTilePerformance)
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
-if (!emptyWorkspaceVisible || !emptyWorkspaceText?.includes('Open or drop genomics files') || !emptyWorkspaceText.includes('GeRAFE') || emptyWorkspaceBrand.imageHeight < 300 || emptyWorkspaceBrand.wordmarkHeight < 30 || cornerBrandCount !== 0 || footerHeight > 24 || emptyWorkspaceHiddenAfterLoad === false) process.exitCode = 1
+if (!emptyWorkspaceVisible || !emptyWorkspaceText?.includes('Open or drop genomics files') || !emptyWorkspaceText.includes('GeRAFE') || emptyWorkspaceBrand.headingOffset > 100 || emptyWorkspaceBrand.headingFontSize < 18 || emptyWorkspaceBrand.imageGap > 24 || emptyWorkspaceBrand.imageHeight < 500 || emptyWorkspaceBrand.wordmarkHeight < 45 || cornerBrandCount !== 0 || footerHeight > 24 || emptyWorkspaceHiddenAfterLoad === false) process.exitCode = 1
 if (!(matrixInspectorSizing.expandedWidth > matrixInspectorSizing.compactWidth) || !(matrixInspectorSizing.expandedHeight > matrixInspectorSizing.compactHeight)) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
 if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button' || helpMenuActiveElement !== 'help-menu-button') process.exitCode = 1
