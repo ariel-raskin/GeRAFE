@@ -84,7 +84,6 @@ const {
   matrixInspectorBins: MATRIX_INSPECTOR_BINS_KEY,
   matrixInspectorDetails: MATRIX_INSPECTOR_DETAILS_KEY,
   matrixLegend: MATRIX_LEGEND_KEY,
-  matrixMetadata: MATRIX_METADATA_KEY,
 } = STORAGE_KEYS
 migrateLegacyStorage(localStorage)
 applyTheme(savedTheme())
@@ -180,13 +179,16 @@ app.innerHTML = `
       <div class="canvas-wrap track-scroll" id="main-track-scroll">
         <div class="genome-header-wrap">
           <canvas id="genome-header" aria-label="Chromosome ideogram and genomic coordinate ruler"></canvas>
-          <div class="corner-brand" aria-label="GeRAFE">
-            <small title="Installed GeRAFE version">v${__GERAFE_VERSION__}</small>
+        </div>
+        <canvas id="genome-canvas" aria-label="Interactive genome tracks"></canvas>
+        <div class="empty-workspace" id="empty-workspace" aria-label="No genomics files are open">
+          <strong>Open or drop genomics files</strong>
+          <span>${SUPPORTED_TRACK_EXTENSION_LABEL}</span>
+          <div class="empty-workspace-brand" aria-label="GeRAFE">
             <img src="/gerafe-icon.png" alt="" />
             <strong>GeRAFE</strong>
           </div>
         </div>
-        <canvas id="genome-canvas" aria-label="Interactive genome tracks"></canvas>
         <div class="drop-overlay"><strong>Drop genomics files to open</strong><span>${SUPPORTED_TRACK_EXTENSION_LABEL}</span></div>
       </div>
       <section class="bottom-pane" id="bottom-pane" aria-label="Secondary track list">
@@ -257,7 +259,6 @@ app.innerHTML = `
             <label><span><strong>Details</strong><small>Show separation, resolution, normalization, and transform.</small></span><input id="matrix-inspector-details-toggle" type="checkbox" /></label>
           </div>
           <label><span><strong>Show color scales</strong><small>Draw each matrix track's gradient legend and scale values.</small></span><input id="matrix-legend-toggle" type="checkbox" /></label>
-          <label><span><strong>Show track metadata</strong><small>Show matrix resolution and normalization below track names.</small></span><input id="matrix-metadata-toggle" type="checkbox" /></label>
         </section>
       </div>
     </section>
@@ -338,6 +339,7 @@ const dropZone = document.querySelector<HTMLElement>('#drop-zone')!
 const toast = document.querySelector<HTMLElement>('#toast')!
 const trackStatus = document.querySelector<HTMLElement>('#track-status')!
 const liveDot = document.querySelector<HTMLElement>('.live-dot')!
+const emptyWorkspace = document.querySelector<HTMLElement>('#empty-workspace')!
 const trackContextMenu = document.querySelector<HTMLElement>('#track-context-menu')!
 const trackContextFlyout = document.querySelector<HTMLElement>('#track-context-flyout')!
 const trackColorInput = document.querySelector<HTMLInputElement>('#track-color-input')!
@@ -369,7 +371,6 @@ const matrixInspectorValueToggle = document.querySelector<HTMLInputElement>('#ma
 const matrixInspectorBinsToggle = document.querySelector<HTMLInputElement>('#matrix-inspector-bins-toggle')!
 const matrixInspectorDetailsToggle = document.querySelector<HTMLInputElement>('#matrix-inspector-details-toggle')!
 const matrixLegendToggle = document.querySelector<HTMLInputElement>('#matrix-legend-toggle')!
-const matrixMetadataToggle = document.querySelector<HTMLInputElement>('#matrix-metadata-toggle')!
 const matrixSettingsDialog = document.querySelector<HTMLElement>('#matrix-settings-dialog')!
 const matrixSettingsContent = matrixSettingsDialog.querySelector<HTMLElement>('.matrix-settings-content')!
 const matrixSettingsForm = document.querySelector<HTMLFormElement>('#matrix-settings-form')!
@@ -524,11 +525,13 @@ store.subscribe((document, reason) => {
   window.clearTimeout(persistTimer)
   persistTimer = window.setTimeout(() => localStorage.setItem(WORKSPACE_KEY, JSON.stringify(document)), 180)
   if (reason !== 'viewport') browser.syncDocument(document, runtimeSources)
+  emptyWorkspace.hidden = document.tracks.some((track) => track.kind !== 'genes')
   updateUndoControls()
   browser.setSelectedTracks(selectedTrackIds)
   if (bottomPaneAutoFit && reason !== 'viewport') requestAnimationFrame(fitBottomPaneToContent)
   if (reason !== 'viewport') scheduleUpperAutoFit()
 })
+emptyWorkspace.hidden = store.current.tracks.some((track) => track.kind !== 'genes')
 browser.syncDocument(store.current, runtimeSources)
 if (isDesktopApp()) void restorePersistedSources()
 browser.setSelectedTracks(selectedTrackIds)
@@ -635,7 +638,7 @@ strandedAutoColorsToggle.addEventListener('change', () => {
   localStorage.setItem(STRANDED_AUTO_COLORS_KEY, String(strandedAutoColorsToggle.checked))
   if (strandedAutoColorsToggle.checked) store.edit(applyAutomaticStrandedColors)
 })
-for (const toggle of [matrixInspectorToggle, matrixInspectorValueToggle, matrixInspectorBinsToggle, matrixInspectorDetailsToggle, matrixLegendToggle, matrixMetadataToggle]) {
+for (const toggle of [matrixInspectorToggle, matrixInspectorValueToggle, matrixInspectorBinsToggle, matrixInspectorDetailsToggle, matrixLegendToggle]) {
   toggle.addEventListener('change', saveMatrixDisplayPreferences)
 }
 trackOptionsClose.addEventListener('click', closeTrackOptionsDialog)
@@ -1610,7 +1613,7 @@ function matrixContextMenuMarkup(
   const canSetVerticalAxis = matrixTracks.length === 1 && isNativeMatrixSource(runtimeSources.get(matrixTracks[0].sourceIds[0]))
   const comparison = matrixTracks.length === 1 && store.current.sources.find((source) => source.id === matrixTracks[0].sourceIds[0])?.format === 'matrix-comparison'
   return [
-    action('matrix-flip', 'Draw matrix downward', matrixTracks.every((track) => track.matrixDirection === 'down') ? 'current' : ''),
+    action('matrix-flip', 'Toggle matrix orientation'),
     submenu('matrix-resolution', 'Resolution', resolutionLabel,
       action('matrix-resolution-auto', 'Automatic', matrixTracks.every((track) => track.matrixResolution === undefined) ? 'current' : '')
       + commonResolutions.map((resolution) => action(`matrix-resolution-value-${resolution}`, formatBases(resolution), matrixTracks.every((track) => track.matrixResolution === resolution) ? 'current' : '')).join('')),
@@ -3145,7 +3148,6 @@ function savedMatrixDisplayPreferences(): MatrixDisplayPreferences {
     inspectorBins: savedBoolean(MATRIX_INSPECTOR_BINS_KEY, false),
     inspectorDetails: savedBoolean(MATRIX_INSPECTOR_DETAILS_KEY, false),
     legend: savedBoolean(MATRIX_LEGEND_KEY, true),
-    metadata: savedBoolean(MATRIX_METADATA_KEY, true),
   }
 }
 
@@ -3156,7 +3158,6 @@ function matrixDisplayPreferencesFromControls(): MatrixDisplayPreferences {
     inspectorBins: matrixInspectorBinsToggle.checked,
     inspectorDetails: matrixInspectorDetailsToggle.checked,
     legend: matrixLegendToggle.checked,
-    metadata: matrixMetadataToggle.checked,
   }
 }
 
@@ -3173,7 +3174,6 @@ function saveMatrixDisplayPreferences(): void {
   localStorage.setItem(MATRIX_INSPECTOR_BINS_KEY, String(preferences.inspectorBins))
   localStorage.setItem(MATRIX_INSPECTOR_DETAILS_KEY, String(preferences.inspectorDetails))
   localStorage.setItem(MATRIX_LEGEND_KEY, String(preferences.legend))
-  localStorage.setItem(MATRIX_METADATA_KEY, String(preferences.metadata))
   updateMatrixInspectorFieldControls()
   browser.setMatrixDisplayPreferences(preferences)
 }
@@ -3189,7 +3189,6 @@ function updateTrackOptionsControls(): void {
   matrixInspectorBinsToggle.checked = matrix.inspectorBins
   matrixInspectorDetailsToggle.checked = matrix.inspectorDetails
   matrixLegendToggle.checked = matrix.legend
-  matrixMetadataToggle.checked = matrix.metadata
   updateMatrixInspectorFieldControls()
 }
 
