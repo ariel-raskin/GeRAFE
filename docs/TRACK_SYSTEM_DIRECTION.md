@@ -71,6 +71,8 @@ interface TrackSpec {
   style: TrackStyle
   heightWeight: number
   stranded?: StrandedDisplay
+  matrixOverlayInteractionTrackId?: string
+  matrixOverlayFocusMode?: 'all' | 'genes' | 'region'
 }
 ```
 

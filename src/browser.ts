@@ -92,6 +92,13 @@ interface MatrixHover extends MatrixCellInspection {
   x: number
   y: number
 }
+interface MatrixOverlaySelection {
+  interactionSpec: TrackSpec
+  features: InteractionFeature[]
+  total: number
+  scoreMin: number
+  scoreMax: number
+}
 interface BamHover { trackId: string; read: AlignmentFeature }
 
 export class GenomeBrowser {
@@ -1468,11 +1475,7 @@ export class GenomeBrowser {
         ? (this.geneSource?.featuresFor(this.region) ?? []).map((gene) => ({ name: gene.name, gene }))
         : []
     const geneFiltered = filterMode === 'all' ? inWindow : filterInteractionsForGenes(inWindow, geneTargets)
-    const visible = geneFiltered.filter((feature) => {
-      if (spec.interactionMinScore !== undefined && (feature.score ?? Number.NEGATIVE_INFINITY) < spec.interactionMinScore) return false
-      if (spec.interactionMaxDistance === undefined || feature.chrom1 !== feature.chrom2) return true
-      return Math.abs(((feature.start2 + feature.end2) / 2) - ((feature.start1 + feature.end1) / 2)) <= spec.interactionMaxDistance
-    })
+    const visible = filterInteractionFeatures(geneFiltered, spec.interactionMinScore, spec.interactionMaxDistance)
     if (!visible.length) {
       const unavailable = filterMode === 'visible-genes' && !this.geneSource
       if (unavailable) {
@@ -1494,9 +1497,7 @@ export class GenomeBrowser {
     ctx.beginPath(); ctx.rect(PLOT_LEFT, top + 2, plotWidth, height - 3); ctx.clip()
     for (const feature of shown) {
       const emphasis = interactionEmphasis(feature.score, scoreMin, scoreMax)
-      const color = spec.interactionColorMode === 'item-rgb' ? feature.itemRgb ?? spec.color
-        : spec.interactionColorMode === 'score' && feature.score !== undefined ? scoreColor(feature.score, scoreMin, scoreMax)
-          : spec.color
+      const color = interactionFeatureColor(feature, spec, scoreMin, scoreMax)
       ctx.strokeStyle = color
       ctx.fillStyle = color
       ctx.lineWidth = (spec.interactionLineWidth ?? 1) * (0.8 + emphasis * 2.2)
@@ -1603,7 +1604,8 @@ export class GenomeBrowser {
       return 0
     }
 
-    if (matrix.axis2) return this.drawMatrixRectangle(spec, matrix, top, bottom, width, minimum, maximum, scaleLaneWidth, trackBackground, palette)
+    const overlay = this.matrixOverlaySelection(spec, matrix)
+    if (matrix.axis2) return this.drawMatrixRectangle(spec, matrix, top, bottom, width, minimum, maximum, scaleLaneWidth, trackBackground, palette, overlay)
 
     const scale = plotWidth / Math.max(1, this.region.end - this.region.start)
     const direction = spec.matrixDirection === 'down' ? 1 : -1
@@ -1674,18 +1676,20 @@ export class GenomeBrowser {
     ctx.globalAlpha = 1
     drawMissingMatrixCells(ctx, matrix.missingCells ?? [], matrix.resolution, this.region, scale, baseline, direction, halfCell, spec.matrixMissingStyle === 'custom' ? spec.matrixMissingColor ?? '#9197a3' : trackBackground)
     drawMaskedMatrixBins(ctx, matrix.maskedBins ?? [], matrix.resolution, this.region, scale, PLOT_LEFT, width, baseline, direction, depthPixels, spec, trackBackground, palette)
+    if (overlay) this.drawTriangularMatrixOverlay(overlay, matrix, scale, baseline, direction, halfCell, palette)
     if (this.matrixHover?.trackId === spec.id) drawMatrixCrosshair(ctx, this.matrixHover, matrix.resolution, PLOT_LEFT, width, geometry.clipTop, geometry.clipBottom, halfCell, direction, palette)
     ctx.globalAlpha = 1
     ctx.strokeStyle = palette.axisLine
     ctx.beginPath(); ctx.moveTo(PLOT_LEFT, baseline + 0.5); ctx.lineTo(width, baseline + 0.5); ctx.stroke()
     ctx.restore()
+    this.drawMatrixOverlayTruncation(overlay, top + 13, palette)
     ctx.strokeStyle = palette.line
     ctx.beginPath(); ctx.moveTo(0, bottom - 0.5); ctx.lineTo(width, bottom - 0.5); ctx.stroke()
-    return matrix.cells.length + (matrix.missingCells?.length ?? 0)
+    return matrix.cells.length + (matrix.missingCells?.length ?? 0) + (overlay?.features.length ?? 0)
   }
 
   private drawMatrixRectangle(spec: TrackSpec, matrix: MatrixFeature, top: number, bottom: number, width: number,
-    minimum: number, maximum: number, legendWidth: number, background: string, palette: CanvasPalette): number {
+    minimum: number, maximum: number, legendWidth: number, background: string, palette: CanvasPalette, overlay?: MatrixOverlaySelection): number {
     const axis = matrix.axis2!
     const ctx = this.context
     const scaleX = (width - PLOT_LEFT) / Math.max(1, this.region.end - this.region.start)
@@ -1730,6 +1734,7 @@ export class GenomeBrowser {
     ctx.fillStyle = masked; ctx.globalAlpha = spec.matrixMaskedStyle === 'hatch' ? 0.55 : 1
     for (const bin of matrix.maskedBins ?? []) ctx.fillRect(PLOT_LEFT + (bin - this.region.start) * scaleX, top, Math.max(1, matrix.resolution * scaleX), bottom - top)
     for (const bin of matrix.maskedBins2 ?? []) ctx.fillRect(PLOT_LEFT, top + (bin - axis.start) * scaleY, width - PLOT_LEFT, Math.max(1, matrix.resolution * scaleY))
+    if (overlay) this.drawRectangularMatrixOverlay(overlay, matrix, scaleX, scaleY, top, palette)
     if (this.matrixHover?.trackId === spec.id) {
       ctx.globalAlpha = 1; ctx.strokeStyle = palette.axisLine
       ctx.strokeRect(this.matrixHover.x - matrix.resolution * scaleX / 2, this.matrixHover.y - matrix.resolution * scaleY / 2,
@@ -1739,7 +1744,91 @@ export class GenomeBrowser {
     drawMatrixLegend(ctx, spec, minimum, maximum, top, bottom, legendWidth, palette)
     ctx.fillStyle = palette.ink; ctx.font = '10px Inter, system-ui, sans-serif'
     ctx.fillText(`Y: ${formatLocus(axis)}`, PLOT_LEFT + 6, Math.min(bottom - 5, top + 13))
-    return matrix.cells.length + (matrix.missingCells?.length ?? 0)
+    this.drawMatrixOverlayTruncation(overlay, Math.min(bottom - 5, top + 27), palette)
+    return matrix.cells.length + (matrix.missingCells?.length ?? 0) + (overlay?.features.length ?? 0)
+  }
+
+  private matrixOverlaySelection(spec: TrackSpec, matrix: MatrixFeature): MatrixOverlaySelection | undefined {
+    if (!spec.matrixOverlayInteractionTrackId) return undefined
+    const interactionSpec = this.document.tracks.find((track) => track.id === spec.matrixOverlayInteractionTrackId && track.kind === 'interaction')
+    const runtime = interactionSpec && this.runtimes.get(signalFeatureKey(interactionSpec.id))
+    if (!interactionSpec || !runtime) return undefined
+    const sourceFeatures = runtime.features.filter((feature): feature is InteractionFeature => 'featureType' in feature && feature.featureType === 'interaction')
+    const filterMode = interactionSpec.interactionFilterMode ?? 'all'
+    const geneTargets: InteractionGeneTarget[] = filterMode === 'genes'
+      ? (interactionSpec.interactionFilterGenes ?? []).map((name) => ({ name, gene: this.geneSource?.find(name) }))
+      : filterMode === 'visible-genes'
+        ? (this.geneSource?.featuresFor(this.region) ?? []).map((gene) => ({ name: gene.name, gene }))
+        : []
+    let filtered = filterMode === 'all' ? sourceFeatures : filterInteractionsForGenes(sourceFeatures, geneTargets)
+    filtered = filterInteractionFeatures(filtered, interactionSpec.interactionMinScore, interactionSpec.interactionMaxDistance)
+    if (spec.matrixOverlayFocusMode === 'genes') {
+      const targets = (spec.matrixOverlayFocusGenes ?? []).map((name) => ({ name, gene: this.geneSource?.find(name) }))
+      filtered = filterInteractionsForGenes(filtered, targets)
+    } else if (spec.matrixOverlayFocusMode === 'region' && spec.matrixOverlayFocusRegion) {
+      filtered = filtered.filter((feature) => interactionTouchesRegion(feature, spec.matrixOverlayFocusRegion!))
+    }
+    filtered = filtered.filter((feature) => {
+      const pair = matrixOverlayAnchorPair(feature, this.region, matrix.axis2)
+      if (!pair) return false
+      if (matrix.axis2) return true
+      const maximumDistance = matrixQueryMaximumDistance(this.region.end - this.region.start, spec.matrixDepthMode ?? 'full', spec.matrixMaxDistance)
+      return Math.abs(pair.vertical - pair.horizontal) <= maximumDistance
+    })
+    const limit = Math.min(interactionSpec.interactionMaxFeatures ?? MAX_VISIBLE_INTERACTIONS, spec.matrixOverlayMaxFeatures ?? 250)
+    const features = selectInteractionFeatures(filtered, limit)
+    const scores = features.map((feature) => feature.score).filter((score): score is number => Number.isFinite(score))
+    return {
+      interactionSpec,
+      features,
+      total: filtered.length,
+      scoreMin: scores.length ? Math.min(...scores) : 0,
+      scoreMax: scores.length ? Math.max(...scores) : 0,
+    }
+  }
+
+  private drawTriangularMatrixOverlay(overlay: MatrixOverlaySelection, matrix: MatrixFeature, scale: number,
+    baseline: number, direction: number, halfCell: number, palette: CanvasPalette): void {
+    const ctx = this.context
+    for (const feature of overlay.features) {
+      const pair = matrixOverlayAnchorPair(feature, this.region)
+      if (!pair) continue
+      const first = matrixBinCenter(pair.horizontal, matrix.resolution)
+      const second = matrixBinCenter(pair.vertical, matrix.resolution)
+      const x = PLOT_LEFT + (((first + second) / 2) - this.region.start) * scale
+      const y = baseline + direction * ((second - first) / 2) * scale
+      const half = Math.max(3, halfCell + 1)
+      ctx.beginPath(); ctx.moveTo(x - half, y); ctx.lineTo(x, y + half); ctx.lineTo(x + half, y); ctx.lineTo(x, y - half); ctx.closePath()
+      strokeMatrixOverlay(ctx, interactionFeatureColor(feature, overlay.interactionSpec, overlay.scoreMin, overlay.scoreMax), overlay.interactionSpec, palette)
+    }
+  }
+
+  private drawRectangularMatrixOverlay(overlay: MatrixOverlaySelection, matrix: MatrixFeature, scaleX: number,
+    scaleY: number, top: number, palette: CanvasPalette): void {
+    const ctx = this.context
+    for (const feature of overlay.features) {
+      const pair = matrixOverlayAnchorPair(feature, this.region, matrix.axis2)
+      if (!pair) continue
+      const horizontal = matrixBinCenter(pair.horizontal, matrix.resolution)
+      const vertical = matrixBinCenter(pair.vertical, matrix.resolution)
+      const cellWidth = Math.max(4, matrix.resolution * scaleX)
+      const cellHeight = Math.max(4, matrix.resolution * scaleY)
+      const x = PLOT_LEFT + (horizontal - this.region.start) * scaleX - cellWidth / 2
+      const y = top + (vertical - matrix.axis2!.start) * scaleY - cellHeight / 2
+      ctx.beginPath(); ctx.rect(x, y, cellWidth, cellHeight)
+      strokeMatrixOverlay(ctx, interactionFeatureColor(feature, overlay.interactionSpec, overlay.scoreMin, overlay.scoreMax), overlay.interactionSpec, palette)
+    }
+  }
+
+  private drawMatrixOverlayTruncation(overlay: MatrixOverlaySelection | undefined, y: number, palette: CanvasPalette): void {
+    if (!overlay || overlay.features.length >= overlay.total) return
+    const ctx = this.context
+    ctx.save()
+    ctx.globalAlpha = 1
+    ctx.fillStyle = palette.muted
+    ctx.font = '10px Inter, system-ui, sans-serif'
+    ctx.fillText(`BEDPE overlay: ${overlay.features.length.toLocaleString()} of ${overlay.total.toLocaleString()}`, PLOT_LEFT + 6, y)
+    ctx.restore()
   }
 
   private drawAlignmentTrack(
@@ -2281,7 +2370,10 @@ export class GenomeBrowser {
   }
 
   private visibleSourceSpecs(): TrackSpec[] {
-    return this.document.tracks.filter((track) => track.kind !== 'genes' && track.enabled)
+    const overlayInteractionIds = new Set(this.document.tracks
+      .filter((track) => track.kind === 'matrix' && track.enabled && track.matrixOverlayInteractionTrackId)
+      .map((track) => track.matrixOverlayInteractionTrackId!))
+    return this.document.tracks.filter((track) => track.kind !== 'genes' && (track.enabled || overlayInteractionIds.has(track.id)))
   }
 
   private visibleSpecs(pane: 'main' | 'bottom'): TrackSpec[] {
@@ -2485,6 +2577,59 @@ export function filterInteractionsForGenes(features: readonly InteractionFeature
   return features.filter((feature) => overlapsAnyInterval(intervalsByChromosome.get(feature.chrom1), feature.start1, feature.end1)
     || overlapsAnyInterval(intervalsByChromosome.get(feature.chrom2), feature.start2, feature.end2)
     || interactionNameContainsAnyGene(feature.name, unresolvedNames))
+}
+
+export function filterInteractionFeatures(
+  features: readonly InteractionFeature[],
+  minimumScore?: number,
+  maximumCisDistance?: number,
+): InteractionFeature[] {
+  return features.filter((feature) => {
+    if (minimumScore !== undefined && (feature.score ?? Number.NEGATIVE_INFINITY) < minimumScore) return false
+    if (maximumCisDistance === undefined || feature.chrom1 !== feature.chrom2) return true
+    return Math.abs(interactionAnchorCenter(feature.start2, feature.end2) - interactionAnchorCenter(feature.start1, feature.end1)) <= maximumCisDistance
+  })
+}
+
+export function interactionTouchesRegion(feature: InteractionFeature, region: Region): boolean {
+  return (feature.chrom1 === region.chr && feature.end1 > region.start && feature.start1 < region.end)
+    || (feature.chrom2 === region.chr && feature.end2 > region.start && feature.start2 < region.end)
+}
+
+export function matrixOverlayAnchorPair(
+  feature: InteractionFeature,
+  horizontal: Region,
+  vertical?: Region,
+): { horizontal: number; vertical: number } | undefined {
+  const firstCenter = interactionAnchorCenter(feature.start1, feature.end1)
+  const secondCenter = interactionAnchorCenter(feature.start2, feature.end2)
+  if (!vertical) {
+    if (feature.chrom1 !== horizontal.chr || feature.chrom2 !== horizontal.chr
+      || !intervalOverlapsRegion(feature.start1, feature.end1, horizontal)
+      || !intervalOverlapsRegion(feature.start2, feature.end2, horizontal)) return undefined
+    return firstCenter <= secondCenter
+      ? { horizontal: firstCenter, vertical: secondCenter }
+      : { horizontal: secondCenter, vertical: firstCenter }
+  }
+  if (feature.chrom1 === horizontal.chr && feature.chrom2 === vertical.chr
+    && intervalOverlapsRegion(feature.start1, feature.end1, horizontal)
+    && intervalOverlapsRegion(feature.start2, feature.end2, vertical)) return { horizontal: firstCenter, vertical: secondCenter }
+  if (feature.chrom2 === horizontal.chr && feature.chrom1 === vertical.chr
+    && intervalOverlapsRegion(feature.start2, feature.end2, horizontal)
+    && intervalOverlapsRegion(feature.start1, feature.end1, vertical)) return { horizontal: secondCenter, vertical: firstCenter }
+  return undefined
+}
+
+function interactionAnchorCenter(start: number, end: number): number {
+  return (start + end) / 2
+}
+
+function intervalOverlapsRegion(start: number, end: number, region: Region): boolean {
+  return end > region.start && start < region.end
+}
+
+function matrixBinCenter(coordinate: number, resolution: number): number {
+  return Math.floor(coordinate / resolution) * resolution + resolution / 2
 }
 
 function mergeIntervals(intervals: Array<{ start: number; end: number }>): Array<{ start: number; end: number }> {
@@ -3005,6 +3150,27 @@ function interactionEmphasis(score: number | undefined, minimum: number, maximum
 function scoreColor(score: number, minimum: number, maximum: number): string {
   const fraction = maximum > minimum ? Math.max(0, Math.min(1, (score - minimum) / (maximum - minimum))) : 0.65
   return `hsl(${250 - fraction * 210} 62% 48%)`
+}
+
+function interactionFeatureColor(feature: InteractionFeature, spec: TrackSpec, minimum: number, maximum: number): string {
+  return spec.interactionColorMode === 'item-rgb' ? feature.itemRgb ?? spec.color
+    : spec.interactionColorMode === 'score' && feature.score !== undefined ? scoreColor(feature.score, minimum, maximum)
+      : spec.color
+}
+
+function strokeMatrixOverlay(ctx: CanvasRenderingContext2D, color: string, spec: TrackSpec, palette: CanvasPalette): void {
+  const lineWidth = spec.interactionLineWidth ?? 1
+  const alpha = (spec.interactionOpacity ?? 92) / 100
+  ctx.globalAlpha = Math.min(1, alpha * 0.9)
+  ctx.strokeStyle = palette.background
+  ctx.lineWidth = lineWidth + 2
+  ctx.stroke()
+  ctx.globalAlpha = alpha
+  ctx.strokeStyle = color
+  ctx.lineWidth = lineWidth
+  ctx.stroke()
+  ctx.globalAlpha = 1
+  ctx.lineWidth = 1
 }
 
 function drawInteractionAnchor(

@@ -255,6 +255,26 @@ describe('track document', () => {
     })
   })
 
+  it('persists valid BEDPE matrix overlay links and removes dangling links', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 1_000_000 })
+    addInteractionTrack(document, { id: 'bedpe-source', name: 'loops.bedpe', format: 'bedpe', files: [] }, { id: 'loops' })
+    const matrix = addMatrixTrack(document, { id: 'matrix-source', name: 'contacts.cool', format: 'cool', files: [] }, { id: 'matrix' })
+    Object.assign(matrix, {
+      matrixOverlayInteractionTrackId: 'loops', matrixOverlayFocusMode: 'genes', matrixOverlayFocusGenes: ['runx1', 'MYC'],
+      matrixOverlayFocusRegion: { chr: 'chr1', start: 100, end: 200 }, matrixOverlayMaxFeatures: 400,
+    })
+    const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
+    expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
+    expect(restored.tracks.find((track) => track.id === 'matrix')).toMatchObject({
+      matrixOverlayInteractionTrackId: 'loops', matrixOverlayFocusMode: 'genes', matrixOverlayFocusGenes: ['RUNX1', 'MYC'],
+      matrixOverlayMaxFeatures: 400,
+    })
+    expect(restored.tracks.find((track) => track.id === 'matrix')).not.toHaveProperty('matrixOverlayFocusRegion')
+    removeTrack(restored, 'loops')
+    expect(restored.tracks.find((track) => track.id === 'matrix')).not.toHaveProperty('matrixOverlayInteractionTrackId')
+    expect(restored.tracks.find((track) => track.id === 'matrix')).not.toHaveProperty('matrixOverlayFocusMode')
+  })
+
   it('upgrades version 20 matrices to observed values', () => {
     const legacy = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 }) as any
     const track = addMatrixTrack(legacy, { id: 'matrix-source', name: 'contacts.cool', format: 'cool', files: [] })

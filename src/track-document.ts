@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 24 as const
+export const TRACK_DOCUMENT_VERSION = 25 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -22,6 +22,7 @@ export type MatrixDepthMode = 'auto' | 'full' | 'fixed'
 export type MatrixZeroStyle = 'background' | 'low-color' | 'custom'
 export type MatrixMissingStyle = 'background' | 'custom'
 export type MatrixMaskedStyle = 'background' | 'hatch' | 'custom'
+export type MatrixOverlayFocusMode = 'all' | 'genes' | 'region'
 
 export interface SourceFileSpec {
   name: string
@@ -113,6 +114,13 @@ export interface TrackSpec {
   matrixComparisonMode?: 'difference' | 'ratio' | 'log2-ratio'
   /** A second, independently navigated genomic axis enables the rectangular view. */
   matrixSecondaryRegion?: Region
+  /** BEDPE interaction track outlined over this matrix without changing contact colors. */
+  matrixOverlayInteractionTrackId?: string
+  matrixOverlayFocusMode?: MatrixOverlayFocusMode
+  matrixOverlayFocusGenes?: string[]
+  matrixOverlayFocusRegion?: Region
+  /** Independent safety cap; the linked BEDPE display limit can lower it further. */
+  matrixOverlayMaxFeatures?: number
   matrixTransform?: 'linear' | 'log1p'
   matrixScaleMode?: MatrixScaleMode
   matrixScaleMin?: number
@@ -732,7 +740,7 @@ export function computeScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -812,6 +820,17 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     matrixSecondaryRegion: track.kind === 'matrix' && sources.some((source) => source.id === track.sourceIds[0] && ['hic', 'cool', 'mcool'].includes(source.format))
       && isRegion(track.matrixSecondaryRegion) && track.matrixSecondaryRegion.start >= 0
       ? { ...track.matrixSecondaryRegion } : undefined,
+    matrixOverlayInteractionTrackId: track.kind === 'matrix' && typeof track.matrixOverlayInteractionTrackId === 'string'
+      ? track.matrixOverlayInteractionTrackId : undefined,
+    matrixOverlayFocusMode: track.kind === 'matrix' && (track.matrixOverlayFocusMode === 'genes' || track.matrixOverlayFocusMode === 'region')
+      ? track.matrixOverlayFocusMode : track.kind === 'matrix' ? 'all' as const : undefined,
+    matrixOverlayFocusGenes: track.kind === 'matrix' && Array.isArray(track.matrixOverlayFocusGenes)
+      ? [...new Set(track.matrixOverlayFocusGenes.filter((gene: unknown): gene is string => typeof gene === 'string').map((gene: string) => gene.trim().toLocaleUpperCase()).filter(Boolean))].slice(0, 100)
+      : undefined,
+    matrixOverlayFocusRegion: track.kind === 'matrix' && isRegion(track.matrixOverlayFocusRegion) && track.matrixOverlayFocusRegion.start >= 0
+      ? { ...track.matrixOverlayFocusRegion } : undefined,
+    matrixOverlayMaxFeatures: track.kind === 'matrix' && typeof track.matrixOverlayMaxFeatures === 'number' && Number.isFinite(track.matrixOverlayMaxFeatures)
+      ? Math.max(1, Math.min(2_000, Math.round(track.matrixOverlayMaxFeatures))) : track.kind === 'matrix' ? 250 : undefined,
     matrixTransform: track.kind === 'matrix' && track.matrixTransform === 'linear' ? 'linear' as const : track.kind === 'matrix' ? 'log1p' as const : undefined,
     matrixScaleMode: track.kind === 'matrix' && (track.matrixScaleMode === 'maximum' || track.matrixScaleMode === 'percentile' || track.matrixScaleMode === 'fixed')
       ? track.matrixScaleMode
@@ -936,6 +955,22 @@ export function cloneDocument(document: TrackDocument): TrackDocument {
 }
 
 function pruneDocument(document: TrackDocument): void {
+  const interactionTrackIds = new Set(document.tracks.filter((track) => track.kind === 'interaction').map((track) => track.id))
+  for (const track of document.tracks) {
+    if (track.kind !== 'matrix') continue
+    if (!track.matrixOverlayInteractionTrackId || !interactionTrackIds.has(track.matrixOverlayInteractionTrackId)) {
+      delete track.matrixOverlayInteractionTrackId
+      delete track.matrixOverlayFocusMode
+      delete track.matrixOverlayFocusGenes
+      delete track.matrixOverlayFocusRegion
+      delete track.matrixOverlayMaxFeatures
+      continue
+    }
+    if (track.matrixOverlayFocusMode === 'genes' && !track.matrixOverlayFocusGenes?.length) track.matrixOverlayFocusMode = 'all'
+    if (track.matrixOverlayFocusMode === 'region' && !track.matrixOverlayFocusRegion) track.matrixOverlayFocusMode = 'all'
+    if (track.matrixOverlayFocusMode !== 'genes') delete track.matrixOverlayFocusGenes
+    if (track.matrixOverlayFocusMode !== 'region') delete track.matrixOverlayFocusRegion
+  }
   const usedSources = new Set(document.tracks.flatMap((track) => track.sourceIds))
   const usedGroups = new Set(document.tracks.map((track) => track.displayGroupId).filter(Boolean))
   const usedScales = new Set(document.tracks.flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
