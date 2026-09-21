@@ -325,45 +325,26 @@ button, label { -webkit-tap-highlight-color: transparent; }
   user-select: none;
 }
 
-.corner-brand {
+.empty-workspace {
   position: absolute;
-  inset: 3px auto 2px 0;
-  width: 176px;
+  z-index: 2;
+  inset: 70px 0 0 176px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
-  color: var(--ink);
+  color: var(--muted);
   pointer-events: none;
   user-select: none;
 }
 
-.corner-brand small { position: absolute; top: 3px; left: 7px; color: var(--muted); font-size: 8px; font-variant-numeric: tabular-nums; letter-spacing: .03em; }
-
-.corner-brand img {
-  width: auto;
-  height: 48px;
-  min-height: 0;
-  max-width: 150px;
-  object-fit: contain;
-  filter: drop-shadow(0 2px 3px rgba(39, 31, 12, .16));
-}
-
-.corner-brand strong {
-  margin-top: -1px;
-  padding-left: .14em;
-  font-family: Bahnschrift, 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
-  font-size: 13px;
-  font-stretch: condensed;
-  font-weight: 650;
-  line-height: 14px;
-  letter-spacing: .14em;
-}
-
-html[data-theme='dark'] .corner-brand img {
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, .42));
-}
+.empty-workspace[hidden] { display: none; }
+.empty-workspace > strong { color: var(--ink); font-size: 14px; font-weight: 600; }
+.empty-workspace > span { margin-top: 5px; font-size: 12px; }
+.empty-workspace-brand { display: flex; flex-direction: column; align-items: center; margin-top: 24px; color: var(--ink); }
+.empty-workspace-brand img { width: auto; height: 84px; max-width: 220px; object-fit: contain; filter: drop-shadow(0 3px 5px rgba(39, 31, 12, .18)); }
+.empty-workspace-brand strong { margin-top: 3px; padding-left: .16em; font-family: Bahnschrift, 'Segoe UI Variable Display', 'Segoe UI', sans-serif; font-size: 20px; font-stretch: condensed; font-weight: 650; line-height: 22px; letter-spacing: .16em; }
+html[data-theme='dark'] .empty-workspace-brand img { filter: drop-shadow(0 3px 6px rgba(0, 0, 0, .45)); }
 #genome-canvas, #bottom-canvas { display: block; min-width: 100%; cursor: var(--cursor-grab); touch-action: none; user-select: none; }
 #genome-header.is-dragging,
 #genome-canvas.is-dragging, #bottom-canvas.is-dragging { cursor: var(--cursor-grabbing); }
@@ -777,31 +758,32 @@ body.is-track-resizing, body.is-track-resizing * { cursor: var(--cursor-resize-y
 .context-submenu-trigger:hover::after, .context-submenu-trigger:focus-visible::after { color: white; }
 
 .browser-footer {
-  min-height: 36px;
-  flex: 0 0 36px;
+  min-height: 22px;
+  flex: 0 0 22px;
   display: flex;
   align-items: center;
-  gap: 26px;
-  padding: 0 14px;
+  gap: 18px;
+  padding: 2px 10px;
   border-top: 1px solid var(--line);
   color: var(--muted);
   background: var(--status-bg);
   font-size: 10px;
+  line-height: 13px;
   user-select: none;
 }
 
-.status-group { display: flex; align-items: center; gap: 8px; }
-.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 12%, transparent); }
-.live-dot[data-state='ready'] { background: #24a072; box-shadow: 0 0 0 3px rgba(36,160,114,.11); }
-.live-dot[data-state='loading'] { background: #d88928; box-shadow: 0 0 0 3px rgba(216,137,40,.12); }
-.live-dot[data-state='attention'] { background: #b14455; box-shadow: 0 0 0 3px rgba(177,68,85,.12); }
-.metrics { display: flex; gap: 18px; margin-left: auto; }
+.status-group { display: flex; align-items: center; gap: 7px; }
+.live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 2px color-mix(in srgb, var(--muted) 12%, transparent); }
+.live-dot[data-state='ready'] { background: #24a072; box-shadow: 0 0 0 2px rgba(36,160,114,.11); }
+.live-dot[data-state='loading'] { background: #d88928; box-shadow: 0 0 0 2px rgba(216,137,40,.12); }
+.live-dot[data-state='attention'] { background: #b14455; box-shadow: 0 0 0 2px rgba(177,68,85,.12); }
+.metrics { display: flex; gap: 14px; margin-left: auto; }
 .metrics b { color: var(--ink); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-weight: 600; }
 
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 48px;
+  bottom: 32px;
   z-index: 10;
   transform: translate(-50%, 16px);
   padding: 10px 15px;

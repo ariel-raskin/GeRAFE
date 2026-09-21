@@ -5,7 +5,6 @@ import type { GeneFeature, GeneSource, TranscriptFeature } from './reference.ts'
 import { computeScaleDomains, createTrackDocument, signalFeatureKey } from './track-document.ts'
 import type { DisplayGroup, TrackDocument, TrackSpec } from './track-document.ts'
 import type { AlignmentCoverageFeature, AlignmentFeature, InteractionFeature, IntervalFeature, MatrixCellPosition, MatrixFeature, Region, SignalFeature, TrackSource, TrackRuntime } from './types.ts'
-import { SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
 
 const RULER_HEIGHT = 70
 const TRACK_HEIGHT = 132
@@ -75,7 +74,6 @@ export interface MatrixDisplayPreferences {
   inspectorBins: boolean
   inspectorDetails: boolean
   legend: boolean
-  metadata: boolean
 }
 
 export interface MatrixRuntimeDiagnostics {
@@ -154,7 +152,6 @@ export class GenomeBrowser {
     inspectorBins: false,
     inspectorDetails: false,
     legend: true,
-    metadata: true,
   }
   private trackBodyHold?: { canvas: HTMLCanvasElement; startX: number; startY: number; timer: number }
   private matrixHover?: MatrixHover
@@ -924,7 +921,6 @@ export class GenomeBrowser {
       top += rowHeight
     })
     if (groupRun) this.drawGroupRail(groupRun.id, groupRun.top, groupRun.bottom, palette)
-    if (pane === 'main' && specs.length === 0) this.drawEmptyState(width, height, palette)
     if (this.trackDrag?.active && this.trackDrag.targetPane === pane && this.trackDrag.insertionIndex !== undefined) {
       const y = this.insertionY(pane, this.trackDrag.insertionIndex)
       ctx.fillStyle = palette.selectionFill
@@ -1587,19 +1583,9 @@ export class GenomeBrowser {
     ctx.fillStyle = palette.ink
     ctx.font = '600 12px Inter, system-ui, sans-serif'
     const labelBounds = trackLabelBounds(scaleLaneWidth)
-    const labelLines = wrappedLines(ctx, spec.label, labelBounds.width, Math.max(1, Math.floor((height - 30) / 15)))
+    const labelLines = wrappedLines(ctx, spec.label, labelBounds.width, Math.max(1, Math.floor((height - 12) / 15)))
     const labelTop = verticallyCenteredBaseline(top, height, labelLines.length, 15)
     drawCenteredTextLines(ctx, labelLines, labelBounds.center, labelTop, 15)
-    ctx.fillStyle = palette.muted
-    ctx.font = '9px Inter, system-ui, sans-serif'
-    ctx.textAlign = 'center'
-    if (this.matrixDisplayPreferences.metadata) {
-      const resolution = matrix?.resolution ?? spec.matrixResolution
-      const normalization = spec.matrixNormalization ?? 'raw'
-      const valueLabel = spec.matrixComparisonMode ? `${spec.matrixComparisonMode} ${spec.matrixValueMode === 'observed-expected' ? 'O/E' : 'observed'}` : signed ? 'log2 O/E' : spec.matrixValueMode === 'observed-expected' ? 'O/E' : 'observed'
-      const metadata = ellipsize(ctx, `${resolution ? formatBases(resolution) : 'auto resolution'} · ${normalization} · ${valueLabel}`, labelBounds.width)
-      ctx.fillText(metadata, labelBounds.center, Math.min(bottom - 7, labelTop + labelLines.length * 15 + 3))
-    }
     ctx.textAlign = 'start'
     if (track.status === 'error' || track.status === 'offline') {
       ctx.fillStyle = palette.error
@@ -2191,19 +2177,6 @@ export class GenomeBrowser {
     this.geneScrollOffsets.set(spec.id, next)
     this.scheduleRender()
     return true
-  }
-
-  private drawEmptyState(width: number, bottom: number, palette: CanvasPalette): void {
-    const ctx = this.context
-    const y = Math.max(70, bottom) / 2
-    ctx.fillStyle = palette.label
-    ctx.font = '600 14px Inter, system-ui, sans-serif'
-    ctx.textAlign = 'center'
-    ctx.fillText('Open or drop genomics files', PLOT_LEFT + (width - PLOT_LEFT) / 2, y - 7)
-    ctx.fillStyle = palette.muted
-    ctx.font = '12px Inter, system-ui, sans-serif'
-    ctx.fillText(SUPPORTED_TRACK_EXTENSION_LABEL, PLOT_LEFT + (width - PLOT_LEFT) / 2, y + 15)
-    ctx.textAlign = 'start'
   }
 
   private hasOverscanCoverage(): boolean {
