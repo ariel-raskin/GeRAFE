@@ -62,6 +62,9 @@ export interface MatrixFeature {
   missingCells: MatrixCellPosition[]
   /** Genomic bin starts masked by the active normalization, when exposed by the source. */
   maskedBins: number[]
+  /** Rectangular map's independently chosen vertical axis; absent for triangular cis tracks. */
+  axis2?: Region
+  maskedBins2?: number[]
   valueMode?: 'observed' | 'observed-expected' | 'log2-observed-expected'
 }
 
@@ -117,6 +120,8 @@ export interface TrackQueryOptions {
   matrixNormalization?: string
   matrixValueMode?: 'observed' | 'observed-expected' | 'log2-observed-expected'
   matrixComparisonMode?: 'difference' | 'ratio' | 'log2-ratio'
+  matrixSecondaryRegion?: Region
+  matrixPixelHeight?: number
   matrixMaxDistance?: number
 }
 

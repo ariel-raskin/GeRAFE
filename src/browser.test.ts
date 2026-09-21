@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, interactionArcHeight, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { AlignmentFeature, InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
@@ -142,6 +142,9 @@ describe('contact-matrix rendering helpers', () => {
     expect(matrixQueryChanged(original, { ...original, matrixDepthMode: 'fixed', matrixMaxDistance: 250_000 })).toBe(true)
     expect(matrixQueryChanged(original, { ...original })).toBe(false)
     expect(matrixQueryChanged(original, { ...original, matrixValueMode: 'observed-expected' })).toBe(true)
+    expect(matrixQueryChanged(original, { ...original, matrixSecondaryRegion: { chr: 'chr2', start: 0, end: 200 } })).toBe(true)
+    expect(matrixQueryChanged({ ...original, matrixSecondaryRegion: { chr: 'chr2', start: 0, end: 200 } },
+      { ...original, matrixSecondaryRegion: { chr: 'chr2', start: 0, end: 200 } })).toBe(false)
   })
 
   it('uses explicit viewport-based matrix depths rather than track height', () => {
@@ -239,6 +242,23 @@ describe('contact-matrix rendering helpers', () => {
     expect(inspectMatrixCell(matrix, 0, 10)).toMatchObject({ state: 'zero', separation: 10 })
     expect(inspectMatrixCell(matrix, 20, 40)).toMatchObject({ state: 'missing', separation: 20 })
     expect(inspectMatrixCell(matrix, 30, 50)).toMatchObject({ state: 'masked', separation: 20 })
+  })
+
+  it('inspects rectangular pixels without sorting chromosome axes', () => {
+    const matrix: MatrixFeature = {
+      featureType: 'matrix', start: 100, end: 200, resolution: 10,
+      axis2: { chr: 'chr2', start: 0, end: 100 },
+      cells: [{ bin1: 120, bin2: 30, value: 6 }],
+      missingCells: [{ bin1: 130, bin2: 40 }], maskedBins: [150], maskedBins2: [60],
+    }
+    const inspect = (x: number, y: number) => inspectRectangularMatrixPoint(matrix,
+      { chr: 'chr1', start: 100, end: 200 }, x, y, 0, 100, 0, 100)
+    expect(inspect(25, 35)).toMatchObject({ bin1: 120, bin2: 30, value: 6 })
+    expect(inspect(35, 45)).toMatchObject({ state: 'missing' })
+    expect(inspect(55, 5)).toMatchObject({ state: 'masked' })
+    expect(inspect(5, 65)).toMatchObject({ state: 'masked' })
+    expect(inspect(5, 5)).toMatchObject({ state: 'zero' })
+    expect(inspect(100, 5)).toBeUndefined()
   })
 
   it('maps upward and downward matrix pixels to stable genomic bins', () => {

@@ -527,6 +527,31 @@ for (const submenu of ['bam-content', 'bam-layout', 'bam-color', 'bam-filters'])
   bamSubmenuText[submenu] = await page.locator('#track-context-flyout').textContent()
 }
 await page.screenshot({ path: 'dist/smoke-bam-menu.png', fullPage: true })
+await page.evaluate(() => {
+  const current = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+  const chr = current.region.chr
+  localStorage.setItem('gerafe-track-document', JSON.stringify({
+    schemaVersion: 24, referenceId: current.referenceId,
+    region: { chr, start: 10_000, end: 30_000 },
+    sources: [{ id: 'rect-source', name: 'offline.cool', format: 'cool', files: [] }],
+    tracks: [{ id: 'rect-track', kind: 'matrix', sourceIds: ['rect-source'], label: 'Rectangular map',
+      color: '#6d55e0', enabled: true, height: 50, pane: 'main', matrixValueMode: 'observed',
+      matrixSecondaryRegion: { chr, start: 5_000, end: 15_000 } }],
+    groups: [], scales: [],
+  }))
+})
+await page.reload({ waitUntil: 'networkidle' })
+const rectangularBefore = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').tracks[0]?.matrixSecondaryRegion)
+const rectangularBox = await page.locator('#genome-canvas').boundingBox()
+if (!rectangularBox) throw new Error('Rectangular matrix smoke canvas was not visible.')
+await page.mouse.move(rectangularBox.x + 300, rectangularBox.y + 60)
+await page.keyboard.down('Shift')
+await page.mouse.wheel(0, 100)
+await page.keyboard.up('Shift')
+await page.waitForTimeout(350)
+const rectangularAfter = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').tracks[0]?.matrixSecondaryRegion)
+const rectangularWorkspacePans = rectangularAfter?.start > rectangularBefore?.start && rectangularAfter?.chr === rectangularBefore?.chr
+if (!rectangularWorkspacePans) console.error('Rectangular pan smoke:', rectangularBefore, rectangularAfter)
 await browser.close()
 
 console.log(JSON.stringify({ ...result, matrixInspectorSizing, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
@@ -576,3 +601,4 @@ if (!mixedSelectionMenuText?.includes('3 tracks selected') || mixedSelectionMenu
 if (!bamMenuText?.includes('Content') || !bamMenuText.includes('Read layout') || !bamMenuText.includes('Color by') || !bamMenuText.includes('Read filters') || bamMenuText.includes('Coverage only')) process.exitCode = 1
 if (!bamSubmenuText['bam-content']?.includes('Coverage only') || !bamSubmenuText['bam-layout']?.includes('Squished') || !bamSubmenuText['bam-color']?.includes('Pair orientation') || !bamSubmenuText['bam-filters']?.includes('Minimum mapping quality')) process.exitCode = 1
 if (consoleErrors.length > 0) process.exitCode = 1
+if (!rectangularWorkspacePans) process.exitCode = 1

@@ -23,6 +23,7 @@ const BAM_READS_MAX_VISIBLE_SPAN = 150_000
 
 export interface BrowserCallbacks {
   onRegionChange(region: Region): void
+  onMatrixAxisChange(trackId: string, region: Region): void
   onPerformance(sample: { renderMs: number; fps: number; visibleFeatures: number }): void
   onTracksChange(tracks: readonly TrackRuntime[]): void
   onTrackSelection(trackId: string, additive: boolean, extend: boolean): void
@@ -517,6 +518,7 @@ export class GenomeBrowser {
       this.clearMatrixHover()
     })
     canvas.addEventListener('wheel', (event) => {
+      if (event.shiftKey && this.scrollMatrixAxis(canvas, pane, event)) { event.preventDefault(); return }
       if (!event.ctrlKey && !event.metaKey) {
         if (event.deltaX !== 0) {
           event.preventDefault()
@@ -603,6 +605,23 @@ export class GenomeBrowser {
     if (!this.hasOverscanCoverage()) void this.ensureData()
   }
 
+  private scrollMatrixAxis(canvas: HTMLCanvasElement, pane: 'main' | 'bottom', event: WheelEvent): boolean {
+    const hit = this.itemAt(canvas, pane, event.offsetX, event.offsetY)
+    const spec = hit?.kind === 'track' ? this.document.tracks.find((track) => track.id === hit.id && track.kind === 'matrix') : undefined
+    const axis = spec?.matrixSecondaryRegion
+    if (!spec || !axis) return false
+    const size = this.runtimes.get(spec.id)?.source?.chromosomes.get(axis.chr) ?? this.chromosomes.get(axis.chr)
+    if (!size) return false
+    const span = axis.end - axis.start
+    const scroll = event.deltaY || event.deltaX
+    const delta = scroll * span / Math.max(1, this.trackHeight(spec))
+    const next = event.ctrlKey || event.metaKey
+      ? { chr: axis.chr, start: axis.start + span * 0.5 * (1 - Math.exp(scroll * 0.0015)), end: axis.end - span * 0.5 * (1 - Math.exp(scroll * 0.0015)) }
+      : { chr: axis.chr, start: axis.start + delta, end: axis.end + delta }
+    this.callbacks.onMatrixAxisChange(spec.id, clampRegion(next, size))
+    return true
+  }
+
   private cancelTrackBodyHold(): void {
     if (this.trackBodyHold) window.clearTimeout(this.trackBodyHold.timer)
     this.trackBodyHold = undefined
@@ -628,7 +647,9 @@ export class GenomeBrowser {
     const top = specs.slice(0, specs.findIndex((track) => track.id === spec.id)).reduce((sum, track) => sum + this.trackHeight(track), 0)
     const bottom = top + this.trackHeight(spec)
     const maximumDistance = matrixQueryMaximumDistance(this.region.end - this.region.start, spec.matrixDepthMode ?? 'full', spec.matrixMaxDistance)
-    const inspection = inspectMatrixPoint(matrix, this.region, event.offsetX, event.offsetY, PLOT_LEFT, this.cssWidth(canvas), top, bottom, spec.matrixDirection ?? 'up', maximumDistance)
+    const inspection = matrix.axis2
+      ? inspectRectangularMatrixPoint(matrix, this.region, event.offsetX, event.offsetY, PLOT_LEFT, this.cssWidth(canvas), top, bottom)
+      : inspectMatrixPoint(matrix, this.region, event.offsetX, event.offsetY, PLOT_LEFT, this.cssWidth(canvas), top, bottom, spec.matrixDirection ?? 'up', maximumDistance)
     if (!inspection) {
       this.clearMatrixHover()
       return
@@ -637,9 +658,10 @@ export class GenomeBrowser {
     const geometry = matrixVerticalGeometry(top, bottom, spec.matrixDirection ?? 'up')
     const center1 = inspection.bin1 + matrix.resolution / 2
     const center2 = inspection.bin2 + matrix.resolution / 2
-    const x = PLOT_LEFT + (((center1 + center2) / 2) - this.region.start) * scale
+    const x = PLOT_LEFT + ((matrix.axis2 ? center1 : (center1 + center2) / 2) - this.region.start) * scale
     const direction = spec.matrixDirection === 'down' ? 1 : -1
-    const y = geometry.baseline + direction * ((center2 - center1) / 2) * scale
+    const y = matrix.axis2 ? top + (center2 - matrix.axis2.start) * (bottom - top) / (matrix.axis2.end - matrix.axis2.start)
+      : geometry.baseline + direction * ((center2 - center1) / 2) * scale
     const changed = !this.matrixHover
       || this.matrixHover.trackId !== spec.id
       || this.matrixHover.bin1 !== inspection.bin1
@@ -655,11 +677,11 @@ export class GenomeBrowser {
     const heading = document.createElement('strong')
     heading.textContent = matrixInspectionHeading(inspection)
     const bins = document.createElement('span')
-    bins.textContent = `${formatLocus({ chr: this.region.chr, start: inspection.bin1, end: inspection.bin1 + matrix.resolution })} × ${formatLocus({ chr: this.region.chr, start: inspection.bin2, end: inspection.bin2 + matrix.resolution })}`
+    bins.textContent = `${formatLocus({ chr: this.region.chr, start: inspection.bin1, end: inspection.bin1 + matrix.resolution })} × ${formatLocus({ chr: matrix.axis2?.chr ?? this.region.chr, start: inspection.bin2, end: inspection.bin2 + matrix.resolution })}`
     const details = document.createElement('small')
     const valueMode = spec.matrixValueMode ?? 'observed'
     const comparisonLabel = spec.matrixComparisonMode ? `${spec.matrixComparisonMode} · ` : ''
-    details.textContent = `${formatBases(inspection.separation)} separation · ${formatBases(matrix.resolution)} bins · ${spec.matrixNormalization ?? 'raw'} · ${comparisonLabel}${valueMode === 'observed' ? 'observed' : valueMode === 'observed-expected' ? 'observed/expected' : 'log2(observed/expected)'}`
+    details.textContent = `${matrix.axis2 ? 'two-axis view' : `${formatBases(inspection.separation)} separation`} · ${formatBases(matrix.resolution)} bins · ${spec.matrixNormalization ?? 'raw'} · ${comparisonLabel}${valueMode === 'observed' ? 'observed' : valueMode === 'observed-expected' ? 'observed/expected' : 'log2(observed/expected)'}`
     const content: HTMLElement[] = []
     if (this.matrixDisplayPreferences.inspectorValue) content.push(heading)
     if (this.matrixDisplayPreferences.inspectorBins) content.push(bins)
@@ -1563,6 +1585,8 @@ export class GenomeBrowser {
       return 0
     }
 
+    if (matrix.axis2) return this.drawMatrixRectangle(spec, matrix, top, bottom, width, minimum, maximum, scaleLaneWidth, trackBackground, palette)
+
     const scale = plotWidth / Math.max(1, this.region.end - this.region.start)
     const direction = spec.matrixDirection === 'down' ? 1 : -1
     const geometry = matrixVerticalGeometry(top, bottom, spec.matrixDirection ?? 'up')
@@ -1613,6 +1637,47 @@ export class GenomeBrowser {
     ctx.restore()
     ctx.strokeStyle = palette.line
     ctx.beginPath(); ctx.moveTo(0, bottom - 0.5); ctx.lineTo(width, bottom - 0.5); ctx.stroke()
+    return matrix.cells.length + (matrix.missingCells?.length ?? 0)
+  }
+
+  private drawMatrixRectangle(spec: TrackSpec, matrix: MatrixFeature, top: number, bottom: number, width: number,
+    minimum: number, maximum: number, legendWidth: number, background: string, palette: CanvasPalette): number {
+    const axis = matrix.axis2!
+    const ctx = this.context
+    const scaleX = (width - PLOT_LEFT) / Math.max(1, this.region.end - this.region.start)
+    const scaleY = (bottom - top) / Math.max(1, axis.end - axis.start)
+    const color = (value: number) => matrixPaletteStyle(spec, matrixPaletteIntensity(matrixValueIntensity(value, minimum, maximum, spec.matrixTransform ?? 'log1p'), spec.matrixPaletteReversed === true))
+    ctx.save()
+    ctx.beginPath(); ctx.rect(PLOT_LEFT, top, width - PLOT_LEFT, bottom - top); ctx.clip()
+    if (spec.matrixZeroStyle !== 'background') {
+      ctx.fillStyle = spec.matrixZeroStyle === 'custom' ? spec.matrixZeroColor ?? '#d7d9df' : color(0).color
+      ctx.globalAlpha = spec.matrixZeroStyle === 'custom' ? 1 : color(0).alpha * 0.72
+      ctx.fillRect(PLOT_LEFT, top, width - PLOT_LEFT, bottom - top)
+    }
+    const draw = (bin1: number, bin2: number, style: { color: string; alpha: number }) => {
+      const x = PLOT_LEFT + (bin1 - this.region.start) * scaleX
+      const y = top + (bin2 - axis.start) * scaleY
+      ctx.fillStyle = style.color; ctx.globalAlpha = style.alpha
+      ctx.fillRect(x, y, Math.max(1, matrix.resolution * scaleX), Math.max(1, matrix.resolution * scaleY))
+    }
+    for (const cell of matrix.cells) if (cell.bin1 + matrix.resolution > this.region.start && cell.bin1 < this.region.end
+      && cell.bin2 + matrix.resolution > axis.start && cell.bin2 < axis.end && cell.value > 0 && Number.isFinite(cell.value)) draw(cell.bin1, cell.bin2, color(cell.value))
+    const missing = spec.matrixMissingStyle === 'custom' ? spec.matrixMissingColor ?? '#9197a3' : background
+    for (const cell of matrix.missingCells ?? []) draw(cell.bin1, cell.bin2, { color: missing, alpha: 1 })
+    const masked = spec.matrixMaskedStyle === 'custom' ? spec.matrixMaskedColor ?? '#9197a3'
+      : spec.matrixMaskedStyle === 'background' ? background : palette.muted
+    ctx.fillStyle = masked; ctx.globalAlpha = spec.matrixMaskedStyle === 'hatch' ? 0.55 : 1
+    for (const bin of matrix.maskedBins ?? []) ctx.fillRect(PLOT_LEFT + (bin - this.region.start) * scaleX, top, Math.max(1, matrix.resolution * scaleX), bottom - top)
+    for (const bin of matrix.maskedBins2 ?? []) ctx.fillRect(PLOT_LEFT, top + (bin - axis.start) * scaleY, width - PLOT_LEFT, Math.max(1, matrix.resolution * scaleY))
+    if (this.matrixHover?.trackId === spec.id) {
+      ctx.globalAlpha = 1; ctx.strokeStyle = palette.axisLine
+      ctx.strokeRect(this.matrixHover.x - matrix.resolution * scaleX / 2, this.matrixHover.y - matrix.resolution * scaleY / 2,
+        Math.max(1, matrix.resolution * scaleX), Math.max(1, matrix.resolution * scaleY))
+    }
+    ctx.restore()
+    drawMatrixLegend(ctx, spec, minimum, maximum, top, bottom, legendWidth, palette)
+    ctx.fillStyle = palette.ink; ctx.font = '10px Inter, system-ui, sans-serif'
+    ctx.fillText(`Y: ${formatLocus(axis)}`, PLOT_LEFT + 6, Math.min(bottom - 5, top + 13))
     return matrix.cells.length + (matrix.missingCells?.length ?? 0)
   }
 
@@ -2136,7 +2201,9 @@ export class GenomeBrowser {
         matrixNormalization: spec.matrixNormalization,
         matrixValueMode: spec.matrixValueMode,
         matrixComparisonMode: spec.matrixComparisonMode,
-        matrixMaxDistance: matrixQueryMaximumDistance(span, spec.matrixDepthMode ?? 'full', spec.matrixMaxDistance),
+        matrixSecondaryRegion: spec.matrixSecondaryRegion,
+        matrixPixelHeight: this.trackHeight(spec),
+        matrixMaxDistance: spec.matrixSecondaryRegion ? undefined : matrixQueryMaximumDistance(span, spec.matrixDepthMode ?? 'full', spec.matrixMaxDistance),
       } : undefined
       const queryPixelWidth = plotWidth * (1 + overscanFactor * 2)
       const features = await source.getFeatures(queryRegion, queryPixelWidth, controller.signal, options)
@@ -2500,10 +2567,10 @@ function matrixMaskedLookup(matrix: MatrixFeature): Set<number> {
 }
 
 export function inspectMatrixCell(matrix: MatrixFeature, bin1: number, bin2: number): MatrixCellInspection {
-  const orderedBin1 = Math.min(bin1, bin2)
-  const orderedBin2 = Math.max(bin1, bin2)
+  const orderedBin1 = matrix.axis2 ? bin1 : Math.min(bin1, bin2)
+  const orderedBin2 = matrix.axis2 ? bin2 : Math.max(bin1, bin2)
   const masked = matrixMaskedLookup(matrix)
-  if (masked.has(orderedBin1) || masked.has(orderedBin2)) {
+  if (masked.has(orderedBin1) || (matrix.axis2 ? (matrix.maskedBins2 ?? []).includes(orderedBin2) : masked.has(orderedBin2))) {
     return { bin1: orderedBin1, bin2: orderedBin2, separation: orderedBin2 - orderedBin1, state: 'masked' }
   }
   const key = matrixCellKey(orderedBin1, orderedBin2)
@@ -2514,6 +2581,14 @@ export function inspectMatrixCell(matrix: MatrixFeature, bin1: number, bin2: num
   return value === undefined
     ? { bin1: orderedBin1, bin2: orderedBin2, separation: orderedBin2 - orderedBin1, state: 'zero' }
     : { bin1: orderedBin1, bin2: orderedBin2, separation: orderedBin2 - orderedBin1, state: 'value', value }
+}
+
+export function inspectRectangularMatrixPoint(matrix: MatrixFeature, region: Region, x: number, y: number,
+  left: number, right: number, top: number, bottom: number): MatrixCellInspection | undefined {
+  if (!matrix.axis2 || x < left || x >= right || y < top || y >= bottom) return undefined
+  const bin1 = Math.floor((region.start + (x - left) * (region.end - region.start) / (right - left)) / matrix.resolution) * matrix.resolution
+  const bin2 = Math.floor((matrix.axis2.start + (y - top) * (matrix.axis2.end - matrix.axis2.start) / (bottom - top)) / matrix.resolution) * matrix.resolution
+  return inspectMatrixCell(matrix, bin1, bin2)
 }
 
 export function inspectMatrixPoint(
@@ -3104,6 +3179,9 @@ export function matrixQueryChanged(previous: TrackSpec, next: TrackSpec): boolea
     || previous.matrixComparisonMode !== next.matrixComparisonMode
     || previous.matrixDepthMode !== next.matrixDepthMode
     || previous.matrixMaxDistance !== next.matrixMaxDistance
+    || previous.matrixSecondaryRegion?.chr !== next.matrixSecondaryRegion?.chr
+    || previous.matrixSecondaryRegion?.start !== next.matrixSecondaryRegion?.start
+    || previous.matrixSecondaryRegion?.end !== next.matrixSecondaryRegion?.end
 }
 
 function canvasPalette(): CanvasPalette {

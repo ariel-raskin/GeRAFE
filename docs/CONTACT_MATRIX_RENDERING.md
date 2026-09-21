@@ -34,6 +34,8 @@ The dominant variable was the number of matrix cells fetched and painted, not th
 
 The current baseline uses the source-selected matrix resolution, a bounded overscan window, and direct per-cell canvas drawing. New tracks default to the full visible genomic span. The optional automatic-depth mode is fixed at 20% of the visible span, and fixed genomic-depth presets are also available. Every mode is independent of track height. Changes to this path should be compared against the post-PR-#61 behavior before merging.
 
+Two-axis native matrix views store an independent vertical `matrixSecondaryRegion` in workspace schema v24. `.hic` windows preserve query-axis orientation even when their internal chromosome order is reversed; `.cool`/`.mcool` readers orient upper-triangular stored pixels in both directions when requested windows overlap, without duplicating the diagonal. The two axes have separate normalization-mask arrays and coordinate transforms. Rectangular views only accept observed contact values; distance-derived O/E is defined only for cis matrices. The vertical window is limited to 1,200 bins, independently of the horizontal axis. The horizontal window keeps the existing bounded overscan, and only a user-requested vertical pan/zoom changes vertical query range.
+
 ## Scale and palette model
 
 Matrix presentation settings deliberately do not change the genomic query or the number of fetched cells. Genomic depth and contact-value mode are query-affecting settings in the matrix dialog. Resolution and normalization also remain query-affecting controls in the track context menu.

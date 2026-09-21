@@ -253,6 +253,19 @@ describe('track document', () => {
     expect(normalizeTrackDocument(legacy).tracks.find((item) => item.kind === 'matrix')?.matrixValueMode).toBe('observed')
   })
 
+  it('upgrades version 23 and constrains two-axis maps to native observed contacts', () => {
+    const legacy = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 }) as any
+    legacy.schemaVersion = 23
+    const matrix = addMatrixTrack(legacy, { id: 'native', name: 'contacts.cool', format: 'cool', files: [] })
+    matrix.matrixSecondaryRegion = { chr: 'chr2', start: 50, end: 150 }
+    matrix.matrixValueMode = 'observed-expected'
+    const restored = normalizeTrackDocument(legacy)
+    expect(restored.schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
+    expect(restored.tracks.find((track) => track.id === matrix.id)).toMatchObject({
+      matrixSecondaryRegion: { chr: 'chr2', start: 50, end: 150 }, matrixValueMode: 'observed',
+    })
+  })
+
   it('migrates the version 13 dark-warm palette to blue-black', () => {
     const legacy = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 1_000_000 }) as any
     const track = addMatrixTrack(legacy, { id: 'matrix-source', name: 'contacts.cool', format: 'cool', files: [] })

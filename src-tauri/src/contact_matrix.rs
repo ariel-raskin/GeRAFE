@@ -66,9 +66,13 @@ pub struct MatrixQuery {
     pub path: String,
     pub format: String,
     pub chromosome: String,
+    pub chromosome2: Option<String>,
     pub start: u64,
     pub end: u64,
+    pub start2: Option<u64>,
+    pub end2: Option<u64>,
     pub pixel_width: usize,
+    pub pixel_height: Option<usize>,
     pub resolution: Option<u64>,
     pub normalization: String,
     pub max_distance: Option<u64>,
@@ -107,6 +111,8 @@ pub struct MatrixQueryResult {
     pub cells: Vec<MatrixCell>,
     pub missing_cells: Vec<MatrixCellPosition>,
     pub masked_bins: Vec<u64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub masked_bins2: Vec<u64>,
 }
 
 pub fn metadata(path: &Path, format: &str) -> Result<MatrixMetadata, String> {
@@ -121,6 +127,20 @@ pub fn metadata(path: &Path, format: &str) -> Result<MatrixMetadata, String> {
 pub fn query(options: MatrixQuery) -> Result<MatrixQueryResult, String> {
     if options.end <= options.start {
         return Err("The contact-matrix query is empty.".into());
+    }
+    if options.chromosome2.is_some() {
+        if options
+            .start2
+            .zip(options.end2)
+            .is_none_or(|(start, end)| end <= start)
+        {
+            return Err("The second matrix axis must have a nonempty interval.".into());
+        }
+        if options.value_mode != MatrixValueMode::Observed {
+            return Err(
+                "Rectangular matrix queries currently support observed contacts only.".into(),
+            );
+        }
     }
     match options.format.as_str() {
         "hic" => query_hic(&options),
@@ -295,14 +315,38 @@ fn query_hic(options: &MatrixQuery) -> Result<MatrixQueryResult, String> {
         options.end - options.start,
         options.pixel_width,
     )?;
+    let resolution = if let Some(span2) = options
+        .end2
+        .zip(options.start2)
+        .map(|(end, start)| end - start)
+    {
+        resolution.max(choose_resolution(
+            &available,
+            options.resolution,
+            span2,
+            options.pixel_height.unwrap_or(options.pixel_width),
+        )?)
+    } else {
+        resolution
+    };
     let mut request = HiCRequest::new(
-        vec![options.chromosome.clone()],
-        vec![options.start as i64],
-        vec![options.end as i64],
+        options
+            .chromosome2
+            .as_ref()
+            .map(|second| vec![options.chromosome.clone(), second.clone()])
+            .unwrap_or_else(|| vec![options.chromosome.clone()]),
+        options
+            .start2
+            .map(|second| vec![options.start as i64, second as i64])
+            .unwrap_or_else(|| vec![options.start as i64]),
+        options
+            .end2
+            .map(|second| vec![options.end as i64, second as i64])
+            .unwrap_or_else(|| vec![options.end as i64]),
     );
     request.bin_size = Some(resolution as i64);
     request.full_bin = true;
-    request.triangle = true;
+    request.triangle = options.chromosome2.is_none();
     request.normalization = options.normalization.to_ascii_lowercase();
     request.mode = if options.value_mode == MatrixValueMode::Observed {
         HiCMode::Observed
@@ -315,21 +359,36 @@ fn query_hic(options: &MatrixQuery) -> Result<MatrixQueryResult, String> {
     let matrix = reader
         .read_sparse_values(&request)
         .map_err(|error| format!("Could not read .hic contacts: {error}"))?;
-    let bin_start = location.x.bin_start;
+    let first_bin_start = if location.reversed {
+        location.y.bin_start
+    } else {
+        location.x.bin_start
+    };
+    let second_bin_start = if location.reversed {
+        location.x.bin_start
+    } else {
+        location.y.bin_start
+    };
     let mut cells = Vec::new();
     let mut missing_cells = Vec::new();
     for ((value, row), col) in matrix.values.into_iter().zip(matrix.row).zip(matrix.col) {
-        let Some(first) = (bin_start + row as i64).checked_mul(resolution as i64) else {
+        let Some(first) = (first_bin_start + row as i64).checked_mul(resolution as i64) else {
             continue;
         };
-        let Some(second) = (bin_start + col as i64).checked_mul(resolution as i64) else {
+        let Some(second) = (second_bin_start + col as i64).checked_mul(resolution as i64) else {
             continue;
         };
         if first < 0 || second < 0 {
             continue;
         }
-        let (bin1, bin2) = ordered_bins(first as u64, second as u64);
-        if !within_distance(bin1, bin2, resolution, options.max_distance) {
+        let (bin1, bin2) = if options.chromosome2.is_some() {
+            (first as u64, second as u64)
+        } else {
+            ordered_bins(first as u64, second as u64)
+        };
+        if options.chromosome2.is_none()
+            && !within_distance(bin1, bin2, resolution, options.max_distance)
+        {
             continue;
         }
         if !value.is_finite() {
@@ -347,6 +406,7 @@ fn query_hic(options: &MatrixQuery) -> Result<MatrixQueryResult, String> {
         cells,
         missing_cells,
         masked_bins: Vec::new(),
+        masked_bins2: Vec::new(),
     })
 }
 
@@ -364,6 +424,20 @@ fn query_cool(
             options.end - options.start,
             options.pixel_width,
         )?;
+        let resolution = if let Some(span2) = options
+            .end2
+            .zip(options.start2)
+            .map(|(end, start)| end - start)
+        {
+            resolution.max(choose_resolution(
+                &available,
+                selected_resolution,
+                span2,
+                options.pixel_height.unwrap_or(options.pixel_width),
+            )?)
+        } else {
+            resolution
+        };
         (format!("resolutions/{resolution}"), resolution)
     } else {
         let resolution = cooler_resolution(&file, "")?;
@@ -374,6 +448,10 @@ fn query_cool(
         }
         (String::new(), resolution)
     };
+
+    if let Some(chromosome2) = &options.chromosome2 {
+        return query_cool_rectangle(&file, options, &prefix, resolution, chromosome2);
+    }
 
     let names = read_strings(&file, &cooler_path(&prefix, "chroms/name"))?;
     let chromosome_index = names
@@ -400,6 +478,7 @@ fn query_cool(
             cells: Vec::new(),
             missing_cells: Vec::new(),
             masked_bins: Vec::new(),
+            masked_bins2: Vec::new(),
         });
     }
 
@@ -539,7 +618,180 @@ fn query_cool(
         cells,
         missing_cells,
         masked_bins,
+        masked_bins2: Vec::new(),
     })
+}
+
+fn query_cool_rectangle(
+    file: &Hdf5File,
+    options: &MatrixQuery,
+    prefix: &str,
+    resolution: u64,
+    chromosome2: &str,
+) -> Result<MatrixQueryResult, String> {
+    let names = read_strings(file, &cooler_path(prefix, "chroms/name"))?;
+    let offsets = read_u64(file, &cooler_path(prefix, "indexes/chrom_offset"))?;
+    let range = |name: &str, start: u64, end: u64| -> Result<(u64, u64), String> {
+        let index = names
+            .iter()
+            .position(|item| item == name)
+            .ok_or_else(|| format!("No chromosome named {name} in this Cooler file."))?;
+        let first = *offsets
+            .get(index)
+            .ok_or("The Cooler chromosome index is incomplete.")?;
+        let last = *offsets
+            .get(index + 1)
+            .ok_or("The Cooler chromosome index is incomplete.")?;
+        Ok((
+            (first + start / resolution).min(last),
+            (first + end.div_ceil(resolution)).min(last),
+        ))
+    };
+    let (x_start, x_end) = range(&options.chromosome, options.start, options.end)?;
+    let (y_start, y_end) = range(chromosome2, options.start2.unwrap(), options.end2.unwrap())?;
+    let empty = || MatrixQueryResult {
+        resolution,
+        cells: Vec::new(),
+        missing_cells: Vec::new(),
+        masked_bins: Vec::new(),
+        masked_bins2: Vec::new(),
+    };
+    if x_start >= x_end || y_start >= y_end {
+        return Ok(empty());
+    }
+    if x_end - x_start > MAX_MATRIX_BINS as u64 || y_end - y_start > MAX_MATRIX_BINS as u64 {
+        return Err("Rectangular matrix queries cannot exceed 1,200 bins on either axis; choose a coarser resolution.".into());
+    }
+    let x_starts = read_u64_rows(
+        file,
+        &cooler_path(prefix, "bins/start"),
+        x_start,
+        x_end - x_start,
+    )?;
+    let y_starts = read_u64_rows(
+        file,
+        &cooler_path(prefix, "bins/start"),
+        y_start,
+        y_end - y_start,
+    )?;
+    let normalized = !options.normalization.eq_ignore_ascii_case("raw");
+    let weight_path = cooler_path(prefix, &format!("bins/{}", options.normalization));
+    let (x_weights, y_weights) = if normalized {
+        (
+            Some(read_f64_rows(file, &weight_path, x_start, x_end - x_start)?),
+            Some(read_f64_rows(file, &weight_path, y_start, y_end - y_start)?),
+        )
+    } else {
+        (None, None)
+    };
+    let masked_bins = x_weights
+        .as_ref()
+        .map(|weights| masked_bin_starts(weights, &x_starts))
+        .unwrap_or_default();
+    let masked_bins2 = y_weights
+        .as_ref()
+        .map(|weights| masked_bin_starts(weights, &y_starts))
+        .unwrap_or_default();
+    let mut ranges = vec![(x_start, x_end), (y_start, y_end)];
+    ranges.sort_unstable();
+    if ranges[1].0 <= ranges[0].1 {
+        ranges[0].1 = ranges[0].1.max(ranges[1].1);
+        ranges.pop();
+    }
+    let mut result = empty();
+    result.masked_bins = masked_bins;
+    result.masked_bins2 = masked_bins2;
+    let divisive = is_divisive_cooler_weight(&options.normalization);
+    for (row_start, row_end) in ranges {
+        let offsets = read_u64_rows(
+            file,
+            &cooler_path(prefix, "indexes/bin1_offset"),
+            row_start,
+            row_end - row_start + 1,
+        )?;
+        let first_pixel = *offsets.first().ok_or("The Cooler pixel index is empty.")?;
+        let last_pixel = *offsets
+            .last()
+            .ok_or("The Cooler pixel index is incomplete.")?;
+        for chunk_start in (first_pixel..last_pixel).step_by(EXPECTED_PIXEL_CHUNK as usize) {
+            let count = (last_pixel - chunk_start).min(EXPECTED_PIXEL_CHUNK);
+            let bin1_ids = read_u64_rows(
+                file,
+                &cooler_path(prefix, "pixels/bin1_id"),
+                chunk_start,
+                count,
+            )?;
+            let bin2_ids = read_u64_rows(
+                file,
+                &cooler_path(prefix, "pixels/bin2_id"),
+                chunk_start,
+                count,
+            )?;
+            let values = read_f64_rows(
+                file,
+                &cooler_path(prefix, "pixels/count"),
+                chunk_start,
+                count,
+            )?;
+            if bin1_ids.len() != bin2_ids.len() || bin1_ids.len() != values.len() {
+                return Err("The Cooler pixel columns have different sizes.".into());
+            }
+            for ((first, second), count) in bin1_ids.into_iter().zip(bin2_ids).zip(values) {
+                for (x, y) in
+                    oriented_rectangular_bins(first, second, (x_start, x_end), (y_start, y_end))
+                {
+                    let x_index = (x - x_start) as usize;
+                    let y_index = (y - y_start) as usize;
+                    let (Some(&bin1), Some(&bin2)) = (x_starts.get(x_index), y_starts.get(y_index))
+                    else {
+                        continue;
+                    };
+                    let mut value = count;
+                    if let (Some(x_weights), Some(y_weights)) = (&x_weights, &y_weights) {
+                        let (Some(&weight1), Some(&weight2)) =
+                            (x_weights.get(x_index), y_weights.get(y_index))
+                        else {
+                            continue;
+                        };
+                        if !weight1.is_finite()
+                            || weight1 <= 0.0
+                            || !weight2.is_finite()
+                            || weight2 <= 0.0
+                        {
+                            continue;
+                        }
+                        value = if divisive {
+                            value / (weight1 * weight2)
+                        } else {
+                            value * weight1 * weight2
+                        };
+                    }
+                    if !value.is_finite() {
+                        result.missing_cells.push(MatrixCellPosition { bin1, bin2 });
+                    } else if value > 0.0 {
+                        result.cells.push(MatrixCell { bin1, bin2, value });
+                    }
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+fn oriented_rectangular_bins(
+    first: u64,
+    second: u64,
+    x: (u64, u64),
+    y: (u64, u64),
+) -> Vec<(u64, u64)> {
+    let mut pairs = Vec::with_capacity(2);
+    if first >= x.0 && first < x.1 && second >= y.0 && second < y.1 {
+        pairs.push((first, second));
+    }
+    if first != second && second >= x.0 && second < x.1 && first >= y.0 && first < y.1 {
+        pairs.push((second, first));
+    }
+    pairs
 }
 
 fn transform_matrix_value(value: f64, mode: MatrixValueMode) -> f64 {
@@ -965,6 +1217,10 @@ mod tests {
                 start,
                 end: start + span,
                 pixel_width: 800,
+                pixel_height: None,
+                chromosome2: None,
+                start2: None,
+                end2: None,
                 resolution: None,
                 normalization: metadata.default_normalization.clone(),
                 max_distance: None,
@@ -978,6 +1234,66 @@ mod tests {
                     && cell.bin2 + result.resolution > start
                     && cell.bin2 < start + span
             }));
+            if let Some(other) = metadata
+                .chromosomes
+                .iter()
+                .find(|other| other.name != chromosome.name && other.length >= 1_000_000)
+            {
+                let axis2_span = other.length.min(2_000_000);
+                let rectangular = query(MatrixQuery {
+                    path: path.clone(),
+                    format: format.into(),
+                    chromosome: chromosome.name.clone(),
+                    chromosome2: Some(other.name.clone()),
+                    start,
+                    end: start + span,
+                    start2: Some(0),
+                    end2: Some(axis2_span),
+                    pixel_width: 400,
+                    pixel_height: Some(180),
+                    resolution: None,
+                    normalization: metadata.default_normalization.clone(),
+                    max_distance: None,
+                    value_mode: MatrixValueMode::Observed,
+                })
+                .unwrap_or_else(|error| panic!("{variable} rectangular query failed: {error}"));
+                assert!(
+                    rectangular.cells.iter().all(|cell| cell.bin1 >= start
+                        && cell.bin1 < start + span
+                        && cell.bin2 < axis2_span),
+                    "{variable} rectangular axis ordering failed"
+                );
+                let reversed = query(MatrixQuery {
+                    path: path.clone(),
+                    format: format.into(),
+                    chromosome: other.name.clone(),
+                    chromosome2: Some(chromosome.name.clone()),
+                    start: 0,
+                    end: axis2_span,
+                    start2: Some(start),
+                    end2: Some(start + span),
+                    pixel_width: 180,
+                    pixel_height: Some(400),
+                    resolution: Some(rectangular.resolution),
+                    normalization: metadata.default_normalization.clone(),
+                    max_distance: None,
+                    value_mode: MatrixValueMode::Observed,
+                })
+                .unwrap_or_else(|error| panic!("{variable} reversed query failed: {error}"));
+                let reverse_cells = reversed
+                    .cells
+                    .iter()
+                    .map(|cell| ((cell.bin2, cell.bin1), cell.value))
+                    .collect::<HashMap<_, _>>();
+                for cell in &rectangular.cells {
+                    assert!(
+                        reverse_cells
+                            .get(&(cell.bin1, cell.bin2))
+                            .is_some_and(|other| (other - cell.value).abs() < 0.001),
+                        "{variable} reversed query omitted or changed a cell"
+                    );
+                }
+            }
             let normalized = query(MatrixQuery {
                 path: path.clone(),
                 format: format.into(),
@@ -986,6 +1302,10 @@ mod tests {
                 end: start + span,
                 pixel_width: 800,
                 resolution: Some(result.resolution),
+                pixel_height: None,
+                chromosome2: None,
+                start2: None,
+                end2: None,
                 normalization: metadata.default_normalization.clone(),
                 max_distance: Some(100_000),
                 value_mode: MatrixValueMode::ObservedExpected,
@@ -1003,6 +1323,10 @@ mod tests {
                 end: start + span,
                 pixel_width: 800,
                 resolution: Some(result.resolution),
+                pixel_height: None,
+                chromosome2: None,
+                start2: None,
+                end2: None,
                 normalization: metadata.default_normalization.clone(),
                 max_distance: Some(100_000),
                 value_mode: MatrixValueMode::Log2ObservedExpected,
@@ -1032,6 +1356,10 @@ mod tests {
                     end: start + span,
                     pixel_width: 800,
                     resolution: Some(result.resolution),
+                    pixel_height: None,
+                    chromosome2: None,
+                    start2: None,
+                    end2: None,
                     normalization: "weight".into(),
                     max_distance: Some(100_000),
                     value_mode: MatrixValueMode::ObservedExpected,
@@ -1062,6 +1390,17 @@ mod tests {
             masked_bin_starts(&weights, &starts),
             vec![5_000, 10_000, 15_000]
         );
+    }
+
+    #[test]
+    fn rectangular_upper_triangle_preserves_chromosome_axis_order() {
+        assert_eq!(oriented_rectangular_bins(3, 8, (2, 5), (7, 10)), [(3, 8)]);
+        assert_eq!(oriented_rectangular_bins(3, 8, (7, 10), (2, 5)), [(8, 3)]);
+        assert_eq!(
+            oriented_rectangular_bins(3, 8, (2, 10), (2, 10)),
+            [(3, 8), (8, 3)]
+        );
+        assert_eq!(oriented_rectangular_bins(3, 3, (2, 10), (2, 10)), [(3, 3)]);
     }
 
     #[test]
@@ -1110,6 +1449,10 @@ mod tests {
                 end,
                 pixel_width: 800,
                 resolution: Some(5_000),
+                pixel_height: None,
+                chromosome2: None,
+                start2: None,
+                end2: None,
                 normalization: normalization.into(),
                 max_distance: None,
                 value_mode: MatrixValueMode::Observed,

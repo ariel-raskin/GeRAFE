@@ -447,6 +447,9 @@ const store = new TrackDocumentStore(restoredDocument && restoredDocument.refere
   ? { ...restoredDocument, region: initialRegion }
   : createTrackDocument(activeReference.id, initialRegion, { geneShowTssIndicators: savedTssIndicators() }))
 const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChromosomes, initialRegion, {
+  onMatrixAxisChange(trackId, region) {
+    store.edit((draft) => { const track = draft.tracks.find((item) => item.id === trackId); if (track?.kind === 'matrix') track.matrixSecondaryRegion = region })
+  },
   onRegionChange(region) {
     locusInput.value = formatLocus(region)
     setActiveChromosome(region.chr)
@@ -1620,6 +1623,8 @@ function matrixContextMenuMarkup(
     canDerive ? submenu('matrix-derive', 'Derive signal track', '',
       action('matrix-derive-insulation', 'Insulation (boundary contacts)')
       + action('matrix-derive-compartment', 'Compartment PC1 (arbitrary sign)')) : '',
+    canDerive ? action('matrix-axis-set', 'Set vertical locus…', matrixTracks[0].matrixSecondaryRegion ? formatLocus(matrixTracks[0].matrixSecondaryRegion) : '') : '',
+    canDerive && matrixTracks[0].matrixSecondaryRegion ? action('matrix-axis-clear', 'Return to triangular view') : '',
     comparison ? submenu('matrix-compare-mode', 'Comparison', matrixTracks[0].matrixComparisonMode ?? 'difference',
       action('matrix-compare-mode-difference', 'Difference', matrixTracks[0].matrixComparisonMode === 'difference' ? 'current' : '')
       + action('matrix-compare-mode-ratio', 'Ratio', matrixTracks[0].matrixComparisonMode === 'ratio' ? 'current' : '')
@@ -2007,6 +2012,25 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
 
 async function applyMatrixContextAction(command: string | undefined, matrixIds: readonly string[]): Promise<void> {
   if (!command?.startsWith('matrix-') || !matrixIds.length) return
+  if (command === 'matrix-axis-set') {
+    const track = store.current.tracks.find((item) => item.id === matrixIds[0] && item.kind === 'matrix')
+    const source = track && runtimeSources.get(track.sourceIds[0])
+    if (!track || !isNativeMatrixSource(source)) return
+    const initial = track.matrixSecondaryRegion ?? store.current.region
+    const entered = await requestText({ title: 'Vertical matrix locus', label: 'Chromosome or chr:start-end',
+      initial: formatLocus(initial), submitLabel: 'Show rectangular map',
+      message: 'The horizontal axis follows the main browser. Shift+wheel pans this vertical axis; Shift+Ctrl+wheel zooms it.',
+      validate: (value) => parseLocus(value, source.chromosomes) ? undefined : 'Enter a locus on a chromosome present in this matrix.' })
+    const axis = entered && parseLocus(entered, source.chromosomes)
+    if (axis) store.edit((draft) => { const current = draft.tracks.find((item) => item.id === track.id); if (current) {
+      current.matrixSecondaryRegion = axis; current.matrixValueMode = 'observed'
+    } })
+    return
+  }
+  if (command === 'matrix-axis-clear') {
+    store.edit((draft) => { for (const track of draft.tracks) if (matrixIds.includes(track.id)) track.matrixSecondaryRegion = undefined })
+    return
+  }
   if (command === 'matrix-derive-insulation' || command === 'matrix-derive-compartment') {
     await createMatrixDerivedTrack(matrixIds[0], command === 'matrix-derive-insulation' ? 'insulation' : 'compartment')
     return
@@ -2354,6 +2378,9 @@ function renderMatrixPaletteColors(): void {
 }
 
 function updateMatrixSettingsVisibility(): void {
+  const rectangular = pendingMatrixTrackIds.some((id) => store.current.tracks.some((track) => track.id === id && track.matrixSecondaryRegion))
+  for (const option of matrixValueMode.options) if (option.value !== 'observed') option.disabled = rectangular
+  if (rectangular) matrixValueMode.value = 'observed'
   const signed = matrixValueMode.value === 'log2-observed-expected'
     || pendingMatrixTrackIds.some((id) => {
       const track = store.current.tracks.find((candidate) => candidate.id === id)
@@ -2421,7 +2448,7 @@ function applyMatrixSettingsDialog(): void {
       track.matrixDepthMode = depthMode
       track.matrixMaxDistance = maximumDistance
       track.matrixTransform = matrixTransform.value === 'linear' ? 'linear' : 'log1p'
-      track.matrixValueMode = matrixValueMode.value === 'observed-expected' || (track.matrixComparisonMode && matrixValueMode.value === 'log2-observed-expected') ? 'observed-expected' : matrixValueMode.value === 'log2-observed-expected' ? 'log2-observed-expected' : 'observed'
+      track.matrixValueMode = track.matrixSecondaryRegion ? 'observed' : matrixValueMode.value === 'observed-expected' || (track.matrixComparisonMode && matrixValueMode.value === 'log2-observed-expected') ? 'observed-expected' : matrixValueMode.value === 'log2-observed-expected' ? 'log2-observed-expected' : 'observed'
       track.matrixPalette = palette
       track.matrixPaletteColors = palette === 'custom' ? [...colors] : undefined
       track.matrixPaletteReversed = matrixPaletteReversed.checked || undefined

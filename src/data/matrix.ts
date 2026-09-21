@@ -19,6 +19,7 @@ interface ContactMatrixResult {
   cells: Array<{ bin1: number; bin2: number; value: number }>
   missingCells: Array<{ bin1: number; bin2: number }>
   maskedBins: number[]
+  maskedBins2?: number[]
 }
 
 export class NativeMatrixSource implements TrackSource {
@@ -42,14 +43,21 @@ export class NativeMatrixSource implements TrackSource {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
     const chromosome = resolveFileChromosome(region.chr, this.matrixMetadata.chromosomes)
     if (!chromosome) throw new Error(`No chromosome named ${region.chr} in this matrix.`)
+    const axis2 = options?.matrixSecondaryRegion
+    const chromosome2 = axis2 && resolveFileChromosome(axis2.chr, this.matrixMetadata.chromosomes)
+    if (axis2 && !chromosome2) throw new Error(`No chromosome named ${axis2.chr} in this matrix.`)
     const result = await invoke<ContactMatrixResult>('query_contact_matrix', {
       options: {
         path: this.path,
         format: this.format,
         chromosome,
+        chromosome2,
         start: Math.max(0, Math.floor(region.start)),
         end: Math.ceil(region.end),
+        start2: axis2 ? Math.max(0, Math.floor(axis2.start)) : undefined,
+        end2: axis2 ? Math.ceil(axis2.end) : undefined,
         pixelWidth: Math.max(1, Math.round(pixelWidth)),
+        pixelHeight: options?.matrixPixelHeight,
         resolution: options?.matrixResolution,
         normalization: options?.matrixNormalization ?? this.matrixMetadata.defaultNormalization,
         maxDistance: options?.matrixMaxDistance,
@@ -65,6 +73,8 @@ export class NativeMatrixSource implements TrackSource {
       cells: result.cells,
       missingCells: result.missingCells,
       maskedBins: result.maskedBins,
+      maskedBins2: result.maskedBins2,
+      axis2,
       valueMode: options?.matrixValueMode ?? 'observed',
     }]
   }
