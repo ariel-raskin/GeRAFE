@@ -212,7 +212,7 @@ GeRAFE also opens legacy `.locus.json` workspaces. Workspace files contain layou
 - The supported track formats are limited to those listed above.
 - BEDPE is currently an in-memory arc track for files up to 50 MB. New tracks draw at most 2,000 highest-scoring interactions per visible window by default; the per-track limit can be adjusted up to 10,000.
 - Matrix comparisons and matrix-derived annotations require desktop-opened native files; two-axis rectangular views currently support observed contacts only, not O/E or composite comparisons.
-- Very deep or high-resolution contact-matrix queries can contain enough cells to slow panning. New tracks use full-visible-span depth by default; bounded automatic depth is available when responsiveness is more important than off-diagonal reach.
+- Dense contact matrices (30,000 cells or more) reuse full-resolution raster tiles during panning; sparse maps use direct cell drawing. Tile memory is bounded at 32 MiB per track and 64 MiB total. Very large or high-resolution windows can still be slow to load or fall back to direct drawing when they exceed that budget; bounded automatic depth is available when responsiveness matters more than off-diagonal reach.
 - Custom references provide coordinate navigation but do not automatically include gene annotations or cytobands.
 - Individual BAM reads are drawn below a 150 kb visible span; BAM requests are limited to 2 Mb to avoid unbounded pileups.
 - Mismatches can be read from BAM MD tags. Reconstructing mismatches for BAMs without MD tags is unavailable because reference-sequence bases are not currently loaded.

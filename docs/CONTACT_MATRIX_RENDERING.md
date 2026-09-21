@@ -23,16 +23,16 @@ The dominant variable was the number of matrix cells fetched and painted, not th
 ## Guardrails for future work
 
 - Do not expand the matrix genomic query merely because track height changes.
-- Preserve the direct, full-resolution cell renderer until a replacement is demonstrably faster at equal visual fidelity.
+- Keep direct, full-resolution cell drawing for sparse windows and as a safe fallback when a dense view exceeds the tile budget.
 - Record visible feature count, render time, and pan frame rate when evaluating matrix changes.
 - Test representative views below 30,000 cells and dense views near or above 100,000 cells.
 - Treat lower apparent resolution as a regression unless an explicit user-selected level of detail requests it.
 - Keep presentation-only features such as legends, label layout, and palettes independent of matrix fetching.
-- For a future large performance improvement, prefer a deliberate tiled/level-of-detail or GPU-backed architecture with cache invalidation and fidelity tests. Avoid adding another full-frame cache without profiling it against real `.hic` and `.mcool` files.
+- For further performance improvements, measure real `.hic` and `.mcool` panning as well as synthetic cell counts; do not downsample contact bins or expand fetched cis depth with track height.
 
 ## Current baseline
 
-The current baseline uses the source-selected matrix resolution, a bounded overscan window, and direct per-cell canvas drawing. New tracks default to the full visible genomic span. The optional automatic-depth mode is fixed at 20% of the visible span, and fixed genomic-depth presets are also available. Every mode is independent of track height. Changes to this path should be compared against the post-PR-#61 behavior before merging.
+The current baseline uses the source-selected matrix resolution and a bounded overscan window. New tracks default to the full visible genomic span. The optional automatic-depth mode is fixed at 20% of the visible span, and fixed genomic-depth presets are also available. Every cis mode is independent of track height. Contact payloads below 30,000 cells keep the direct renderer. Dense views paint native-resolution contacts once into 256 CSS-pixel tiles at the device pixel ratio (at most 2×), anchored to genomic coordinates; subsequent pans reuse the tiles without changing the data query or enlarging its depth. A track is limited to 32 MiB of tiles and all cached tracks together to 64 MiB; oversized payloads use the direct renderer until their source or presentation changes. Empty sparse cells are never materialized as pixels in tiles. Compare this path with the post-PR-#61 behavior on real files before relying on it for high-density production views.
 
 Two-axis native matrix views store an independent vertical `matrixSecondaryRegion` in workspace schema v24. `.hic` windows preserve query-axis orientation even when their internal chromosome order is reversed; `.cool`/`.mcool` readers orient upper-triangular stored pixels in both directions when requested windows overlap, without duplicating the diagonal. The two axes have separate normalization-mask arrays and coordinate transforms. Rectangular views only accept observed contact values; distance-derived O/E is defined only for cis matrices. The vertical window is limited to 1,200 bins, independently of the horizontal axis. The horizontal window keeps the existing bounded overscan, and only a user-requested vertical pan/zoom changes vertical query range.
 
@@ -56,7 +56,7 @@ Palette stops are evenly spaced across the resolved intensity range. The warm pr
 
 Matrix tracks in a linked visual group share the largest automatic or fixed z-max calculated for the matrix members of the same contact-value mode. Independent groups retain a separate z-max for every matrix. Applying matrix settings to a matrix-only group also applies z-min and automatic-scale parameters consistently to every member. This is intentionally separate from the matrix normalization stored for each source. Mixed groups may contain other track kinds, but linked matrix scaling is calculated only from their matrix members.
 
-The renderer clips every contact diamond to the inside of its track and redraws the lower track boundary after the matrix. Palette, legend, group scaling, intensity scaling, and track-height changes must remain presentation-only so they cannot reintroduce the height-dependent query expansion described above. `matrixDepthMode` and `matrixMaxDistance` are the sole persisted controls for off-diagonal query reach.
+The renderer clips every contact diamond to the inside of its track and redraws the lower track boundary after the matrix. Tile keys include source-object identity, device scale, view scale, height, vertical locus, direction, theme, palette, and z-range; source reloads and visual changes therefore rebuild only the presentation tiles. Legend, missing/zero/masked cells, and inspector remain outside the cached cell paint. Palette, legend, group scaling, intensity scaling, and track-height changes must remain presentation-only so they cannot reintroduce the height-dependent query expansion described above. `matrixDepthMode` and `matrixMaxDistance` are the sole persisted controls for off-diagonal query reach.
 
 ## Inspection and empty-cell states
 
