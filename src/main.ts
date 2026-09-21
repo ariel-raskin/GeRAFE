@@ -1612,6 +1612,23 @@ function matrixContextMenuMarkup(
   const canCompare = matrixTracks.length === 2 && matrixTracks.every((track) => isNativeMatrixSource(runtimeSources.get(track.sourceIds[0])))
   const canSetVerticalAxis = matrixTracks.length === 1 && isNativeMatrixSource(runtimeSources.get(matrixTracks[0].sourceIds[0]))
   const comparison = matrixTracks.length === 1 && store.current.sources.find((source) => source.id === matrixTracks[0].sourceIds[0])?.format === 'matrix-comparison'
+  const interactionTracks = store.current.tracks.filter((track) => track.kind === 'interaction')
+  const linkedOverlayIds = matrixTracks.map((track) => track.matrixOverlayInteractionTrackId)
+  const commonOverlayId = sameValue(linkedOverlayIds) ? linkedOverlayIds[0] : undefined
+  const overlayLabel = sameValue(linkedOverlayIds)
+    ? interactionTracks.find((track) => track.id === commonOverlayId)?.label ?? 'None'
+    : 'Mixed'
+  const allLinked = matrixTracks.every((track) => track.matrixOverlayInteractionTrackId)
+  const focusLabel = allLinked && sameValue(matrixTracks.map((track) => track.matrixOverlayFocusMode ?? 'all'))
+    ? matrixTracks[0].matrixOverlayFocusMode === 'genes' ? 'Gene symbols'
+      : matrixTracks[0].matrixOverlayFocusMode === 'region' ? 'Region' : 'All'
+    : 'Mixed'
+  const focusGenes = sameValue(matrixTracks.map((track) => (track.matrixOverlayFocusGenes ?? []).join(', ')))
+    ? (matrixTracks[0].matrixOverlayFocusGenes ?? []).join(', ') : 'Mixed'
+  const focusRegion = sameValue(matrixTracks.map((track) => track.matrixOverlayFocusRegion ? formatLocus(track.matrixOverlayFocusRegion) : ''))
+    ? matrixTracks[0].matrixOverlayFocusRegion ? formatLocus(matrixTracks[0].matrixOverlayFocusRegion) : '' : 'Mixed'
+  const overlayLimit = sameValue(matrixTracks.map((track) => track.matrixOverlayMaxFeatures ?? 250))
+    ? matrixTracks[0].matrixOverlayMaxFeatures ?? 250 : undefined
   return [
     action('matrix-flip', 'Toggle matrix orientation'),
     submenu('matrix-resolution', 'Resolution', resolutionLabel,
@@ -1625,6 +1642,15 @@ function matrixContextMenuMarkup(
       + action('matrix-compare-create-log2-ratio', 'Log2 ratio (first ÷ second)')) : '',
     canSetVerticalAxis ? action('matrix-axis-set', 'Set vertical locus…', matrixTracks[0].matrixSecondaryRegion ? formatLocus(matrixTracks[0].matrixSecondaryRegion) : '') : '',
     canSetVerticalAxis && matrixTracks[0].matrixSecondaryRegion ? action('matrix-axis-clear', 'Return to triangular view') : '',
+    interactionTracks.length ? submenu('matrix-overlay-source', 'BEDPE overlay', escapeHtml(overlayLabel),
+      action('matrix-overlay-unlink', 'No overlay', matrixTracks.every((track) => !track.matrixOverlayInteractionTrackId) ? 'current' : '')
+      + interactionTracks.map((track) => action(`matrix-overlay-link-${encodeURIComponent(track.id)}`, escapeHtml(track.label), matrixTracks.every((matrix) => matrix.matrixOverlayInteractionTrackId === track.id) ? 'current' : '')).join(''))
+      : action('matrix-overlay-unavailable', 'BEDPE overlay', 'Open a BEDPE track first', true),
+    allLinked ? submenu('matrix-overlay-focus', 'Overlay focus', focusLabel,
+      action('matrix-overlay-focus-all', 'All filtered interactions', matrixTracks.every((track) => !track.matrixOverlayFocusMode || track.matrixOverlayFocusMode === 'all') ? 'current' : '')
+      + action('matrix-overlay-focus-genes', 'Matching gene symbols…', focusGenes)
+      + action('matrix-overlay-focus-region', 'Interactions involving region…', focusRegion)) : '',
+    allLinked ? action('matrix-overlay-limit', 'Overlay outline limit…', overlayLimit === undefined ? 'Mixed' : overlayLimit.toLocaleString()) : '',
     comparison ? submenu('matrix-compare-mode', 'Comparison', matrixTracks[0].matrixComparisonMode ?? 'difference',
       action('matrix-compare-mode-difference', 'Difference', matrixTracks[0].matrixComparisonMode === 'difference' ? 'current' : '')
       + action('matrix-compare-mode-ratio', 'Ratio', matrixTracks[0].matrixComparisonMode === 'ratio' ? 'current' : '')
@@ -2048,6 +2074,89 @@ async function applyMatrixContextAction(command: string | undefined, matrixIds: 
   }
   if (command === 'matrix-axis-clear') {
     store.edit((draft) => { for (const track of draft.tracks) if (matrixIds.includes(track.id)) track.matrixSecondaryRegion = undefined })
+    return
+  }
+  if (command.startsWith('matrix-overlay-link-')) {
+    const interactionTrackId = decodeURIComponent(command.slice('matrix-overlay-link-'.length))
+    if (!store.current.tracks.some((track) => track.id === interactionTrackId && track.kind === 'interaction')) return
+    store.edit((draft) => {
+      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') {
+        track.matrixOverlayInteractionTrackId = interactionTrackId
+        track.matrixOverlayFocusMode ??= 'all'
+        track.matrixOverlayMaxFeatures ??= 250
+      }
+    })
+    return
+  }
+  if (command === 'matrix-overlay-unlink') {
+    store.edit((draft) => {
+      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') {
+        delete track.matrixOverlayInteractionTrackId
+        delete track.matrixOverlayFocusMode
+        delete track.matrixOverlayFocusGenes
+        delete track.matrixOverlayFocusRegion
+        delete track.matrixOverlayMaxFeatures
+      }
+    })
+    return
+  }
+  if (command === 'matrix-overlay-focus-all') {
+    store.edit((draft) => {
+      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') {
+        track.matrixOverlayFocusMode = 'all'
+        delete track.matrixOverlayFocusGenes
+        delete track.matrixOverlayFocusRegion
+      }
+    })
+    return
+  }
+  if (command === 'matrix-overlay-focus-genes') {
+    const tracks = store.current.tracks.filter((track) => matrixIds.includes(track.id) && track.kind === 'matrix')
+    const initial = sameValue(tracks.map((track) => (track.matrixOverlayFocusGenes ?? []).join(', '))) ? (tracks[0]?.matrixOverlayFocusGenes ?? []).join(', ') : ''
+    const entered = await requestText({ title: 'Focus matrix overlay by gene', label: 'Gene symbols', initial, placeholder: 'RUNX1, MYC', submitLabel: 'Apply focus',
+      message: 'Only linked BEDPE interactions involving these genes will be outlined. Leave blank to show all interactions that pass the BEDPE track filters.' })
+    if (entered !== undefined) {
+      const genes = [...new Set(entered.split(/[\s,;]+/).map((gene) => gene.trim().toLocaleUpperCase()).filter(Boolean))].slice(0, 100)
+      store.edit((draft) => {
+        for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') {
+          track.matrixOverlayFocusGenes = genes
+          track.matrixOverlayFocusMode = genes.length ? 'genes' : 'all'
+          delete track.matrixOverlayFocusRegion
+        }
+      })
+      const unresolved = activeGeneSource ? genes.filter((gene) => !activeGeneSource?.find(gene)) : genes
+      if (unresolved.length) showToast(`${unresolved.join(', ')} ${unresolved.length === 1 ? 'was' : 'were'} not found in the active annotation; matching BEDPE names instead.`)
+    }
+    return
+  }
+  if (command === 'matrix-overlay-focus-region') {
+    const tracks = store.current.tracks.filter((track) => matrixIds.includes(track.id) && track.kind === 'matrix')
+    const initial = sameValue(tracks.map((track) => track.matrixOverlayFocusRegion ? formatLocus(track.matrixOverlayFocusRegion) : ''))
+      ? tracks[0]?.matrixOverlayFocusRegion ? formatLocus(tracks[0].matrixOverlayFocusRegion) : formatLocus(store.current.region) : formatLocus(store.current.region)
+    const entered = await requestText({ title: 'Focus matrix overlay by region', label: 'Genomic region', initial,
+      placeholder: 'chr21:34,000,000-35,000,000', submitLabel: 'Apply focus',
+      message: 'Only linked BEDPE interactions with at least one anchor overlapping this region will be outlined.',
+      validate: (value) => parseLocus(value, activeChromosomes) ? undefined : 'Enter a region such as chr21:34,000,000-35,000,000.' })
+    const region = entered ? parseLocus(entered, activeChromosomes) : undefined
+    if (region) store.edit((draft) => {
+      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') {
+        track.matrixOverlayFocusMode = 'region'
+        track.matrixOverlayFocusRegion = region
+        delete track.matrixOverlayFocusGenes
+      }
+    })
+    return
+  }
+  if (command === 'matrix-overlay-limit') {
+    const tracks = store.current.tracks.filter((track) => matrixIds.includes(track.id) && track.kind === 'matrix')
+    const initial = sameValue(tracks.map((track) => track.matrixOverlayMaxFeatures ?? 250)) ? tracks[0]?.matrixOverlayMaxFeatures ?? 250 : 250
+    const entered = await requestText({ title: 'Set matrix overlay outline limit', label: 'Outlines (1–2,000)', initial: String(initial), submitLabel: 'Apply limit',
+      message: 'This safety cap is applied in addition to the linked BEDPE track display limit.',
+      validate: (value) => { const number = Number(value); return Number.isInteger(number) && number >= 1 && number <= 2_000 ? undefined : 'Enter an integer from 1 to 2,000.' } })
+    const limit = Number(entered)
+    if (Number.isInteger(limit) && limit >= 1 && limit <= 2_000) store.edit((draft) => {
+      for (const track of draft.tracks) if (matrixIds.includes(track.id) && track.kind === 'matrix') track.matrixOverlayMaxFeatures = limit
+    })
     return
   }
   if (command.startsWith('matrix-compare-create-')) {

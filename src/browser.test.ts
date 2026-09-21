@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionFeatures, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { AlignmentFeature, InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
@@ -132,6 +132,25 @@ describe('interaction rendering helpers', () => {
       { featureType: 'interaction', start: 20, end: 40, chrom1: 'chr1', start1: 20, end1: 30, chrom2: 'chr1', start2: 30, end2: 40, name: 'RUNX1T1_to_MYC' },
     ] satisfies InteractionFeature[]
     expect(filterInteractionsForGenes(interactions, [{ name: 'RUNX1' }]).map((feature) => feature.name)).toEqual(['RUNX1(chr21)_to_MYC(chr8)'])
+  })
+
+  it('reuses BEDPE score and cis-distance filters for matrix overlays', () => {
+    const interactions = [
+      { featureType: 'interaction', start: 0, end: 110, chrom1: 'chr1', start1: 0, end1: 10, chrom2: 'chr1', start2: 100, end2: 110, score: 20 },
+      { featureType: 'interaction', start: 0, end: 1010, chrom1: 'chr1', start1: 0, end1: 10, chrom2: 'chr1', start2: 1000, end2: 1010, score: 20 },
+      { featureType: 'interaction', start: 0, end: 20, chrom1: 'chr1', start1: 0, end1: 10, chrom2: 'chr2', start2: 10, end2: 20, score: 4 },
+    ] satisfies InteractionFeature[]
+    expect(filterInteractionFeatures(interactions, 10, 500)).toEqual([interactions[0]])
+  })
+
+  it('maps cis and trans BEDPE anchors onto the appropriate matrix axes', () => {
+    const cis = { featureType: 'interaction', start: 100, end: 520, chrom1: 'chr1', start1: 500, end1: 520, chrom2: 'chr1', start2: 100, end2: 120 } satisfies InteractionFeature
+    const trans = { featureType: 'interaction', start: 100, end: 220, chrom1: 'chr2', start1: 200, end1: 220, chrom2: 'chr1', start2: 100, end2: 120 } satisfies InteractionFeature
+    expect(matrixOverlayAnchorPair(cis, { chr: 'chr1', start: 0, end: 1_000 })).toEqual({ horizontal: 110, vertical: 510 })
+    expect(matrixOverlayAnchorPair(trans, { chr: 'chr1', start: 0, end: 1_000 }, { chr: 'chr2', start: 0, end: 1_000 }))
+      .toEqual({ horizontal: 110, vertical: 210 })
+    expect(interactionTouchesRegion(trans, { chr: 'chr2', start: 190, end: 230 })).toBe(true)
+    expect(interactionTouchesRegion(trans, { chr: 'chr3', start: 190, end: 230 })).toBe(false)
   })
 })
 
