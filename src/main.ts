@@ -14,6 +14,7 @@ import type { MatrixComparisonMode } from './data/matrix-comparison.ts'
 import type { MatrixDerivedMode } from './data/matrix-derived.ts'
 import type { MatrixFormat } from './data/matrix.ts'
 import { formatBases, formatLocus, formatZoomPercentage, hg38, parseLocus, resolveChromosome } from './genome.ts'
+import { resolveMatrixAxisInput } from './matrix-axis-input.ts'
 import { parseCytobands } from './cytoband.ts'
 import { GeneSource, parseChromosomeIndex, restoreReference, serializeReference } from './reference.ts'
 import type { ReferenceGenome, StoredReferenceGenome } from './reference.ts'
@@ -2017,14 +2018,28 @@ async function applyMatrixContextAction(command: string | undefined, matrixIds: 
     const source = track && runtimeSources.get(track.sourceIds[0])
     if (!track || !isNativeMatrixSource(source)) return
     const initial = track.matrixSecondaryRegion ?? store.current.region
-    const entered = await requestText({ title: 'Vertical matrix locus', label: 'Chromosome or chr:start-end',
-      initial: formatLocus(initial), submitLabel: 'Show rectangular map',
-      message: 'The horizontal axis follows the main browser. Shift+wheel pans this vertical axis; Shift+Ctrl+wheel zooms it.',
-      validate: (value) => parseLocus(value, source.chromosomes) ? undefined : 'Enter a locus on a chromosome present in this matrix.' })
-    const axis = entered && parseLocus(entered, source.chromosomes)
-    if (axis) store.edit((draft) => { const current = draft.tracks.find((item) => item.id === track.id); if (current) {
-      current.matrixSecondaryRegion = axis; current.matrixValueMode = 'observed'
-    } })
+    const parseAxis = (value: string) => resolveMatrixAxisInput(value, {
+      chromosomes: source.chromosomes,
+      resolutions: source.matrixMetadata.resolutions,
+      selectedResolution: track.matrixResolution,
+      enforceBinLimit: source.format !== 'hic',
+      findGene: activeReference.id === 'hg38' && activeGeneSource ? (name) => activeGeneSource?.find(name) : undefined,
+    })
+    const entered = await requestText({ title: 'Vertical matrix locus', label: 'Gene, chromosome, or chr:start-end',
+      initial: formatLocus(initial), placeholder: 'MYC, chr8, or chr8:50,000,000-52,000,000', submitLabel: 'Show rectangular map',
+      message: 'A chromosome name opens a central window, not the whole chromosome. Gene names use the hg38 index; check that your matrix uses hg38. The horizontal axis stays at the main browser locus.',
+      validate: (value) => { const result = parseAxis(value); return 'error' in result ? result.error : undefined } })
+    const choice = entered && parseAxis(entered)
+    if (choice && 'region' in choice) {
+      store.edit((draft) => {
+        const current = draft.tracks.find((item) => item.id === track.id)
+        if (current) {
+          current.matrixSecondaryRegion = choice.region
+          current.matrixValueMode = 'observed'
+        }
+      })
+      if (choice.kind !== 'interval') showToast(`Vertical axis: ${choice.label ? `${choice.label} · ` : ''}${formatLocus(choice.region)}`)
+    }
     return
   }
   if (command === 'matrix-axis-clear') {
