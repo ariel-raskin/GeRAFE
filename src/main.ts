@@ -39,7 +39,7 @@ import {
   unlinkStrandedTrack,
 } from './track-document.ts'
 import type { MatrixPalette, SignalScaleChannel, SourceFormat, TrackDocument, TrackSourceSpec, TrackSpec } from './track-document.ts'
-import type { TrackSource, TrackRuntime } from './types.ts'
+import type { Region, TrackSource, TrackRuntime } from './types.ts'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { describeNativeFile, isDesktopApp, NativeFileHandle, prepareBedGraphCache, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
@@ -1626,6 +1626,7 @@ function matrixContextMenuMarkup(
       action('matrix-compare-mode-difference', 'Difference', matrixTracks[0].matrixComparisonMode === 'difference' ? 'current' : '')
       + action('matrix-compare-mode-ratio', 'Ratio', matrixTracks[0].matrixComparisonMode === 'ratio' ? 'current' : '')
       + action('matrix-compare-mode-log2-ratio', 'Log2 ratio', matrixTracks[0].matrixComparisonMode === 'log2-ratio' ? 'current' : '')) : '',
+    matrixTracks.length === 1 ? action('matrix-details', 'Matrix details…') : '',
     action('matrix-settings', 'Matrix settings…', matrixTracks.length > 1 ? `${matrixTracks.length} tracks` : ''),
   ].join('')
 }
@@ -2009,6 +2010,10 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
 
 async function applyMatrixContextAction(command: string | undefined, matrixIds: readonly string[]): Promise<void> {
   if (!command?.startsWith('matrix-') || !matrixIds.length) return
+  if (command === 'matrix-details') {
+    await showMatrixDetails(matrixIds[0])
+    return
+  }
   if (command === 'matrix-axis-set') {
     const track = store.current.tracks.find((item) => item.id === matrixIds[0] && item.kind === 'matrix')
     const source = track && runtimeSources.get(track.sourceIds[0])
@@ -2109,6 +2114,51 @@ async function applyMatrixContextAction(command: string | undefined, matrixIds: 
     const reversed = !tracks.every((track) => track.matrixPaletteReversed)
     for (const track of tracks) track.matrixPaletteReversed = reversed || undefined
   })
+}
+
+async function showMatrixDetails(trackId: string): Promise<void> {
+  const track = store.current.tracks.find((item) => item.id === trackId && item.kind === 'matrix')
+  if (!track) return
+  const sourceSpec = store.current.sources.find((source) => source.id === track.sourceIds[0])
+  const source = runtimeSources.get(track.sourceIds[0])
+  const runtime = browser.getMatrixDiagnostics(trackId)
+  const matrix = runtime?.matrix
+  const query = matrix?.diagnostics?.region ?? runtime?.queryRegion
+  const resolution = matrix?.resolution
+  const axis2 = matrix?.axis2 ?? track.matrixSecondaryRegion
+  const formatQuery = (region: Region): string => {
+    const count = resolution ? Math.ceil(region.end / resolution) - Math.floor(region.start / resolution) : undefined
+    return `${formatLocus(region)}${count === undefined ? '' : ` · ${count.toLocaleString()} bins`}`
+  }
+  const format = sourceSpec?.format === 'matrix-comparison' ? 'Comparison'
+    : sourceSpec?.format ? `.${sourceSpec.format}` : 'Unavailable'
+  const status = runtime?.status === 'ready' ? 'Ready' : runtime?.status === 'loading' ? 'Loading'
+    : runtime?.status === 'error' ? 'Error' : runtime?.status === 'offline' ? 'Source needs reopening' : 'Idle'
+  const normalization = track.matrixNormalization
+    ?? (isMatrixSource(source) ? source.matrixMetadata.defaultNormalization : matrix?.diagnostics?.normalization)
+    ?? 'raw'
+  const values = track.matrixComparisonMode
+    ? `${track.matrixComparisonMode} · ${track.matrixValueMode === 'observed-expected' ? 'observed/expected' : 'observed'}`
+    : track.matrixValueMode === 'log2-observed-expected' ? 'log2(observed/expected)'
+      : track.matrixValueMode === 'observed-expected' ? 'observed/expected' : 'observed'
+  const lines = [
+    `Status: ${status}`,
+    `Format: ${format}`,
+    `Resolution: ${track.matrixResolution ? formatBases(track.matrixResolution) : 'Automatic'} requested · ${resolution ? formatBases(resolution) : 'Not resolved'} actual`,
+    `Normalization / values: ${normalization} · ${values}`,
+    query ? `Horizontal query: ${formatQuery(query)}` : 'Horizontal query: Not loaded',
+    axis2 ? `Vertical query: ${formatQuery(axis2)}` : 'View: Cis triangle',
+    matrix ? `Returned data: ${matrix.cells.length.toLocaleString()} contacts · ${matrix.missingCells.length.toLocaleString()} missing · ${matrix.maskedBins.length.toLocaleString()} masked bins${matrix.maskedBins2?.length ? ` + ${matrix.maskedBins2.length.toLocaleString()} vertical` : ''}` : 'Returned data: Not available',
+    `Query time: ${runtime?.queryMs === undefined ? 'Not available' : formatElapsed(runtime.queryMs)}`,
+    `Renderer: ${runtime?.rendererMode === 'tiled' ? `Tiled · ${formatByteCount(runtime.tileMemoryBytes)} total cache` : runtime?.rendererMode === 'direct' ? 'Direct' : 'Not rendered'}`,
+  ]
+  if (runtime?.error) lines.push(`Message: ${runtime.error}`)
+  await showNotice(`Matrix details · ${track.label}`, lines.join('\n'))
+}
+
+function formatElapsed(milliseconds: number): string {
+  if (milliseconds < 1_000) return `${Math.max(0, milliseconds).toFixed(milliseconds < 10 ? 1 : 0)} ms`
+  return `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 2 : 1)} s`
 }
 
 async function createMatrixComparison(ids: readonly string[], mode: MatrixComparisonMode): Promise<void> {

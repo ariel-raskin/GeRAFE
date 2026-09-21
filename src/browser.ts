@@ -78,6 +78,16 @@ export interface MatrixDisplayPreferences {
   metadata: boolean
 }
 
+export interface MatrixRuntimeDiagnostics {
+  status: TrackRuntime['status']
+  error?: string
+  matrix?: MatrixFeature
+  rendererMode?: 'direct' | 'tiled'
+  tileMemoryBytes: number
+  queryRegion?: Region
+  queryMs?: number
+}
+
 interface MatrixHover extends MatrixCellInspection {
   trackId: string
   pane: 'main' | 'bottom'
@@ -129,6 +139,7 @@ export class GenomeBrowser {
   private readonly trackDragGhost: HTMLDivElement
   private readonly matrixInspector: HTMLDivElement
   private readonly matrixTiles = new MatrixTileRenderer()
+  private readonly matrixRendererModes = new Map<string, 'direct' | 'tiled'>()
   private mainResizeObserver: ResizeObserver
   private bottomResizeObserver: ResizeObserver
   private lastFrameTime = performance.now()
@@ -286,7 +297,9 @@ export class GenomeBrowser {
       }
     }
     this.document = document
-    this.matrixTiles.retain(new Set(document.tracks.filter((track) => track.kind === 'matrix').map((track) => track.id)))
+    const matrixIds = new Set(document.tracks.filter((track) => track.kind === 'matrix').map((track) => track.id))
+    this.matrixTiles.retain(matrixIds)
+    for (const id of this.matrixRendererModes.keys()) if (!matrixIds.has(id)) this.matrixRendererModes.delete(id)
     if (this.matrixHover) {
       const hovered = document.tracks.find((track) => track.id === this.matrixHover?.trackId)
       if (hovered?.kind !== 'matrix' || !this.matrixDisplayPreferences.inspector) this.clearMatrixHover()
@@ -335,6 +348,20 @@ export class GenomeBrowser {
 
   getRuntime(trackId: string, channel?: 'plus' | 'minus'): TrackRuntime | undefined {
     return this.runtimes.get(signalFeatureKey(trackId, channel)) ?? this.runtimesForTrack(trackId)[0]
+  }
+
+  getMatrixDiagnostics(trackId: string): MatrixRuntimeDiagnostics | undefined {
+    const runtime = this.getRuntime(trackId)
+    if (!runtime) return
+    return {
+      status: runtime.status,
+      error: runtime.error,
+      matrix: runtime.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix'),
+      rendererMode: this.matrixRendererModes.get(trackId),
+      tileMemoryBytes: this.matrixTiles.memoryBytes,
+      queryRegion: runtime.lastQueryRegion ? { ...runtime.lastQueryRegion } : undefined,
+      queryMs: runtime.queryStartedAt !== undefined ? performance.now() - runtime.queryStartedAt : runtime.lastQueryMs,
+    }
   }
 
   private runtimesForTrack(trackId: string): TrackRuntime[] {
@@ -1584,7 +1611,8 @@ export class GenomeBrowser {
       if (track.status === 'loading') {
         ctx.fillStyle = palette.muted
         ctx.font = '12px Inter, system-ui, sans-serif'
-        ctx.fillText('Loading contacts…', PLOT_LEFT + 22, top + height / 2)
+        const loadingSpan = track.lastQueryRegion ? formatBases(track.lastQueryRegion.end - track.lastQueryRegion.start) : undefined
+        ctx.fillText(`Loading contacts · ${spec.matrixResolution ? formatBases(spec.matrixResolution) : 'automatic resolution'}${loadingSpan ? ` · ${loadingSpan} window` : ''}…`, PLOT_LEFT + 22, top + height / 2)
       }
       return 0
     }
@@ -1635,6 +1663,7 @@ export class GenomeBrowser {
         tile.lineTo(x + half, y); tile.lineTo(x, y - half); tile.closePath(); tile.fill()
       },
     })
+    this.matrixRendererModes.set(spec.id, tiled ? 'tiled' : 'direct')
     if (!tiled) for (const cell of matrix.cells) {
       if ((!signed && !(cell.value > 0)) || !Number.isFinite(cell.value) || cell.bin2 + matrix.resolution <= this.region.start || cell.bin1 >= this.region.end) continue
       const firstCenter = cell.bin1 + matrix.resolution / 2
@@ -1699,6 +1728,7 @@ export class GenomeBrowser {
         tile.fillRect(box.left, box.top, box.right - box.left, box.bottom - box.top)
       },
     })
+    this.matrixRendererModes.set(spec.id, tiled ? 'tiled' : 'direct')
     const draw = (bin1: number, bin2: number, style: { color: string; alpha: number }) => {
       const x = PLOT_LEFT + (bin1 - this.region.start) * scaleX
       const y = top + (bin2 - axis.start) * scaleY
@@ -2229,6 +2259,8 @@ export class GenomeBrowser {
     this.abortControllers.set(track.id, controller)
     track.status = 'loading'
     track.error = undefined
+    track.queryStartedAt = performance.now()
+    track.lastQueryRegion = { ...queryRegion }
     this.emitTracks()
     this.scheduleRender()
     try {
@@ -2253,12 +2285,16 @@ export class GenomeBrowser {
       const queryPixelWidth = plotWidth * (1 + overscanFactor * 2)
       const features = await source.getFeatures(queryRegion, queryPixelWidth, controller.signal, options)
       if (version !== track.requestVersion) return
+      track.lastQueryMs = performance.now() - (track.queryStartedAt ?? performance.now())
+      track.queryStartedAt = undefined
       track.features = features
       track.loadedRegion = queryRegion
       track.loadedBasesPerPixel = (queryRegion.end - queryRegion.start) / Math.max(1, queryPixelWidth)
       track.status = 'ready'
     } catch (error) {
       if (version !== track.requestVersion || isAbortError(error)) return
+      track.lastQueryMs = performance.now() - (track.queryStartedAt ?? performance.now())
+      track.queryStartedAt = undefined
       track.status = 'error'
       track.error = error instanceof Error ? error.message : String(error)
     }
