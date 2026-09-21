@@ -1,4 +1,5 @@
 import { clampRegion, formatBases, formatLocus } from './genome.ts'
+import { MatrixTileRenderer, matrixTileCacheKey } from './matrix-tiles.ts'
 import type { Cytoband } from './cytoband.ts'
 import type { GeneFeature, GeneSource, TranscriptFeature } from './reference.ts'
 import { computeScaleDomains, createTrackDocument, signalFeatureKey } from './track-document.ts'
@@ -127,6 +128,7 @@ export class GenomeBrowser {
   private readonly resizePreviewPixels = new Map<string, number>()
   private readonly trackDragGhost: HTMLDivElement
   private readonly matrixInspector: HTMLDivElement
+  private readonly matrixTiles = new MatrixTileRenderer()
   private mainResizeObserver: ResizeObserver
   private bottomResizeObserver: ResizeObserver
   private lastFrameTime = performance.now()
@@ -188,6 +190,7 @@ export class GenomeBrowser {
   }
 
   destroy(): void {
+    this.matrixTiles.clear()
     this.mainResizeObserver.disconnect()
     this.bottomResizeObserver.disconnect()
     if (this.frame) cancelAnimationFrame(this.frame)
@@ -283,6 +286,7 @@ export class GenomeBrowser {
       }
     }
     this.document = document
+    this.matrixTiles.retain(new Set(document.tracks.filter((track) => track.kind === 'matrix').map((track) => track.id)))
     if (this.matrixHover) {
       const hovered = document.tracks.find((track) => track.id === this.matrixHover?.trackId)
       if (hovered?.kind !== 'matrix' || !this.matrixDisplayPreferences.inspector) this.clearMatrixHover()
@@ -1606,7 +1610,32 @@ export class GenomeBrowser {
       matrixDomainPath(ctx, PLOT_LEFT, width, baseline, direction, depthPixels)
       ctx.fill()
     }
-    for (const cell of matrix.cells) {
+    const tiled = this.matrixTiles.render({
+      trackId: spec.id, source: matrix,
+      key: matrixTileCacheKey(spec, matrix, scale, height, minimum, maximum, Math.min(window.devicePixelRatio || 1, 2), document.documentElement.dataset.theme ?? ''),
+      target: ctx, plotLeft: PLOT_LEFT, plotWidth, top, height, worldLeft: this.region.start * scale,
+      dpr: window.devicePixelRatio || 1,
+      box: (cell) => {
+        if ((!signed && !(cell.value > 0)) || !Number.isFinite(cell.value)) return undefined
+        const first = cell.bin1 + matrix.resolution / 2
+        const second = cell.bin2 + matrix.resolution / 2
+        const x = (first + second) / 2 * scale
+        const y = baseline - top + direction * (second - first) / 2 * scale
+        return { left: x - halfCell, right: x + halfCell, top: y - halfCell, bottom: y + halfCell }
+      },
+      paint: (tile, cell, box) => {
+        const scoreIntensity = signed ? (cell.value / maximum + 1) / 2 : matrixValueIntensity(cell.value, minimum, maximum, spec.matrixTransform ?? 'log1p')
+        const intensity = matrixPaletteIntensity(scoreIntensity, spec.matrixPaletteReversed === true)
+        const style = signed ? { color: matrixSignedColor(scoreIntensity * 2 - 1), alpha: 1 } : matrixPaletteStyle(spec, intensity)
+        tile.fillStyle = style.color; tile.globalAlpha = style.alpha
+        const x = (box.left + box.right) / 2
+        const y = (box.top + box.bottom) / 2
+        const half = (box.right - box.left) / 2
+        tile.beginPath(); tile.moveTo(x - half, y); tile.lineTo(x, y + half)
+        tile.lineTo(x + half, y); tile.lineTo(x, y - half); tile.closePath(); tile.fill()
+      },
+    })
+    if (!tiled) for (const cell of matrix.cells) {
       if ((!signed && !(cell.value > 0)) || !Number.isFinite(cell.value) || cell.bin2 + matrix.resolution <= this.region.start || cell.bin1 >= this.region.end) continue
       const firstCenter = cell.bin1 + matrix.resolution / 2
       const secondCenter = cell.bin2 + matrix.resolution / 2
@@ -1654,13 +1683,29 @@ export class GenomeBrowser {
       ctx.globalAlpha = spec.matrixZeroStyle === 'custom' ? 1 : color(0).alpha * 0.72
       ctx.fillRect(PLOT_LEFT, top, width - PLOT_LEFT, bottom - top)
     }
+    const tiled = this.matrixTiles.render({
+      trackId: spec.id, source: matrix,
+      key: matrixTileCacheKey(spec, matrix, scaleX, bottom - top, minimum, maximum, Math.min(window.devicePixelRatio || 1, 2), document.documentElement.dataset.theme ?? ''),
+      target: ctx, plotLeft: PLOT_LEFT, plotWidth: width - PLOT_LEFT, top, height: bottom - top,
+      worldLeft: this.region.start * scaleX, dpr: window.devicePixelRatio || 1,
+      box: (cell) => cell.value > 0 && Number.isFinite(cell.value) ? {
+        left: cell.bin1 * scaleX, right: cell.bin1 * scaleX + Math.max(1, matrix.resolution * scaleX),
+        top: (cell.bin2 - axis.start) * scaleY,
+        bottom: (cell.bin2 - axis.start) * scaleY + Math.max(1, matrix.resolution * scaleY),
+      } : undefined,
+      paint: (tile, cell, box) => {
+        const style = color(cell.value)
+        tile.fillStyle = style.color; tile.globalAlpha = style.alpha
+        tile.fillRect(box.left, box.top, box.right - box.left, box.bottom - box.top)
+      },
+    })
     const draw = (bin1: number, bin2: number, style: { color: string; alpha: number }) => {
       const x = PLOT_LEFT + (bin1 - this.region.start) * scaleX
       const y = top + (bin2 - axis.start) * scaleY
       ctx.fillStyle = style.color; ctx.globalAlpha = style.alpha
       ctx.fillRect(x, y, Math.max(1, matrix.resolution * scaleX), Math.max(1, matrix.resolution * scaleY))
     }
-    for (const cell of matrix.cells) if (cell.bin1 + matrix.resolution > this.region.start && cell.bin1 < this.region.end
+    if (!tiled) for (const cell of matrix.cells) if (cell.bin1 + matrix.resolution > this.region.start && cell.bin1 < this.region.end
       && cell.bin2 + matrix.resolution > axis.start && cell.bin2 < axis.end && cell.value > 0 && Number.isFinite(cell.value)) draw(cell.bin1, cell.bin2, color(cell.value))
     const missing = spec.matrixMissingStyle === 'custom' ? spec.matrixMissingColor ?? '#9197a3' : background
     for (const cell of matrix.missingCells ?? []) draw(cell.bin1, cell.bin2, { color: missing, alpha: 1 })
@@ -2621,7 +2666,7 @@ export function inspectMatrixPoint(
 /** Visible-cell z-max used by automatic matrix scaling. */
 export function matrixAutomaticMaximum(matrix: MatrixFeature | undefined, percentile = 0.99, ignoredDiagonals = 3): number {
   if (!matrix?.cells.length) return 1
-  const diagonalCount = Math.max(0, Math.round(ignoredDiagonals))
+  const diagonalCount = matrix.axis2 ? 0 : Math.max(0, Math.round(ignoredDiagonals))
   const quantile = Math.max(0.5, Math.min(1, percentile))
   const cacheKey = `${quantile}:${diagonalCount}`
   const cached = matrixAutomaticMaximumCache.get(matrix)?.get(cacheKey)

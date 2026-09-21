@@ -552,9 +552,101 @@ await page.waitForTimeout(350)
 const rectangularAfter = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').tracks[0]?.matrixSecondaryRegion)
 const rectangularWorkspacePans = rectangularAfter?.start > rectangularBefore?.start && rectangularAfter?.chr === rectangularBefore?.chr
 if (!rectangularWorkspacePans) console.error('Rectangular pan smoke:', rectangularBefore, rectangularAfter)
+const matrixTileFidelity = await page.evaluate(async () => {
+  const { MatrixTileRenderer } = await import('/src/matrix-tiles.ts')
+  const cells = Array.from({ length: 30_000 }, (_, index) => ({ bin1: index % 512, bin2: Math.floor(index / 512), value: 1 }))
+  const source = { featureType: 'matrix', start: 0, end: 512, resolution: 1, cells, missingCells: [], maskedBins: [] }
+  const results = []
+  for (const dpr of [1, 2]) {
+    const renderer = new MatrixTileRenderer()
+    const canvas = () => {
+      const node = document.createElement('canvas')
+      node.width = 512 * dpr; node.height = 128 * dpr
+      const context = node.getContext('2d')
+      context.setTransform(dpr, 0, 0, dpr, 0, 0)
+      return context
+    }
+    const target = canvas()
+    let painted = 0
+    const options = { trackId: 'smoke-matrix', source, key: `fidelity:${dpr}`, target, plotLeft: 0,
+      plotWidth: 512, top: 0, height: 128, worldLeft: 0, dpr,
+      box: (cell) => ({ left: cell.bin1, top: cell.bin2, right: cell.bin1 + 1, bottom: cell.bin2 + 1 }),
+      paint: (context, _cell, box) => { painted++; context.fillStyle = '#345678'; context.fillRect(box.left, box.top, 1, 1) },
+    }
+    let firstPainted = 0
+    for (const offset of [0, 10]) {
+      const direct = canvas()
+      for (const cell of cells) { direct.fillStyle = '#345678'; direct.fillRect(cell.bin1 - offset, cell.bin2, 1, 1) }
+      target.clearRect(0, 0, 512, 128)
+      if (!renderer.render({ ...options, worldLeft: offset })) throw new Error('Dense matrix unexpectedly used direct fallback.')
+      const first = direct.getImageData(0, 0, 512 * dpr, 128 * dpr).data
+      const second = target.getImageData(0, 0, 512 * dpr, 128 * dpr).data
+      let mismatches = 0
+      for (let i = 0; i < first.length; i++) if (first[i] !== second[i]) mismatches++
+      results.push({ dpr, offset, mismatches })
+      if (offset === 0) firstPainted = painted
+    }
+    results.push({ dpr, painted, reused: painted === firstPainted })
+    const diamondSource = { ...source, cells: cells.map((cell) => ({ ...cell, bin1: cell.bin1 + 0.5, bin2: cell.bin2 + 0.5 })) }
+    const diamondTarget = canvas()
+    const diamondRenderer = new MatrixTileRenderer()
+    const diamond = (ctx, x, y) => {
+      ctx.fillStyle = '#345678'; ctx.globalAlpha = 0.3
+      ctx.beginPath(); ctx.moveTo(x - 0.55, y); ctx.lineTo(x, y + 0.55)
+      ctx.lineTo(x + 0.55, y); ctx.lineTo(x, y - 0.55); ctx.closePath(); ctx.fill()
+    }
+    const diamondOptions = { ...options, source: diamondSource, target: diamondTarget, key: `diamonds:${dpr}`,
+      box: (cell) => ({ left: cell.bin1 - 0.55, top: cell.bin2 - 0.55, right: cell.bin1 + 0.55, bottom: cell.bin2 + 0.55 }),
+      paint: (context, _cell, box) => diamond(context, (box.left + box.right) / 2, (box.top + box.bottom) / 2),
+    }
+    for (const offset of [0, 10]) {
+      const direct = canvas()
+      for (const cell of diamondSource.cells) diamond(direct, cell.bin1 - offset, cell.bin2)
+      diamondTarget.clearRect(0, 0, 512, 128)
+      if (!diamondRenderer.render({ ...diamondOptions, worldLeft: offset })) throw new Error('Dense diamonds unexpectedly used direct fallback.')
+      const expected = direct.getImageData(0, 0, 512 * dpr, 128 * dpr).data
+      const actual = diamondTarget.getImageData(0, 0, 512 * dpr, 128 * dpr).data
+      let mismatches = 0
+      for (let i = 0; i < expected.length; i++) if (expected[i] !== actual[i]) mismatches++
+      results.push({ dpr, offset, geometry: 'diamonds', mismatches })
+    }
+  }
+  return results
+})
+const matrixTilePerformance = await page.evaluate(async () => {
+  const { MatrixTileRenderer } = await import('/src/matrix-tiles.ts')
+  const cells = Array.from({ length: 100_000 }, (_, i) => ({ bin1: i % 1_000, bin2: Math.floor(i / 1_000), value: 1 }))
+  const source = { featureType: 'matrix', start: 0, end: 1_000, resolution: 1, cells, missingCells: [], maskedBins: [] }
+  const canvas = document.createElement('canvas')
+  canvas.width = 1_000; canvas.height = 120
+  const target = canvas.getContext('2d')
+  const renderer = new MatrixTileRenderer()
+  const options = { trackId: 'benchmark', source, key: '100k', target, plotLeft: 0, plotWidth: 1_000,
+    top: 0, height: 120, worldLeft: 0, dpr: 1,
+    box: (cell) => ({ left: cell.bin1, top: cell.bin2, right: cell.bin1 + 1, bottom: cell.bin2 + 1 }),
+    paint: (ctx, _cell, box) => { ctx.fillStyle = '#345678'; ctx.fillRect(box.left, box.top, 1, 1) },
+  }
+  const first = performance.now()
+  renderer.render(options)
+  const buildMs = performance.now() - first
+  let started = performance.now()
+  for (let pan = 0; pan < 6; pan++) {
+    target.clearRect(0, 0, 1_000, 120)
+    for (const cell of cells) { target.fillStyle = '#345678'; target.fillRect(cell.bin1 - pan * 5, cell.bin2, 1, 1) }
+  }
+  const directSixPansMs = performance.now() - started
+  started = performance.now()
+  for (let pan = 0; pan < 6; pan++) {
+    target.clearRect(0, 0, 1_000, 120)
+    renderer.render({ ...options, worldLeft: pan * 5 })
+  }
+  return { cells: cells.length, buildMs, directSixPansMs, tiledSixPansMs: performance.now() - started,
+    tileMiB: renderer.memoryBytes / 1_048_576 }
+})
 await browser.close()
 
 console.log(JSON.stringify({ ...result, matrixInspectorSizing, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log('Matrix tile fidelity and synthetic 100k-cell pan benchmark:', matrixTileFidelity, matrixTilePerformance)
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!(matrixInspectorSizing.expandedWidth > matrixInspectorSizing.compactWidth) || !(matrixInspectorSizing.expandedHeight > matrixInspectorSizing.compactHeight)) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
@@ -602,3 +694,4 @@ if (!bamMenuText?.includes('Content') || !bamMenuText.includes('Read layout') ||
 if (!bamSubmenuText['bam-content']?.includes('Coverage only') || !bamSubmenuText['bam-layout']?.includes('Squished') || !bamSubmenuText['bam-color']?.includes('Pair orientation') || !bamSubmenuText['bam-filters']?.includes('Minimum mapping quality')) process.exitCode = 1
 if (consoleErrors.length > 0) process.exitCode = 1
 if (!rectangularWorkspacePans) process.exitCode = 1
+if (matrixTileFidelity.some((check) => check.mismatches || check.reused === false)) { console.error('Matrix tile fidelity:', matrixTileFidelity); process.exitCode = 1 }

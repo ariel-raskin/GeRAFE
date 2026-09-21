@@ -169,6 +169,7 @@ describe('contact-matrix rendering helpers', () => {
     } satisfies MatrixFeature
     expect(matrixAutomaticMaximum(matrix, 1, 0)).toBe(1_000)
     expect(matrixAutomaticMaximum(matrix, 0.5, 3)).toBe(2)
+    expect(matrixAutomaticMaximum({ ...matrix, axis2: { chr: 'chr2', start: 0, end: 100 } }, 1, 3)).toBe(1_000)
   })
 
   it('scales signed log2 ratios symmetrically and preserves neutral cells', () => {
