@@ -8,6 +8,7 @@ import {
   applyAutomaticStrandedColors,
   assignDisplayGroup,
   computeScaleDomains,
+  computeSplitScaleDomains,
   createTrackDocument,
   inferSignalStrand,
   intervalLabelHeightScore,
@@ -92,6 +93,26 @@ describe('track document', () => {
     expect(domains.get(scaleId)).toEqual({ min: -8, max: 3 })
   })
 
+  it('computes independent automatic domains on both sides of a comparison divider', () => {
+    const document = documentWithTwoTracks()
+    linkScales(document, ['t1', 't2'])
+    const scaleId = document.tracks.find((track) => track.id === 't1')!.scaleBindingId!
+    const split = computeSplitScaleDomains(document, new Map([
+      ['t1', [{ start: 0, end: 20, score: 3 }, { start: 60, end: 70, score: 30 }]],
+      ['t2', [{ start: 10, end: 55, score: 8 }, { start: 80, end: 90, score: 80 }]],
+    ]), 50)
+    expect(split.left.get(scaleId)).toEqual({ min: 0, max: 8 })
+    expect(split.right.get(scaleId)).toEqual({ min: 0, max: 80 })
+
+    const binding = document.scales.find((scale) => scale.id === scaleId)!
+    binding.mode = 'fixed'
+    binding.limits = { min: -5, max: 25 }
+    expect(computeSplitScaleDomains(document, new Map(), 50)).toMatchObject({
+      left: new Map([[scaleId, { min: -5, max: 25 }]]),
+      right: new Map([[scaleId, { min: -5, max: 25 }]]),
+    })
+  })
+
   it('normalizes reversed fixed limits', () => {
     const document = documentWithTwoTracks()
     const scaleId = document.tracks.find((track) => track.id === 't1')!.scaleBindingId!
@@ -113,6 +134,20 @@ describe('track document', () => {
     expect(store.current.tracks[0].label).toBe('first.bw')
     store.redo()
     expect(store.current.tracks[0].label).toBe('renamed')
+  })
+
+  it('persists valid saved regions and a comparison divider while dropping malformed entries', () => {
+    const document = documentWithTwoTracks() as any
+    document.savedRegions = [
+      { id: 'promoter', label: ' RUNX1 promoter ', region: { chr: 'chr21', start: 35_000_000, end: 35_010_000 }, color: '#AABBCC', highlighted: true },
+      { id: 'bad', label: '', region: { chr: 'chr21', start: -1, end: 10 }, color: 'red' },
+    ]
+    document.comparisonDivider = { chr: 'chr21', position: 35_005_000.4 }
+    const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
+    expect(restored.savedRegions).toEqual([{
+      id: 'promoter', label: 'RUNX1 promoter', region: { chr: 'chr21', start: 35_000_000, end: 35_010_000 }, color: '#aabbcc', highlighted: true,
+    }])
+    expect(restored.comparisonDivider).toEqual({ chr: 'chr21', position: 35_005_000 })
   })
 
   it('persists exact fitted and manually resized pixel heights and upgrades version 8 workspaces', () => {

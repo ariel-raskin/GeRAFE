@@ -148,10 +148,17 @@ GeRAFE** to see the installed version.
 - Open files with **File → Open tracks…**, `Ctrl+O`, or drag and drop.
 - Search for a gene such as `RUNX1`, or enter a locus such as `chr8:127,700,001-127,900,000`.
 - Drag horizontally over the track data to pan.
+- Drag horizontally through blank track-area space as well as loaded tracks; the canvas fills the available pane even when its track stack is short.
 - Hold `Ctrl` while using the mouse wheel to zoom around the pointer.
 - Double-click the data area or use the toolbar `+` and `−` buttons to zoom.
 - Drag the slider between the zoom buttons for direct chromosome-scale zoom control; its left edge shows the full chromosome and its right edge reaches base-level detail.
 - Use the normal mouse wheel to scroll through tracks or an overflowing gene track.
+
+### Saved regions and comparison divider
+
+Use the compact **Regions** menu beside **Fit tracks** to select an interval by dragging across the ruler or track area, or save the current view directly. Saved regions keep a name, highlight color, genomic interval, and show/hide state. Click a saved region to return to it; the adjacent controls toggle its highlight, change its color, rename it, or remove it. Highlights span the ruler and both track panes and are stored in workspace schema v26. Changing the workspace reference clears saved regions so coordinates from one assembly are not shown on another.
+
+**Place comparison divider…** changes the next click in the ruler or track area into a vertical genomic divider. Drag the orange dashed line directly to move it, or clear it from the Regions menu. Ordinary and stranded signal tracks using automatic scaling calculate their left and right domains independently; linked tracks remain linked within each side. Fixed signal ranges remain fixed on both sides. BAM coverage uses a separate maximum on each side. Interval, gene, BEDPE, read-alignment, and matrix geometry are not rescaled. Small `L` and `R` values identify the active side-specific signal or coverage scales.
 
 ### Manage tracks
 

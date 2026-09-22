@@ -2,8 +2,8 @@ import { clampRegion, formatBases, formatLocus } from './genome.ts'
 import { MatrixTileRenderer, matrixTileCacheKey } from './matrix-tiles.ts'
 import type { Cytoband } from './cytoband.ts'
 import type { GeneFeature, GeneSource, TranscriptFeature } from './reference.ts'
-import { computeScaleDomains, createTrackDocument, signalFeatureKey } from './track-document.ts'
-import type { DisplayGroup, TrackDocument, TrackSpec } from './track-document.ts'
+import { computeScaleDomains, computeSplitScaleDomains, createTrackDocument, signalFeatureKey } from './track-document.ts'
+import type { DisplayGroup, SavedRegion, TrackDocument, TrackSpec } from './track-document.ts'
 import type { AlignmentCoverageFeature, AlignmentFeature, InteractionFeature, IntervalFeature, MatrixCellPosition, MatrixFeature, Region, SignalFeature, TrackSource, TrackRuntime } from './types.ts'
 
 const RULER_HEIGHT = 70
@@ -23,6 +23,9 @@ const BAM_READS_MAX_VISIBLE_SPAN = 150_000
 
 export interface BrowserCallbacks {
   onRegionChange(region: Region): void
+  onRegionSelected(region: Region): void
+  onComparisonDividerChange(position?: number): void
+  onRegionToolModeChange(mode?: RegionToolMode): void
   onMatrixAxisChange(trackId: string, region: Region): void
   onPerformance(sample: { renderMs: number; fps: number; visibleFeatures: number }): void
   onTracksChange(tracks: readonly TrackRuntime[]): void
@@ -34,6 +37,10 @@ export interface BrowserCallbacks {
   onTracksReorder(trackIds: readonly string[], pane: 'main' | 'bottom', insertionIndex: number, withinGroupId?: string): void
   onTrackHeightsResize(updates: readonly { id: string; pixels: number }[]): void
 }
+
+export type RegionToolMode = 'select' | 'divider'
+type ScaleDomain = { min: number; max: number }
+interface SplitScaleDomain { left?: ScaleDomain; right?: ScaleDomain }
 
 interface GeneRenderBlock {
   gene: GeneFeature
@@ -115,6 +122,9 @@ export class GenomeBrowser {
   private geneAssembly = ''
   private frame?: number
   private dragging?: { x: number; region: Region; canvas: HTMLCanvasElement }
+  private regionToolMode?: RegionToolMode
+  private regionSelection?: { canvas: HTMLCanvasElement; startX: number; currentX: number }
+  private dividerDrag?: { canvas: HTMLCanvasElement; position: number }
   private trackDrag?: {
     sourceCanvas: HTMLCanvasElement
     draggedIds: string[]
@@ -283,6 +293,16 @@ export class GenomeBrowser {
     this.scheduleRender()
   }
 
+  setRegionToolMode(mode?: RegionToolMode): void {
+    this.regionToolMode = mode
+    for (const canvas of [this.headerCanvas, this.canvas, this.bottomCanvas]) {
+      canvas.classList.toggle('is-region-selecting', mode === 'select')
+      canvas.classList.toggle('is-divider-placing', mode === 'divider')
+    }
+    this.callbacks.onRegionToolModeChange(mode)
+    this.scheduleRender()
+  }
+
   syncDocument(document: TrackDocument, sources: ReadonlyMap<string, TrackSource>): void {
     for (const spec of document.tracks) {
       const previous = this.document.tracks.find((track) => track.id === spec.id)
@@ -390,10 +410,94 @@ export class GenomeBrowser {
     })
   }
 
+  private plotCoordinate(canvas: HTMLCanvasElement, offsetX: number): number {
+    const plotWidth = Math.max(1, this.cssWidth(canvas) - PLOT_LEFT)
+    const fraction = Math.max(0, Math.min(1, (offsetX - PLOT_LEFT) / plotWidth))
+    return this.region.start + fraction * (this.region.end - this.region.start)
+  }
+
+  private plotX(canvas: HTMLCanvasElement, coordinate: number): number {
+    return PLOT_LEFT + ((coordinate - this.region.start) / Math.max(1, this.region.end - this.region.start)) * (this.cssWidth(canvas) - PLOT_LEFT)
+  }
+
+  private visibleComparisonDivider(): number | undefined {
+    const divider = this.dividerDrag?.position ?? (this.document.comparisonDivider?.chr === this.region.chr ? this.document.comparisonDivider.position : undefined)
+    return divider !== undefined && divider > this.region.start && divider < this.region.end ? divider : undefined
+  }
+
+  private beginRegionInteraction(canvas: HTMLCanvasElement, event: PointerEvent): boolean {
+    if (event.offsetX < PLOT_LEFT) return false
+    const divider = this.visibleComparisonDivider()
+    if (!this.regionToolMode && divider !== undefined && Math.abs(event.offsetX - this.plotX(canvas, divider)) <= 6) {
+      canvas.setPointerCapture(event.pointerId)
+      this.dividerDrag = { canvas, position: divider }
+      canvas.classList.add('is-divider-dragging')
+      this.clearMatrixHover()
+      this.clearBamHover()
+      return true
+    }
+    if (this.regionToolMode === 'select') {
+      canvas.setPointerCapture(event.pointerId)
+      const x = Math.max(PLOT_LEFT, Math.min(this.cssWidth(canvas), event.offsetX))
+      this.regionSelection = { canvas, startX: x, currentX: x }
+      canvas.classList.add('is-region-dragging')
+      this.clearMatrixHover()
+      this.clearBamHover()
+      this.scheduleRender()
+      return true
+    }
+    if (this.regionToolMode === 'divider') {
+      this.callbacks.onComparisonDividerChange(Math.round(this.plotCoordinate(canvas, event.offsetX)))
+      this.setRegionToolMode(undefined)
+      return true
+    }
+    return false
+  }
+
+  private updateRegionInteraction(canvas: HTMLCanvasElement, event: PointerEvent): boolean {
+    if (this.regionSelection?.canvas === canvas) {
+      this.regionSelection.currentX = Math.max(PLOT_LEFT, Math.min(this.cssWidth(canvas), event.offsetX))
+      this.scheduleRender()
+      return true
+    }
+    if (this.dividerDrag?.canvas === canvas) {
+      this.dividerDrag.position = Math.round(this.plotCoordinate(canvas, event.offsetX))
+      this.scheduleRender()
+      return true
+    }
+    return false
+  }
+
+  private finishRegionInteraction(canvas: HTMLCanvasElement, event: PointerEvent): boolean {
+    if (this.regionSelection?.canvas === canvas) {
+      const selection = this.regionSelection
+      this.regionSelection = undefined
+      canvas.classList.remove('is-region-dragging')
+      this.setRegionToolMode(undefined)
+      if (event.type === 'pointerup' && Math.abs(selection.currentX - selection.startX) >= 3) {
+        const first = this.plotCoordinate(canvas, Math.min(selection.startX, selection.currentX))
+        const second = this.plotCoordinate(canvas, Math.max(selection.startX, selection.currentX))
+        this.callbacks.onRegionSelected({ chr: this.region.chr, start: Math.floor(first), end: Math.max(Math.floor(first) + 1, Math.ceil(second)) })
+      }
+      this.scheduleRender()
+      return true
+    }
+    if (this.dividerDrag?.canvas === canvas) {
+      const position = this.dividerDrag.position
+      this.dividerDrag = undefined
+      canvas.classList.remove('is-divider-dragging')
+      if (event.type === 'pointerup') this.callbacks.onComparisonDividerChange(position)
+      this.scheduleRender()
+      return true
+    }
+    return false
+  }
+
   private bindEvents(canvas: HTMLCanvasElement, pane: 'main' | 'bottom'): void {
     canvas.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return
       this.clearMatrixHover()
+      if (this.beginRegionInteraction(canvas, event)) return
       const resizeHit = this.resizeBoundaryAt(pane, event.offsetY)
       const resizeIsArmed = resizeHit
         && this.trackResizeHover?.canvas === canvas
@@ -461,6 +565,7 @@ export class GenomeBrowser {
       canvas.classList.add('is-dragging')
     })
     canvas.addEventListener('pointermove', (event) => {
+      if (this.updateRegionInteraction(canvas, event)) return
       if (this.trackResize?.canvas === canvas) {
         const dragPixels = event.clientY - this.trackResize.startClientY
         const resized = resizedTrackPixels(this.trackResize.initialPixels, this.trackResize.minimumPixels, dragPixels)
@@ -512,6 +617,7 @@ export class GenomeBrowser {
       if (!this.hasOverscanCoverage()) void this.ensureData()
     })
     const finishPointer = (event: PointerEvent) => {
+      if (this.finishRegionInteraction(canvas, event)) return
       this.cancelTrackBodyHold()
       if (this.trackResize?.canvas === canvas) {
         const resize = this.trackResize
@@ -587,12 +693,14 @@ export class GenomeBrowser {
     canvas.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return
       this.callbacks.onClearSelection()
+      if (this.beginRegionInteraction(canvas, event)) return
       if (event.offsetX < PLOT_LEFT) return
       canvas.setPointerCapture(event.pointerId)
       this.dragging = { x: event.clientX, region: { ...this.region }, canvas }
       canvas.classList.add('is-dragging')
     })
     canvas.addEventListener('pointermove', (event) => {
+      if (this.updateRegionInteraction(canvas, event)) return
       if (!this.dragging || this.dragging.canvas !== canvas) return
       const plotWidth = Math.max(1, this.cssWidth(canvas) - PLOT_LEFT)
       const shift = (this.dragging.x - event.clientX) * ((this.dragging.region.end - this.dragging.region.start) / plotWidth)
@@ -603,7 +711,8 @@ export class GenomeBrowser {
       this.scheduleRender()
       if (!this.hasOverscanCoverage()) void this.ensureData()
     })
-    const finish = () => {
+    const finish = (event: PointerEvent) => {
+      if (this.finishRegionInteraction(canvas, event)) return
       if (!this.dragging || this.dragging.canvas !== canvas) return
       this.dragging = undefined
       canvas.classList.remove('is-dragging')
@@ -827,7 +936,8 @@ export class GenomeBrowser {
     const parentWidth = canvas.parentElement?.clientWidth ?? 900
     const minimum = pane === 'main' ? TRACK_HEIGHT : MIN_BOTTOM_GENE_HEIGHT
     const contentHeight = this.paneStackHeight(pane)
-    const cssHeight = Math.max(minimum, contentHeight)
+    const availableHeight = Math.max(0, (canvas.parentElement?.clientHeight ?? 0) - (pane === 'main' ? RULER_HEIGHT : 0))
+    const cssHeight = Math.max(minimum, contentHeight, availableHeight)
     const ratio = Math.min(window.devicePixelRatio || 1, 2)
     canvas.width = Math.floor(parentWidth * ratio)
     canvas.height = Math.floor(cssHeight * ratio)
@@ -869,13 +979,17 @@ export class GenomeBrowser {
       }
     }
     const domains = computeScaleDomains(this.document, visibleByTrack)
-    return this.renderPane('main', palette, domains) + this.renderPane('bottom', palette, domains)
+    const divider = this.visibleComparisonDivider()
+    const splitDomains = divider === undefined ? undefined : computeSplitScaleDomains(this.document, visibleByTrack, divider)
+    this.drawRegionOverlays(this.cssWidth(this.headerCanvas), this.cssHeight(this.headerCanvas), palette, true)
+    return this.renderPane('main', palette, domains, splitDomains) + this.renderPane('bottom', palette, domains, splitDomains)
   }
 
   private renderPane(
     pane: 'main' | 'bottom',
     palette: CanvasPalette,
     domains: ReadonlyMap<string, { min: number; max: number }>,
+    splitDomains?: { left: ReadonlyMap<string, ScaleDomain>; right: ReadonlyMap<string, ScaleDomain> },
   ): number {
     const canvas = pane === 'main' ? this.canvas : this.bottomCanvas
     this.context = pane === 'main' ? this.mainContext : this.bottomContext
@@ -899,13 +1013,16 @@ export class GenomeBrowser {
       if (spec.kind === 'signal') {
         const runtime = this.runtimes.get(signalFeatureKey(spec.id, spec.signalStrand))!
         const domain = spec.scaleBindingId ? domains.get(spec.scaleBindingId) : undefined
-        visibleFeatures += this.drawTrack(spec, runtime, index, top, rowHeight, width, palette, domain)
+        const splitDomain = spec.scaleBindingId && splitDomains ? { left: splitDomains.left.get(spec.scaleBindingId), right: splitDomains.right.get(spec.scaleBindingId) } : undefined
+        visibleFeatures += this.drawTrack(spec, runtime, index, top, rowHeight, width, palette, domain, splitDomain)
       } else if (spec.kind === 'stranded') {
         const plus = this.runtimes.get(signalFeatureKey(spec.id, 'plus'))!
         const minus = this.runtimes.get(signalFeatureKey(spec.id, 'minus'))!
         const plusDomain = spec.scaleBindingId ? domains.get(spec.scaleBindingId) : undefined
         const minusDomain = spec.negativeScaleBindingId ? domains.get(spec.negativeScaleBindingId) : undefined
-        visibleFeatures += this.drawStrandedTrack(spec, plus, minus, index, top, rowHeight, width, palette, plusDomain, minusDomain)
+        const plusSplit = spec.scaleBindingId && splitDomains ? { left: splitDomains.left.get(spec.scaleBindingId), right: splitDomains.right.get(spec.scaleBindingId) } : undefined
+        const minusSplit = spec.negativeScaleBindingId && splitDomains ? { left: splitDomains.left.get(spec.negativeScaleBindingId), right: splitDomains.right.get(spec.negativeScaleBindingId) } : undefined
+        visibleFeatures += this.drawStrandedTrack(spec, plus, minus, index, top, rowHeight, width, palette, plusDomain, minusDomain, plusSplit, minusSplit)
       } else if (spec.kind === 'interval') {
         visibleFeatures += this.drawIntervalTrack(spec, this.runtimes.get(spec.id)!, index, top, rowHeight, width, palette)
       } else if (spec.kind === 'interaction') {
@@ -954,7 +1071,54 @@ export class GenomeBrowser {
       ctx.fillStyle = palette.selection
       ctx.fillRect(0, Math.max(0, Math.round(resizeLine) - 1), width, 2)
     }
+    this.drawRegionOverlays(width, height, palette, false)
     return visibleFeatures
+  }
+
+  private drawRegionOverlays(width: number, height: number, palette: CanvasPalette, header: boolean): void {
+    const ctx = this.context
+    const regions: Array<Pick<SavedRegion, 'region' | 'color'>> = this.document.savedRegions
+      .filter((saved) => saved.highlighted && saved.region.chr === this.region.chr)
+    if (this.regionSelection) {
+      const first = this.plotCoordinate(this.regionSelection.canvas, Math.min(this.regionSelection.startX, this.regionSelection.currentX))
+      const second = this.plotCoordinate(this.regionSelection.canvas, Math.max(this.regionSelection.startX, this.regionSelection.currentX))
+      regions.push({ region: { chr: this.region.chr, start: first, end: second }, color: palette.selection })
+    }
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(PLOT_LEFT, 0, Math.max(0, width - PLOT_LEFT), height)
+    ctx.clip()
+    for (const saved of regions) {
+      if (saved.region.end <= this.region.start || saved.region.start >= this.region.end) continue
+      const x1 = Math.max(PLOT_LEFT, this.plotX(header ? this.headerCanvas : this.context === this.bottomContext ? this.bottomCanvas : this.canvas, saved.region.start))
+      const x2 = Math.min(width, this.plotX(header ? this.headerCanvas : this.context === this.bottomContext ? this.bottomCanvas : this.canvas, saved.region.end))
+      if (x2 <= x1) continue
+      ctx.fillStyle = saved.color
+      ctx.globalAlpha = header ? 0.13 : 0.09
+      ctx.fillRect(x1, 0, Math.max(1, x2 - x1), height)
+      ctx.globalAlpha = 0.58
+      ctx.strokeStyle = saved.color
+      ctx.setLineDash([4, 3])
+      ctx.strokeRect(x1 + 0.5, 0.5, Math.max(0, x2 - x1 - 1), Math.max(0, height - 1))
+    }
+    const divider = this.visibleComparisonDivider()
+    if (divider !== undefined) {
+      const targetCanvas = header ? this.headerCanvas : this.context === this.bottomContext ? this.bottomCanvas : this.canvas
+      const x = this.plotX(targetCanvas, divider)
+      ctx.globalAlpha = 0.95
+      ctx.strokeStyle = '#ee7b2d'
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([6, 4])
+      ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, height); ctx.stroke()
+      ctx.setLineDash([])
+      if (header) {
+        ctx.fillStyle = '#ee7b2d'
+        ctx.beginPath(); ctx.moveTo(x - 5, 0); ctx.lineTo(x + 5, 0); ctx.lineTo(x, 7); ctx.closePath(); ctx.fill()
+        ctx.font = '9px Inter, system-ui, sans-serif'
+        ctx.fillText('independent scale', Math.min(width - 82, x + 7), 10)
+      }
+    }
+    ctx.restore()
   }
 
   private matrixMaximums(specs: readonly TrackSpec[]): ReadonlyMap<string, number> {
@@ -1120,6 +1284,7 @@ export class GenomeBrowser {
     width: number,
     palette: CanvasPalette,
     domain?: { min: number; max: number },
+    splitDomain?: SplitScaleDomain,
   ): number {
     const ctx = this.context
     const bottom = top + height
@@ -1144,13 +1309,14 @@ export class GenomeBrowser {
       : spec.allowNegativeValues === false
         ? rawVisible.map((feature) => ({ ...feature, score: Math.max(0, feature.score) }))
         : rawVisible
-    let previewMin = domain?.min ?? 0
-    let previewMax = domain?.max ?? 0
-    if (!domain) for (const feature of visible) { previewMin = Math.min(previewMin, feature.score); previewMax = Math.max(previewMax, feature.score) }
-    const previewScaleValue = previewMax !== 0 ? previewMax : previewMin !== 0 ? Math.abs(previewMin) : 0
-    const previewMaxLabel = visible.length && previewScaleValue !== 0 ? formatScore(previewScaleValue) : undefined
+    const previewDomains = splitDomain ? [splitDomain.left, splitDomain.right].filter((item): item is ScaleDomain => Boolean(item)) : domain ? [domain] : []
+    let previewMin = previewDomains.length ? Math.min(...previewDomains.map((item) => item.min)) : 0
+    let previewMax = previewDomains.length ? Math.max(...previewDomains.map((item) => item.max)) : 0
+    if (!previewDomains.length) for (const feature of visible) { previewMin = Math.min(previewMin, feature.score); previewMax = Math.max(previewMax, feature.score) }
+    const previewScaleValues = previewDomains.length ? previewDomains.map(signalDomainScaleValue) : [previewMax !== 0 ? previewMax : previewMin !== 0 ? Math.abs(previewMin) : 0]
+    const previewMaxLabels = visible.length ? previewScaleValues.filter((value) => value !== 0).map(formatScore) : []
     ctx.font = '10px ui-monospace, SFMono-Regular, Consolas, monospace'
-    const scaleLaneWidth = previewMaxLabel ? Math.max(SCALE_LANE_MIN_WIDTH, Math.ceil(ctx.measureText(previewMaxLabel).width) + 12) : 0
+    const scaleLaneWidth = previewMaxLabels.length ? Math.max(SCALE_LANE_MIN_WIDTH, ...previewMaxLabels.map((label) => Math.ceil(ctx.measureText(label).width) + 12)) : 0
 
     ctx.fillStyle = palette.ink
     ctx.font = '600 12px Inter, system-ui, sans-serif'
@@ -1176,54 +1342,36 @@ export class GenomeBrowser {
     }
 
     const bins = binFeatures(visible, this.region, Math.floor(plotWidth))
-    let min = domain?.min ?? 0
-    let max = domain?.max ?? 0
-    if (!domain) for (const bin of bins) {
-      if (!bin) continue
-      min = Math.min(min, bin.min)
-      max = Math.max(max, bin.max)
-    }
-    const amplitude = Math.max(1e-9, max - min)
     const binding = spec.scaleBindingId ? this.document.scales.find((scale) => scale.id === spec.scaleBindingId) : undefined
     const transform = binding?.transform ?? 'linear'
-    const transformedMin = signalTransform(min, transform)
-    const transformedMax = signalTransform(max, transform)
-    const transformedAmplitude = Math.max(1e-9, transformedMax - transformedMin)
-    const { top: chartTop, bottom: chartBottom } = signalChartBounds(top, bottom, min >= 0 && spec.signalStrand !== 'minus')
-    const chartHeight = chartBottom - chartTop
-    const rawZeroY = chartBottom - ((0 - min) / amplitude) * chartHeight
-    const zeroY = spec.signalStrand === 'minus' ? chartTop : Math.max(chartTop, Math.min(chartBottom, rawZeroY))
-
-    if (min <= 0 && max >= 0) {
-      ctx.strokeStyle = palette.zero
-      ctx.beginPath()
-      ctx.moveTo(PLOT_LEFT, zeroY)
-      ctx.lineTo(width, zeroY)
-      ctx.stroke()
+    const fallbackDomain = resolvedSignalDomain(bins, domain)
+    const divider = splitDomain ? this.visibleComparisonDivider() : undefined
+    const activeDomains = divider === undefined
+      ? [{ domain: fallbackDomain, x1: PLOT_LEFT, x2: width, side: '' }]
+      : [
+          { domain: splitDomain?.left ?? fallbackDomain, x1: PLOT_LEFT, x2: this.plotX(this.context === this.bottomContext ? this.bottomCanvas : this.canvas, divider), side: 'L' },
+          { domain: splitDomain?.right ?? fallbackDomain, x1: this.plotX(this.context === this.bottomContext ? this.bottomCanvas : this.canvas, divider), x2: width, side: 'R' },
+        ]
+    const allNonnegative = activeDomains.every((item) => item.domain.min >= 0)
+    const { top: chartTop, bottom: chartBottom } = signalChartBounds(top, bottom, allNonnegative && spec.signalStrand !== 'minus')
+    for (const item of activeDomains) paintSignalDomain(ctx, bins, spec, item.domain, transform, chartTop, chartBottom, item.x1, item.x2, palette)
+    if (divider !== undefined) {
+      ctx.fillStyle = palette.axisInk
+      ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
+      for (const item of activeDomains) {
+        const value = signalDomainScaleValue(item.domain)
+        if (value && item.x2 - item.x1 >= 48) ctx.fillText(`${item.side} ${formatScore(value)}`, item.x1 + 5, chartTop + 10)
+      }
     }
-    drawSignalBins(
-      ctx,
-      bins,
-      PLOT_LEFT,
-      chartTop,
-      chartBottom,
-      zeroY,
-      (value) => spec.signalStrand === 'minus'
-        ? chartTop + (signalTransform(value, transform) / Math.max(1e-9, transformedMax)) * chartHeight
-        : chartBottom - ((signalTransform(value, transform) - transformedMin) / transformedAmplitude) * chartHeight,
-      spec.color,
-      spec.signalRenderStyle ?? 'fill',
-      (spec.signalOpacity ?? 100) / 100,
-    )
-    const scaleValue = max !== 0 ? max : min !== 0 ? Math.abs(min) : 0
-    if (scaleValue !== 0) {
+    const scaleValue = signalDomainScaleValue(fallbackDomain)
+    if (divider === undefined && scaleValue !== 0) {
       const maxLabel = formatScore(scaleValue)
       ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
       ctx.strokeStyle = palette.axisLine
       ctx.lineWidth = 1
       ctx.fillStyle = palette.axisInk
       ctx.textAlign = 'right'
-      const scaleAtBottom = spec.signalStrand === 'minus' || (max === 0 && min < 0)
+      const scaleAtBottom = spec.signalStrand === 'minus' || (fallbackDomain.max === 0 && fallbackDomain.min < 0)
       const tickY = scaleAtBottom ? chartBottom - 0.5 : chartTop + 0.5
       ctx.textBaseline = 'middle'
       ctx.fillText(maxLabel, LABEL_WIDTH - 8, tickY)
@@ -1248,6 +1396,8 @@ export class GenomeBrowser {
     palette: CanvasPalette,
     plusDomain?: { min: number; max: number },
     minusDomain?: { min: number; max: number },
+    plusSplit?: SplitScaleDomain,
+    minusSplit?: SplitScaleDomain,
   ): number {
     const ctx = this.context
     const bottom = top + height
@@ -1266,9 +1416,16 @@ export class GenomeBrowser {
       .map((feature) => ({ ...feature, score: Math.abs(feature.score) }))
     const plusMax = plusDomain?.max ?? maximumMagnitude(plusVisible)
     const minusMax = minusDomain?.max ?? maximumMagnitude(minusVisible)
+    const divider = plusSplit || minusSplit ? this.visibleComparisonDivider() : undefined
+    const sideMagnitudes = divider === undefined ? undefined : {
+      left: { plus: plusSplit?.left?.max ?? plusMax, minus: minusSplit?.left?.max ?? minusMax },
+      right: { plus: plusSplit?.right?.max ?? plusMax, minus: minusSplit?.right?.max ?? minusMax },
+    }
     const plusBinding = spec.scaleBindingId ? this.document.scales.find((scale) => scale.id === spec.scaleBindingId) : undefined
     const minusBinding = spec.negativeScaleBindingId ? this.document.scales.find((scale) => scale.id === spec.negativeScaleBindingId) : undefined
-    const labels = [plusMax, minusMax].filter((value) => value > 0).map(formatScore)
+    const labels = (sideMagnitudes
+      ? [sideMagnitudes.left.plus, sideMagnitudes.left.minus, sideMagnitudes.right.plus, sideMagnitudes.right.minus]
+      : [plusMax, minusMax]).filter((value) => value > 0).map(formatScore)
     ctx.font = '10px ui-monospace, SFMono-Regular, Consolas, monospace'
     const scaleLaneWidth = labels.length ? Math.max(SCALE_LANE_MIN_WIDTH, ...labels.map((label) => Math.ceil(ctx.measureText(label).width) + 12)) : 0
     ctx.fillStyle = palette.ink
@@ -1281,7 +1438,7 @@ export class GenomeBrowser {
     const zeroY = chartTop + (chartBottom - chartTop) / 2
     ctx.strokeStyle = palette.zero
     ctx.beginPath(); ctx.moveTo(PLOT_LEFT, zeroY + 0.5); ctx.lineTo(width, zeroY + 0.5); ctx.stroke()
-    if (scaleLaneWidth) {
+    if (scaleLaneWidth && divider === undefined) {
       ctx.strokeStyle = palette.axisLine
       ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
       ctx.fillStyle = palette.axisInk
@@ -1296,8 +1453,20 @@ export class GenomeBrowser {
       if (minusMax > 0) { ctx.moveTo(LABEL_WIDTH - 7, chartBottom - 0.5); ctx.lineTo(LABEL_WIDTH + 7, chartBottom - 0.5) }
       ctx.stroke()
     }
-    drawMagnitudeBins(ctx, binFeatures(plusVisible, this.region, Math.floor(plotWidth)), PLOT_LEFT, chartTop, zeroY, Math.max(1e-9, plusMax), spec.color, false, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 100) / 100, plusBinding?.transform ?? 'linear')
-    drawMagnitudeBins(ctx, binFeatures(minusVisible, this.region, Math.floor(plotWidth)), PLOT_LEFT, zeroY, chartBottom, Math.max(1e-9, minusMax), spec.negativeColor ?? spec.color, true, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 100) / 100, minusBinding?.transform ?? 'linear')
+    const plusBins = binFeatures(plusVisible, this.region, Math.floor(plotWidth))
+    const minusBins = binFeatures(minusVisible, this.region, Math.floor(plotWidth))
+    if (divider === undefined || !sideMagnitudes) {
+      drawMagnitudeBins(ctx, plusBins, PLOT_LEFT, chartTop, zeroY, Math.max(1e-9, plusMax), spec.color, false, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 100) / 100, plusBinding?.transform ?? 'linear')
+      drawMagnitudeBins(ctx, minusBins, PLOT_LEFT, zeroY, chartBottom, Math.max(1e-9, minusMax), spec.negativeColor ?? spec.color, true, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 100) / 100, minusBinding?.transform ?? 'linear')
+    } else {
+      const dividerX = this.plotX(this.context === this.bottomContext ? this.bottomCanvas : this.canvas, divider)
+      paintMagnitudeSide(ctx, plusBins, minusBins, spec, chartTop, zeroY, chartBottom, PLOT_LEFT, dividerX, sideMagnitudes.left, plusBinding?.transform ?? 'linear', minusBinding?.transform ?? 'linear')
+      paintMagnitudeSide(ctx, plusBins, minusBins, spec, chartTop, zeroY, chartBottom, dividerX, width, sideMagnitudes.right, plusBinding?.transform ?? 'linear', minusBinding?.transform ?? 'linear')
+      ctx.fillStyle = palette.axisInk
+      ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
+      if (dividerX - PLOT_LEFT >= 100) ctx.fillText(`L +${formatScore(sideMagnitudes.left.plus)} / −${formatScore(sideMagnitudes.left.minus)}`, PLOT_LEFT + 5, chartTop + 10)
+      if (width - dividerX >= 100) ctx.fillText(`R +${formatScore(sideMagnitudes.right.plus)} / −${formatScore(sideMagnitudes.right.minus)}`, dividerX + 5, chartTop + 10)
+    }
 
     const problems = [plus, minus].filter((runtime) => runtime.status === 'offline' || runtime.status === 'error')
     if (problems.length) {
@@ -1895,30 +2064,45 @@ export class GenomeBrowser {
 
   private drawBamCoverage(features: AlignmentCoverageFeature[], color: string, top: number, height: number, width: number, palette: CanvasPalette, minimumAlleleFrequency: number): void {
     const ctx = this.context
-    const max = Math.max(1, ...features.map((feature) => feature.score))
     const scaleX = (width - PLOT_LEFT) / (this.region.end - this.region.start)
-    ctx.fillStyle = color
-    ctx.globalAlpha = 0.76
-    for (const feature of features) {
-      if (feature.score <= 0) continue
-      const x1 = Math.max(PLOT_LEFT, PLOT_LEFT + (feature.start - this.region.start) * scaleX)
-      const x2 = Math.min(width, PLOT_LEFT + (feature.end - this.region.start) * scaleX)
-      const barHeight = (feature.score / max) * (height - 11)
-      ctx.fillRect(x1, top + height - barHeight, Math.max(1, x2 - x1), barHeight)
-      if ((feature.alleleFrequency ?? 0) >= minimumAlleleFrequency && (feature.alleleFrequency ?? 0) > 0) {
-        ctx.fillStyle = '#ef8f2f'
-        ctx.globalAlpha = 0.88
-        ctx.fillRect(x1, top + height - barHeight, Math.max(1, x2 - x1), Math.max(2, barHeight * (feature.alleleFrequency ?? 0)))
-        ctx.fillStyle = color
-        ctx.globalAlpha = 0.76
+    const divider = this.visibleComparisonDivider()
+    const maximum = (selected: readonly AlignmentCoverageFeature[]) => Math.max(1, ...selected.map((feature) => feature.score))
+    const overallMax = maximum(features)
+    const dividerX = divider === undefined ? undefined : PLOT_LEFT + (divider - this.region.start) * scaleX
+    const sides = divider === undefined || dividerX === undefined
+      ? [{ x1: PLOT_LEFT, x2: width, max: overallMax, label: '' }]
+      : [
+          { x1: PLOT_LEFT, x2: dividerX, max: maximum(features.filter((feature) => feature.start < divider)), label: 'L ' },
+          { x1: dividerX, x2: width, max: maximum(features.filter((feature) => feature.end > divider)), label: 'R ' },
+        ]
+    for (const side of sides) {
+      ctx.save()
+      ctx.beginPath(); ctx.rect(side.x1, top, Math.max(0, side.x2 - side.x1), height); ctx.clip()
+      ctx.fillStyle = color
+      ctx.globalAlpha = 0.76
+      for (const feature of features) {
+        if (feature.score <= 0) continue
+        const x1 = Math.max(PLOT_LEFT, PLOT_LEFT + (feature.start - this.region.start) * scaleX)
+        const x2 = Math.min(width, PLOT_LEFT + (feature.end - this.region.start) * scaleX)
+        const barHeight = (feature.score / side.max) * (height - 11)
+        ctx.fillRect(x1, top + height - barHeight, Math.max(1, x2 - x1), barHeight)
+        if ((feature.alleleFrequency ?? 0) >= minimumAlleleFrequency && (feature.alleleFrequency ?? 0) > 0) {
+          ctx.fillStyle = '#ef8f2f'
+          ctx.globalAlpha = 0.88
+          ctx.fillRect(x1, top + height - barHeight, Math.max(1, x2 - x1), Math.max(2, barHeight * (feature.alleleFrequency ?? 0)))
+          ctx.fillStyle = color
+          ctx.globalAlpha = 0.76
+        }
       }
+      ctx.restore()
+      ctx.fillStyle = palette.axisInk
+      ctx.globalAlpha = 1
+      ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
+      if (side.x2 - side.x1 >= 40) ctx.fillText(`${side.label}${formatScore(side.max)}`, side.x1 + 4, top + 9)
     }
     ctx.globalAlpha = 1
     ctx.strokeStyle = palette.axisLine
     ctx.beginPath(); ctx.moveTo(PLOT_LEFT, top + height + 0.5); ctx.lineTo(width, top + height + 0.5); ctx.stroke()
-    ctx.fillStyle = palette.axisInk
-    ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
-    ctx.fillText(formatScore(max), PLOT_LEFT + 4, top + 9)
   }
 
   private drawBamReads(features: AlignmentFeature[], spec: TrackSpec, top: number, bottom: number, width: number, palette: CanvasPalette): void {
@@ -3238,6 +3422,28 @@ function drawMagnitudeBins(
   ctx.globalAlpha = 1
 }
 
+function paintMagnitudeSide(
+  ctx: CanvasRenderingContext2D,
+  plusBins: readonly ({ min: number; max: number } | undefined)[],
+  minusBins: readonly ({ min: number; max: number } | undefined)[],
+  spec: TrackSpec,
+  chartTop: number,
+  zeroY: number,
+  chartBottom: number,
+  clipStart: number,
+  clipEnd: number,
+  maximums: { plus: number; minus: number },
+  plusTransform: 'linear' | 'log1p' | 'symlog',
+  minusTransform: 'linear' | 'log1p' | 'symlog',
+): void {
+  if (clipEnd <= clipStart) return
+  ctx.save()
+  ctx.beginPath(); ctx.rect(clipStart, chartTop, clipEnd - clipStart, chartBottom - chartTop); ctx.clip()
+  drawMagnitudeBins(ctx, plusBins, PLOT_LEFT, chartTop, zeroY, Math.max(1e-9, maximums.plus), spec.color, false, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 100) / 100, plusTransform)
+  drawMagnitudeBins(ctx, minusBins, PLOT_LEFT, zeroY, chartBottom, Math.max(1e-9, maximums.minus), spec.negativeColor ?? spec.color, true, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 100) / 100, minusTransform)
+  ctx.restore()
+}
+
 function drawSignalBins(
   ctx: CanvasRenderingContext2D,
   bins: readonly (Bin | undefined)[],
@@ -3456,6 +3662,59 @@ function canvasPalette(): CanvasPalette {
 }
 
 interface Bin { min: number; max: number }
+
+function resolvedSignalDomain(bins: readonly (Bin | undefined)[], domain?: ScaleDomain): ScaleDomain {
+  if (domain) return domain
+  let min = 0
+  let max = 0
+  for (const bin of bins) {
+    if (!bin) continue
+    min = Math.min(min, bin.min)
+    max = Math.max(max, bin.max)
+  }
+  if (min === max) max = min + 1
+  return { min, max }
+}
+
+function signalDomainScaleValue(domain: ScaleDomain): number {
+  return domain.max !== 0 ? domain.max : domain.min !== 0 ? Math.abs(domain.min) : 0
+}
+
+function paintSignalDomain(
+  ctx: CanvasRenderingContext2D,
+  bins: readonly (Bin | undefined)[],
+  spec: TrackSpec,
+  domain: ScaleDomain,
+  transform: 'linear' | 'log1p' | 'symlog',
+  chartTop: number,
+  chartBottom: number,
+  clipStart: number,
+  clipEnd: number,
+  palette: CanvasPalette,
+): void {
+  if (clipEnd <= clipStart) return
+  const amplitude = Math.max(1e-9, domain.max - domain.min)
+  const transformedMin = signalTransform(domain.min, transform)
+  const transformedMax = signalTransform(domain.max, transform)
+  const transformedAmplitude = Math.max(1e-9, transformedMax - transformedMin)
+  const chartHeight = chartBottom - chartTop
+  const rawZeroY = chartBottom - ((0 - domain.min) / amplitude) * chartHeight
+  const zeroY = spec.signalStrand === 'minus' ? chartTop : Math.max(chartTop, Math.min(chartBottom, rawZeroY))
+  ctx.save()
+  ctx.beginPath(); ctx.rect(clipStart, chartTop, clipEnd - clipStart, chartHeight); ctx.clip()
+  if (domain.min <= 0 && domain.max >= 0) {
+    ctx.strokeStyle = palette.zero
+    ctx.beginPath(); ctx.moveTo(clipStart, zeroY); ctx.lineTo(clipEnd, zeroY); ctx.stroke()
+  }
+  drawSignalBins(
+    ctx, bins, PLOT_LEFT, chartTop, chartBottom, zeroY,
+    (value) => spec.signalStrand === 'minus'
+      ? chartTop + (signalTransform(value, transform) / Math.max(1e-9, transformedMax)) * chartHeight
+      : chartBottom - ((signalTransform(value, transform) - transformedMin) / transformedAmplitude) * chartHeight,
+    spec.color, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 100) / 100,
+  )
+  ctx.restore()
+}
 
 function binFeatures(features: SignalFeature[], region: Region, width: number): Array<Bin | undefined> {
   const bins: Array<Bin | undefined> = new Array(Math.max(1, width))

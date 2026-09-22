@@ -48,6 +48,8 @@ interface TrackDocument {
   tracks: TrackSpec[]
   groups: DisplayGroup[]
   scales: ScaleBinding[]
+  savedRegions: SavedRegion[]
+  comparisonDivider?: { chr: string; position: number }
   annotations: AnnotationObject[]
 }
 
