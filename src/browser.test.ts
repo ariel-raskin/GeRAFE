@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionFeatures, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionFeatures, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixRegionHighlightPolygon, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
 import type { AlignmentFeature, InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
@@ -249,6 +249,15 @@ describe('contact-matrix rendering helpers', () => {
   it('keeps an upward matrix baseline and clip inside its bottom track boundary', () => {
     expect(matrixVerticalGeometry(100, 220, 'up')).toEqual({ baseline: 219.5, clipTop: 100.5, clipBottom: 219.5 })
     expect(matrixVerticalGeometry(100, 220, 'down').baseline).toBe(100.5)
+  })
+
+  it('maps a saved interval to the cis-matrix triangle where both anchors are inside', () => {
+    expect(matrixRegionHighlightPolygon(200, 400, 300, -1, 500)).toEqual([
+      { x: 200, y: 300 }, { x: 400, y: 300 }, { x: 300, y: 200 }, { x: 300, y: 200 },
+    ])
+    expect(matrixRegionHighlightPolygon(200, 400, 100, 1, 40)).toEqual([
+      { x: 200, y: 100 }, { x: 400, y: 100 }, { x: 360, y: 140 }, { x: 240, y: 140 },
+    ])
   })
 
   it('distinguishes values, sparse zeros, explicit missing pixels, and masked bins', () => {

@@ -170,8 +170,10 @@ app.innerHTML = `
           <button class="menu-item" type="button" data-region-action="select"><span>Select highlighted region…</span></button>
           <button class="menu-item" type="button" data-region-action="save-current"><span>Save current view…</span></button>
           <span class="menu-separator"></span>
-          <button class="menu-item" type="button" data-region-action="place-divider"><span>Place comparison divider…</span><small id="comparison-divider-locus"></small></button>
-          <button class="menu-item" id="clear-comparison-divider" type="button" data-region-action="clear-divider"><span>Clear comparison divider</span></button>
+          <button class="menu-item" type="button" data-region-action="place-divider"><span>Place comparison divider…</span></button>
+          <button class="menu-item" id="clear-comparison-dividers" type="button" data-region-action="clear-dividers"><span>Clear all comparison dividers</span></button>
+          <div class="region-menu-heading">Comparison dividers</div>
+          <div id="comparison-divider-items"></div>
           <span class="menu-separator"></span>
           <div class="region-menu-heading">Saved regions</div>
           <div id="saved-region-items"></div>
@@ -428,8 +430,8 @@ const regionMenuButton = document.querySelector<HTMLButtonElement>('#region-menu
 const regionMenuCount = document.querySelector<HTMLElement>('#region-menu-count')!
 const regionMenuPopup = document.querySelector<HTMLElement>('#region-menu-popup')!
 const savedRegionItems = document.querySelector<HTMLElement>('#saved-region-items')!
-const comparisonDividerLocus = document.querySelector<HTMLElement>('#comparison-divider-locus')!
-const clearComparisonDivider = document.querySelector<HTMLButtonElement>('#clear-comparison-divider')!
+const comparisonDividerItems = document.querySelector<HTMLElement>('#comparison-divider-items')!
+const clearComparisonDividers = document.querySelector<HTMLButtonElement>('#clear-comparison-dividers')!
 
 const runtimeSources = new Map<string, TrackSource>()
 const selectedTrackIds = new Set<string>()
@@ -441,6 +443,7 @@ let pendingRelinkChannel: 'plus' | 'minus' | undefined
 let pendingOpenGroupId: string | undefined
 let pendingColorGroupId: string | undefined
 let pendingColorChannel: SignalScaleChannel | undefined
+let pendingColorRequest: ((color?: string) => void) | undefined
 let pendingMatrixTrackIds: string[] = []
 let pendingMatrixGroupId: string | undefined
 let matrixDialogColors: string[] = []
@@ -483,10 +486,16 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
   onRegionSelected(region) {
     void saveBrowserRegion(region)
   },
-  onComparisonDividerChange(position) {
+  onComparisonDividerCreate(position) {
     store.edit((draft) => {
-      draft.comparisonDivider = position === undefined ? undefined : { chr: browser.getRegion().chr, position }
+      draft.comparisonDividers.push({
+        id: crypto.randomUUID(), chr: browser.getRegion().chr, position,
+        color: TRACK_COLORS[draft.comparisonDividers.length % TRACK_COLORS.length],
+      })
     })
+  },
+  onComparisonDividerMove(id, position) {
+    store.edit((draft) => { const divider = draft.comparisonDividers.find((item) => item.id === id); if (divider) divider.position = position })
   },
   onRegionToolModeChange(mode) {
     activeRegionTool = mode
@@ -850,6 +859,13 @@ colorDialogForm.addEventListener('submit', (event) => {
   event.preventDefault()
   const color = normalizedHexColor(trackColorInput.value)
   if (!color) return trackColorInput.focus()
+  if (pendingColorRequest) {
+    const resolve = pendingColorRequest
+    pendingColorRequest = undefined
+    closeColorDialog()
+    resolve(color)
+    return
+  }
   const groupId = pendingColorGroupId
   const channel = pendingColorChannel
   pendingColorGroupId = undefined
@@ -1270,9 +1286,18 @@ function renderRegionMenu(): void {
   regionMenuButton.title = activeRegionTool === 'select' ? 'Drag across the ruler or track area to save a region'
     : activeRegionTool === 'divider' ? 'Click in the ruler or track area to place the comparison divider'
       : 'Select, save, and revisit genomic regions'
-  const divider = store.current.comparisonDivider
-  comparisonDividerLocus.textContent = divider ? `${divider.chr}:${(divider.position + 1).toLocaleString()}` : ''
-  clearComparisonDivider.disabled = !divider
+  const dividers = store.current.comparisonDividers
+  clearComparisonDividers.disabled = !dividers.length
+  comparisonDividerItems.innerHTML = dividers.length ? dividers.map((divider, index) => {
+    const id = encodeURIComponent(divider.id)
+    return `<div class="saved-region-row">
+      <button class="saved-region-go" type="button" data-divider-go="${id}" title="Center comparison divider">
+        <i style="background:${escapeHtml(divider.color)}"></i><span><strong>Divider ${index + 1}</strong><small>${escapeHtml(`${divider.chr}:${(divider.position + 1).toLocaleString()}`)}</small></span>
+      </button>
+      <button class="saved-region-icon" type="button" data-divider-color="${id}" title="Set divider color" aria-label="Set divider ${index + 1} color">●</button>
+      <button class="saved-region-icon remove" type="button" data-divider-remove="${id}" title="Remove divider" aria-label="Remove divider ${index + 1}">×</button>
+    </div>`
+  }).join('') : '<p class="saved-region-empty">No comparison dividers yet.</p>'
   savedRegionItems.innerHTML = regions.length ? regions.map((saved) => {
     const id = encodeURIComponent(saved.id)
     return `<div class="saved-region-row">
@@ -1295,11 +1320,29 @@ async function handleRegionMenuAction(event: Event): Promise<void> {
     if (action === 'select') browser.setRegionToolMode('select')
     else if (action === 'save-current') await saveBrowserRegion(browser.getRegion())
     else if (action === 'place-divider') browser.setRegionToolMode('divider')
-    else if (action === 'clear-divider') store.edit((draft) => { delete draft.comparisonDivider })
+    else if (action === 'clear-dividers') store.edit((draft) => { draft.comparisonDividers = [] })
     return
   }
-  const button = target.closest<HTMLButtonElement>('[data-region-go], [data-region-toggle], [data-region-color], [data-region-rename], [data-region-remove]')
+  const button = target.closest<HTMLButtonElement>('[data-region-go], [data-region-toggle], [data-region-color], [data-region-rename], [data-region-remove], [data-divider-go], [data-divider-color], [data-divider-remove]')
   if (!button) return
+  const encodedDividerId = button.dataset.dividerGo ?? button.dataset.dividerColor ?? button.dataset.dividerRemove
+  if (encodedDividerId) {
+    const dividerId = decodeURIComponent(encodedDividerId)
+    const divider = store.current.comparisonDividers.find((item) => item.id === dividerId)
+    if (!divider) return
+    closeMenus()
+    if (button.dataset.dividerGo !== undefined) {
+      const current = browser.getRegion()
+      const span = current.end - current.start
+      browser.setRegion({ chr: divider.chr, start: divider.position - span / 2, end: divider.position + span / 2 })
+    } else if (button.dataset.dividerRemove !== undefined) {
+      store.edit((draft) => { draft.comparisonDividers = draft.comparisonDividers.filter((item) => item.id !== dividerId) })
+    } else {
+      const color = await requestColor('Set comparison divider color', divider.color)
+      if (color) store.edit((draft) => { const item = draft.comparisonDividers.find((candidate) => candidate.id === dividerId); if (item) item.color = color })
+    }
+    return
+  }
   const encodedId = button.dataset.regionGo ?? button.dataset.regionToggle ?? button.dataset.regionColor ?? button.dataset.regionRename ?? button.dataset.regionRemove
   if (!encodedId) return
   const id = decodeURIComponent(encodedId)
@@ -1324,10 +1367,8 @@ async function handleRegionMenuAction(event: Event): Promise<void> {
     if (label) store.edit((draft) => { const region = draft.savedRegions.find((item) => item.id === id); if (region) region.label = label })
     return
   }
-  const color = await requestText({ title: 'Set highlight color', label: 'Hex color', initial: saved.color, placeholder: '#6d55e0', submitLabel: 'Set color',
-    validate: (value) => normalizedHexColor(value) ? undefined : 'Enter a six-digit hex color such as #6d55e0.' })
-  const normalized = color ? normalizedHexColor(color) : undefined
-  if (normalized) store.edit((draft) => { const region = draft.savedRegions.find((item) => item.id === id); if (region) region.color = normalized })
+  const color = await requestColor('Set region highlight color', saved.color)
+  if (color) store.edit((draft) => { const region = draft.savedRegions.find((item) => item.id === id); if (region) region.color = color })
 }
 
 async function saveBrowserRegion(region: Region): Promise<void> {
@@ -1361,9 +1402,9 @@ async function switchReference(id: string): Promise<void> {
     const start = Math.max(0, Math.min(current.start, length - span))
     browser.setRegion({ chr, start, end: start + span })
   } else browser.setRegion(defaultRegion(reference))
-  if (previousReferenceId !== reference.id && (store.current.savedRegions.length || store.current.comparisonDivider)) {
-    store.edit((draft) => { draft.savedRegions = []; delete draft.comparisonDivider })
-    showToast('Cleared saved regions and the comparison divider for the new reference.')
+  if (previousReferenceId !== reference.id && (store.current.savedRegions.length || store.current.comparisonDividers.length)) {
+    store.edit((draft) => { draft.savedRegions = []; draft.comparisonDividers = [] })
+    showToast('Cleared saved regions and comparison dividers for the new reference.')
   }
   await activateGeneTrack(reference)
   localStorage.setItem(WORKSPACE_KEY, JSON.stringify(store.current))
@@ -2737,6 +2778,13 @@ function openColorDialog(title: string, initialColor: string): void {
   window.setTimeout(() => trackColorInput.focus(), 0)
 }
 
+function requestColor(title: string, initialColor: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    pendingColorRequest = resolve
+    openColorDialog(title, initialColor)
+  })
+}
+
 function requestText(options: {
   title: string
   label: string
@@ -2814,7 +2862,7 @@ function closeActionDialog(value: string | boolean | undefined): void {
 }
 
 function showInteractionGuide(): Promise<void> {
-  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click to select additional tracks and Shift+click to select a range; clicking or right-clicking a group card adds all of its tracks. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for a quarter second before dragging its height. Drag horizontally anywhere in the track area, including blank space, to pan. The mouse wheel scrolls; Ctrl+wheel zooms. Use Regions to select and save highlighted intervals or place an independently scaled comparison divider. Right-click a track or group card for options.')
+  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click to select additional tracks and Shift+click to select a range; clicking or right-clicking a group card adds all of its tracks. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for a quarter second before dragging its height. Drag horizontally anywhere in the track area, including blank space, to pan. The mouse wheel scrolls; Ctrl+wheel zooms. Use Regions to save highlighted intervals or place multiple colored, independently scaled comparison dividers. Matrix highlights follow triangular cis geometry. Right-click a track or group card for options.')
 }
 
 function showFirstRunInteractionHint(): void {
@@ -2841,9 +2889,12 @@ function setTrackChannelColor(track: TrackSpec, channel: SignalScaleChannel | un
 }
 
 function closeColorDialog(): void {
+  const resolve = pendingColorRequest
+  pendingColorRequest = undefined
   colorDialog.hidden = true
   pendingColorGroupId = undefined
   pendingColorChannel = undefined
+  resolve?.(undefined)
 }
 
 function openUpdateDialog(): void {

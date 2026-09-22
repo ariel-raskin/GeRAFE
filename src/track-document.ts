@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 26 as const
+export const TRACK_DOCUMENT_VERSION = 27 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -64,8 +64,10 @@ export interface SavedRegion {
 }
 
 export interface ComparisonDivider {
+  id: string
   chr: string
   position: number
+  color: string
 }
 
 export interface ScaleBinding {
@@ -197,7 +199,7 @@ export interface TrackDocument {
   groups: DisplayGroup[]
   scales: ScaleBinding[]
   savedRegions: SavedRegion[]
-  comparisonDivider?: ComparisonDivider
+  comparisonDividers: ComparisonDivider[]
 }
 
 export type DocumentChangeReason = 'edit' | 'undo' | 'redo' | 'replace' | 'viewport'
@@ -289,6 +291,7 @@ export function createTrackDocument(referenceId: string, region: Region, options
     groups: [],
     scales: [],
     savedRegions: [],
+    comparisonDividers: [],
   }
 }
 
@@ -769,8 +772,32 @@ export function computeSplitScaleDomains(
   return { left: computeScaleDomains(document, left), right: computeScaleDomains(document, right) }
 }
 
+export interface ScaleDomainSegment {
+  start: number
+  end: number
+  domains: ReadonlyMap<string, { min: number; max: number }>
+}
+
+export function computeSegmentScaleDomains(
+  document: TrackDocument,
+  featuresByTrack: ReadonlyMap<string, readonly SignalFeature[]>,
+  region: Pick<Region, 'start' | 'end'>,
+  dividers: readonly number[],
+): ScaleDomainSegment[] {
+  const interior = [...new Set(dividers.filter((position) => position > region.start && position < region.end))].sort((a, b) => a - b)
+  const boundaries = [region.start, ...interior, region.end]
+  return boundaries.slice(0, -1).map((start, index) => {
+    const end = boundaries[index + 1]!
+    const segmentFeatures = new Map<string, readonly SignalFeature[]>()
+    for (const [trackId, features] of featuresByTrack) {
+      segmentFeatures.set(trackId, features.filter((feature) => feature.end > start && feature.start < end))
+    }
+    return { start, end, domains: computeScaleDomains(document, segmentFeatures) }
+  })
+}
+
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -788,11 +815,21 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
       highlighted: saved.highlighted !== false,
     }]
   }).slice(0, 500) : []
-  const comparisonDivider = isRecord(value.comparisonDivider) && typeof value.comparisonDivider.chr === 'string'
-    && value.comparisonDivider.chr.trim() && typeof value.comparisonDivider.position === 'number'
-    && Number.isFinite(value.comparisonDivider.position) && value.comparisonDivider.position >= 0
-    ? { chr: value.comparisonDivider.chr, position: Math.round(value.comparisonDivider.position) }
-    : undefined
+  const dividerIds = new Set<string>()
+  const rawDividers = Array.isArray(value.comparisonDividers) ? value.comparisonDividers
+    : isRecord(value.comparisonDivider) ? [{ ...value.comparisonDivider, id: 'comparison-divider-legacy', color: '#ee7b2d' }] : []
+  const comparisonDividers: ComparisonDivider[] = rawDividers.flatMap((divider): ComparisonDivider[] => {
+    if (!isRecord(divider) || typeof divider.id !== 'string' || !divider.id.trim() || dividerIds.has(divider.id)
+      || typeof divider.chr !== 'string' || !divider.chr.trim() || typeof divider.position !== 'number'
+      || !Number.isFinite(divider.position) || divider.position < 0) return []
+    dividerIds.add(divider.id)
+    return [{
+      id: divider.id,
+      chr: divider.chr,
+      position: Math.round(divider.position),
+      color: typeof divider.color === 'string' && /^#[0-9a-f]{6}$/i.test(divider.color) ? divider.color.toLowerCase() : '#ee7b2d',
+    }]
+  }).slice(0, 50)
   const sourceIds = new Set(sources.map((source) => source.id))
   const groupIds = new Set(groups.map((group) => group.id))
   const scaleIds = new Set(scales.map((scale) => scale.id))
@@ -956,7 +993,7 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     groups,
     scales,
     savedRegions,
-    comparisonDivider,
+    comparisonDividers,
   }
   for (const track of document.tracks) {
     const sourceFormat = document.sources.find((source) => track.sourceIds.includes(source.id))?.format

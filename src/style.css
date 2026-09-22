@@ -349,7 +349,6 @@ button, label { -webkit-tap-highlight-color: transparent; }
 
 #genome-header {
   display: block;
-  min-width: 100%;
   cursor: var(--cursor-grab);
   touch-action: none;
   user-select: none;
@@ -376,7 +375,7 @@ button, label { -webkit-tap-highlight-color: transparent; }
 .empty-workspace-brand img { width: 100%; height: clamp(160px, 62vh, min(630px, calc(100vh - 330px))); object-fit: contain; filter: drop-shadow(0 7px 13px rgba(39, 31, 12, .22)); }
 .empty-workspace-brand strong { margin-top: 6px; padding-left: .16em; font-family: Bahnschrift, 'Segoe UI Variable Display', 'Segoe UI', sans-serif; font-size: clamp(32px, 4.5vw, 60px); font-stretch: condensed; font-weight: 650; line-height: 1.05; letter-spacing: .16em; }
 html[data-theme='dark'] .empty-workspace-brand img { filter: drop-shadow(0 3px 6px rgba(0, 0, 0, .45)); }
-#genome-canvas, #bottom-canvas { display: block; min-width: 100%; cursor: var(--cursor-grab); touch-action: none; user-select: none; }
+#genome-canvas, #bottom-canvas { display: block; cursor: var(--cursor-grab); touch-action: none; user-select: none; }
 #genome-header.is-dragging,
 #genome-canvas.is-dragging, #bottom-canvas.is-dragging { cursor: var(--cursor-grabbing); }
 #genome-canvas.is-track-dragging, #bottom-canvas.is-track-dragging { cursor: var(--cursor-grabbing); }
