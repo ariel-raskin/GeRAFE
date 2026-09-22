@@ -49,7 +49,7 @@ interface TrackDocument {
   groups: DisplayGroup[]
   scales: ScaleBinding[]
   savedRegions: SavedRegion[]
-  comparisonDivider?: { chr: string; position: number }
+  comparisonDividers: Array<{ id: string; chr: string; position: number; color: string }>
   annotations: AnnotationObject[]
 }
 

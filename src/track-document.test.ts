@@ -8,6 +8,7 @@ import {
   applyAutomaticStrandedColors,
   assignDisplayGroup,
   computeScaleDomains,
+  computeSegmentScaleDomains,
   computeSplitScaleDomains,
   createTrackDocument,
   inferSignalStrand,
@@ -113,6 +114,19 @@ describe('track document', () => {
     })
   })
 
+  it('computes one automatic scale domain for every comparison section', () => {
+    const document = documentWithTwoTracks()
+    linkScales(document, ['t1', 't2'])
+    const scaleId = document.tracks.find((track) => track.id === 't1')!.scaleBindingId!
+    const segments = computeSegmentScaleDomains(document, new Map([
+      ['t1', [{ start: 0, end: 15, score: 2 }, { start: 35, end: 45, score: 20 }, { start: 75, end: 85, score: 200 }]],
+      ['t2', [{ start: 5, end: 10, score: 4 }, { start: 40, end: 50, score: 40 }, { start: 90, end: 95, score: 400 }]],
+    ]), { start: 0, end: 100 }, [30, 70])
+    expect(segments.map((segment) => segment.domains.get(scaleId))).toEqual([
+      { min: 0, max: 4 }, { min: 0, max: 40 }, { min: 0, max: 400 },
+    ])
+  })
+
   it('normalizes reversed fixed limits', () => {
     const document = documentWithTwoTracks()
     const scaleId = document.tracks.find((track) => track.id === 't1')!.scaleBindingId!
@@ -136,18 +150,29 @@ describe('track document', () => {
     expect(store.current.tracks[0].label).toBe('renamed')
   })
 
-  it('persists valid saved regions and a comparison divider while dropping malformed entries', () => {
+  it('persists valid saved regions and comparison dividers while migrating the schema-v26 divider', () => {
     const document = documentWithTwoTracks() as any
     document.savedRegions = [
       { id: 'promoter', label: ' RUNX1 promoter ', region: { chr: 'chr21', start: 35_000_000, end: 35_010_000 }, color: '#AABBCC', highlighted: true },
       { id: 'bad', label: '', region: { chr: 'chr21', start: -1, end: 10 }, color: 'red' },
     ]
-    document.comparisonDivider = { chr: 'chr21', position: 35_005_000.4 }
+    document.comparisonDividers = [
+      { id: 'boundary-a', chr: 'chr21', position: 35_005_000.4, color: '#AABBCC' },
+      { id: 'bad', chr: '', position: -1, color: 'orange' },
+    ]
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
     expect(restored.savedRegions).toEqual([{
       id: 'promoter', label: 'RUNX1 promoter', region: { chr: 'chr21', start: 35_000_000, end: 35_010_000 }, color: '#aabbcc', highlighted: true,
     }])
-    expect(restored.comparisonDivider).toEqual({ chr: 'chr21', position: 35_005_000 })
+    expect(restored.comparisonDividers).toEqual([{ id: 'boundary-a', chr: 'chr21', position: 35_005_000, color: '#aabbcc' }])
+
+    const legacy = JSON.parse(JSON.stringify(document))
+    legacy.schemaVersion = 26
+    delete legacy.comparisonDividers
+    legacy.comparisonDivider = { chr: 'chr21', position: 35_006_000.4 }
+    expect(normalizeTrackDocument(legacy).comparisonDividers).toEqual([
+      { id: 'comparison-divider-legacy', chr: 'chr21', position: 35_006_000, color: '#ee7b2d' },
+    ])
   })
 
   it('persists exact fitted and manually resized pixel heights and upgrades version 8 workspaces', () => {
