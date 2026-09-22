@@ -327,6 +327,12 @@ button, label { -webkit-tap-highlight-color: transparent; }
 .saved-region-shade { grid-column: 1 / -1; display: grid !important; grid-template-columns: auto 1fr 30px; }
 .saved-region-shade input { min-width: 0; width: 100%; accent-color: var(--accent); }
 .saved-region-shade output { color: var(--ink); text-align: right; font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.matrix-outline-summary { cursor: default; }
+.matrix-outline-options { display: grid; grid-template-columns: 1fr; gap: 4px; max-height: 180px; overflow-y: auto; }
+.matrix-outline-options > strong { margin-bottom: 2px; color: var(--muted); font-size: 9px; letter-spacing: .03em; text-transform: uppercase; }
+.matrix-outline-options label { min-height: 23px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; }
+.matrix-outline-options label span { overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
+.matrix-outline-options label small { color: var(--muted); font-size: 8px; }
 
 .browser-body {
   position: relative;
@@ -394,7 +400,9 @@ body.is-track-dragging, body.is-track-dragging * { cursor: var(--cursor-grabbing
 #genome-canvas.is-track-resizing, #bottom-canvas.is-track-resizing,
 body.is-track-resizing, body.is-track-resizing * { cursor: var(--cursor-resize-y) !important; }
 #genome-header.is-region-selecting, #genome-canvas.is-region-selecting, #bottom-canvas.is-region-selecting,
-#genome-header.is-region-dragging, #genome-canvas.is-region-dragging, #bottom-canvas.is-region-dragging { cursor: crosshair; }
+#genome-header.is-region-dragging, #genome-canvas.is-region-dragging, #bottom-canvas.is-region-dragging,
+#genome-canvas.is-matrix-outline-selecting, #bottom-canvas.is-matrix-outline-selecting,
+#genome-canvas.is-matrix-outline-dragging, #bottom-canvas.is-matrix-outline-dragging { cursor: crosshair; }
 #genome-header.is-divider-placing, #genome-canvas.is-divider-placing, #bottom-canvas.is-divider-placing { cursor: cell; }
 #genome-header.is-region-line-hover, #genome-canvas.is-region-line-hover, #bottom-canvas.is-region-line-hover,
 #genome-header.is-divider-dragging, #genome-canvas.is-divider-dragging, #bottom-canvas.is-divider-dragging,

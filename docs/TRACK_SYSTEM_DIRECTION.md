@@ -50,6 +50,7 @@ interface TrackDocument {
   scales: ScaleBinding[]
   savedRegions: Array<SavedRegion & { boundaryStyle: 'dashed' | 'solid' | 'none'; fill: boolean; shadeOpacity: number }>
   comparisonDividers: Array<{ id: string; chr: string; position: number; color: string; lineStyle: 'dashed' | 'solid' }>
+  matrixOutlines: Array<{ id: string; label: string; axis1: Region; axis2: Region; color: string; visible: boolean; sourceTrackId: string; targetTrackIds: string[] }>
   regionSnapToMatrixBins: boolean // defaults on for new workspaces
   annotations: AnnotationObject[]
 }

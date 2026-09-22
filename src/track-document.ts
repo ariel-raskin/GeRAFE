@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 28 as const
+export const TRACK_DOCUMENT_VERSION = 29 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -72,6 +72,17 @@ export interface ComparisonDivider {
   position: number
   color: string
   lineStyle: 'dashed' | 'solid'
+}
+
+export interface MatrixOutline {
+  id: string
+  label: string
+  axis1: Region
+  axis2: Region
+  color: string
+  visible: boolean
+  sourceTrackId: string
+  targetTrackIds: string[]
 }
 
 export interface ScaleBinding {
@@ -204,6 +215,7 @@ export interface TrackDocument {
   scales: ScaleBinding[]
   savedRegions: SavedRegion[]
   comparisonDividers: ComparisonDivider[]
+  matrixOutlines: MatrixOutline[]
   regionSnapToMatrixBins: boolean
 }
 
@@ -297,6 +309,7 @@ export function createTrackDocument(referenceId: string, region: Region, options
     scales: [],
     savedRegions: [],
     comparisonDividers: [],
+    matrixOutlines: [],
     regionSnapToMatrixBins: true,
   }
 }
@@ -803,7 +816,7 @@ export function computeSegmentScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -840,6 +853,25 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
       lineStyle: divider.lineStyle === 'solid' ? 'solid' : 'dashed',
     }]
   }).slice(0, 50)
+  const matrixOutlineIds = new Set<string>()
+  const matrixOutlines: MatrixOutline[] = Array.isArray(value.matrixOutlines) ? value.matrixOutlines.flatMap((outline): MatrixOutline[] => {
+    if (!isRecord(outline) || typeof outline.id !== 'string' || !outline.id.trim() || matrixOutlineIds.has(outline.id)
+      || typeof outline.label !== 'string' || !outline.label.trim() || !isRegion(outline.axis1) || !isRegion(outline.axis2)
+      || typeof outline.sourceTrackId !== 'string' || !Array.isArray(outline.targetTrackIds)) return []
+    const targetTrackIds = [...new Set(outline.targetTrackIds.filter((id): id is string => typeof id === 'string' && Boolean(id.trim())))].slice(0, 100)
+    if (!targetTrackIds.length) return []
+    matrixOutlineIds.add(outline.id)
+    return [{
+      id: outline.id,
+      label: outline.label.trim().slice(0, 120),
+      axis1: { ...outline.axis1 },
+      axis2: { ...outline.axis2 },
+      color: typeof outline.color === 'string' && /^#[0-9a-f]{6}$/i.test(outline.color) ? outline.color.toLowerCase() : '#6d55e0',
+      visible: outline.visible !== false,
+      sourceTrackId: outline.sourceTrackId,
+      targetTrackIds,
+    }]
+  }).slice(0, 500) : []
   const sourceIds = new Set(sources.map((source) => source.id))
   const groupIds = new Set(groups.map((group) => group.id))
   const scaleIds = new Set(scales.map((scale) => scale.id))
@@ -1004,6 +1036,7 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     scales,
     savedRegions,
     comparisonDividers,
+    matrixOutlines,
     regionSnapToMatrixBins: value.regionSnapToMatrixBins === true,
   }
   for (const track of document.tracks) {
@@ -1053,6 +1086,12 @@ export function cloneDocument(document: TrackDocument): TrackDocument {
 }
 
 function pruneDocument(document: TrackDocument): void {
+  const matrixTrackIds = new Set(document.tracks.filter((track) => track.kind === 'matrix').map((track) => track.id))
+  document.matrixOutlines = document.matrixOutlines.flatMap((outline) => {
+    const targetTrackIds = outline.targetTrackIds.filter((id) => matrixTrackIds.has(id))
+    if (!targetTrackIds.length) return []
+    return [{ ...outline, sourceTrackId: matrixTrackIds.has(outline.sourceTrackId) ? outline.sourceTrackId : targetTrackIds[0], targetTrackIds }]
+  })
   const interactionTrackIds = new Set(document.tracks.filter((track) => track.kind === 'interaction').map((track) => track.id))
   for (const track of document.tracks) {
     if (track.kind !== 'matrix') continue

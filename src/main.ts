@@ -39,7 +39,7 @@ import {
   unlinkScales,
   unlinkStrandedTrack,
 } from './track-document.ts'
-import type { MatrixPalette, SignalScaleChannel, SourceFormat, TrackDocument, TrackSourceSpec, TrackSpec } from './track-document.ts'
+import type { MatrixOutline, MatrixPalette, SignalScaleChannel, SourceFormat, TrackDocument, TrackSourceSpec, TrackSpec } from './track-document.ts'
 import type { Region, TrackSource, TrackRuntime } from './types.ts'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -175,6 +175,11 @@ app.innerHTML = `
           <button class="menu-item" type="button" data-region-action="place-divider"><span>Add comparison divider…</span></button>
           <button class="menu-item" id="clear-comparison-dividers" type="button" data-region-action="clear-dividers"><span>Clear all comparison dividers</span></button>
           <div id="comparison-divider-items"></div>
+          <span class="menu-separator"></span>
+          <div class="region-menu-heading">Matrix outlines</div>
+          <button class="menu-item" type="button" data-region-action="draw-matrix-outline"><span>Draw matrix outline…</span><small>Drag over matrix bins</small></button>
+          <button class="menu-item" id="clear-matrix-outlines" type="button" data-region-action="clear-matrix-outlines"><span>Clear all matrix outlines</span></button>
+          <div id="matrix-outline-items"></div>
           <span class="menu-separator"></span>
           <button class="menu-item" type="button" data-region-action="select"><span>Add region…</span><small>Hold Ctrl</small></button>
           <button class="menu-item" type="button" data-region-action="save-current"><span>Add current view as region…</span></button>
@@ -438,6 +443,8 @@ const regionMenuPopup = document.querySelector<HTMLElement>('#region-menu-popup'
 const savedRegionItems = document.querySelector<HTMLElement>('#saved-region-items')!
 const comparisonDividerItems = document.querySelector<HTMLElement>('#comparison-divider-items')!
 const clearComparisonDividers = document.querySelector<HTMLButtonElement>('#clear-comparison-dividers')!
+const matrixOutlineItems = document.querySelector<HTMLElement>('#matrix-outline-items')!
+const clearMatrixOutlines = document.querySelector<HTMLButtonElement>('#clear-matrix-outlines')!
 const regionSnapMatrixBins = document.querySelector<HTMLButtonElement>('#region-snap-matrix-bins')!
 const regionSnapStatus = document.querySelector<HTMLElement>('#region-snap-status')!
 
@@ -467,6 +474,8 @@ let currentWorkspacePath = savedWorkspacePath()
 let lastWorkspaceSaveDirectory = savedWorkspaceDirectory() ?? workspaceDirectory(currentWorkspacePath ?? '')
 let activeRegionTool: RegionToolMode | undefined
 let openRegionOptionsId: string | undefined
+let openMatrixOutlineOptionsId: string | undefined
+let pendingMatrixOutlineTargetIds: string[] | undefined
 let ctrlRegionSelectionActive = false
 
 interface OpenedSource {
@@ -499,6 +508,9 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
   },
   onSavedRegionResize(id, region) {
     store.edit((draft) => { const saved = draft.savedRegions.find((item) => item.id === id); if (saved) saved.region = region })
+  },
+  onMatrixOutlineSelected(selection) {
+    void saveMatrixOutline(selection)
   },
   onComparisonDividerCreate(position) {
     store.edit((draft) => {
@@ -781,7 +793,7 @@ document.addEventListener('keydown', (event) => {
     ctrlRegionSelectionActive = true
     browser.setRegionToolMode('select')
   }
-  if (event.key === 'Escape') { ctrlRegionSelectionActive = false; closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeMatrixSettingsDialog(); closeActionDialog(undefined); browser.setRegionToolMode(undefined) }
+  if (event.key === 'Escape') { ctrlRegionSelectionActive = false; pendingMatrixOutlineTargetIds = undefined; closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeMatrixSettingsDialog(); closeActionDialog(undefined); browser.setRegionToolMode(undefined) }
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'o') {
     event.preventDefault()
     closeMenus()
@@ -1323,12 +1335,15 @@ function closeMenus(): void {
 
 function renderRegionMenu(): void {
   const regions = store.current.savedRegions
-  regionMenuCount.textContent = regions.length ? String(regions.length) : ''
+  const outlines = store.current.matrixOutlines
+  regionMenuCount.textContent = regions.length + outlines.length ? String(regions.length + outlines.length) : ''
   regionMenuButton.title = activeRegionTool === 'select' ? 'Drag across the ruler or track area to save a region'
     : activeRegionTool === 'divider' ? 'Click in the ruler or track area to place the comparison divider'
+      : activeRegionTool === 'matrix-outline' ? 'Drag across matrix bins to add an outline'
       : 'Select, save, and revisit genomic regions'
   const dividers = store.current.comparisonDividers
   clearComparisonDividers.disabled = !dividers.length
+  clearMatrixOutlines.disabled = !outlines.length
   const snapResolution = browser.getMatrixSnapResolution()
   regionSnapMatrixBins.classList.toggle('current', store.current.regionSnapToMatrixBins)
   regionSnapStatus.textContent = `${store.current.regionSnapToMatrixBins ? 'On' : 'Off'}${snapResolution ? ` · ${formatBases(snapResolution)}` : ' · no matrix grid'}`
@@ -1343,6 +1358,28 @@ function renderRegionMenu(): void {
       <button class="saved-region-icon remove" type="button" data-divider-remove="${id}" title="Remove divider" aria-label="Remove divider ${index + 1}">×</button>
     </div>`
   }).join('') : '<p class="saved-region-empty">No comparison dividers yet.</p>'
+  const matrixTracks = store.current.tracks.filter((track) => track.kind === 'matrix')
+  matrixOutlineItems.innerHTML = outlines.length ? outlines.map((outline) => {
+    const id = encodeURIComponent(outline.id)
+    const optionsOpen = openMatrixOutlineOptionsId === outline.id
+    const sourceLabel = store.current.tracks.find((track) => track.id === outline.sourceTrackId)?.label ?? 'Removed source'
+    const targets = outline.targetTrackIds.length
+    return `<div class="saved-region-entry"><div class="saved-region-row">
+      <div class="saved-region-go matrix-outline-summary" title="${escapeHtml(`${formatLocus(outline.axis1)} × ${formatLocus(outline.axis2)}`)}">
+        <i style="background:${escapeHtml(outline.color)}"></i><span><strong>${escapeHtml(outline.label)}</strong><small>${escapeHtml(sourceLabel)} · ${targets} track${targets === 1 ? '' : 's'}</small></span>
+      </div>
+      <button class="saved-region-icon ${outline.visible ? 'is-active' : ''}" type="button" data-outline-toggle="${id}" title="${outline.visible ? 'Hide' : 'Show'} outline" aria-label="${outline.visible ? 'Hide' : 'Show'} ${escapeHtml(outline.label)}">▱</button>
+      <button class="saved-region-icon" type="button" data-outline-color="${id}" title="Set outline color" aria-label="Set ${escapeHtml(outline.label)} color" style="color:${escapeHtml(outline.color)}">●</button>
+      <button class="saved-region-icon ${optionsOpen ? 'is-active' : ''}" type="button" data-outline-options="${id}" title="Applied matrix tracks" aria-label="Set ${escapeHtml(outline.label)} target tracks">⚙</button>
+      <button class="saved-region-icon" type="button" data-outline-rename="${id}" title="Rename outline" aria-label="Rename ${escapeHtml(outline.label)}">✎</button>
+      <button class="saved-region-icon remove" type="button" data-outline-remove="${id}" title="Remove outline" aria-label="Remove ${escapeHtml(outline.label)}">×</button>
+    </div>${optionsOpen ? `<div class="saved-region-options matrix-outline-options"><strong>Apply to matrix tracks</strong>${matrixTracks.map((track) => {
+      const compatible = matrixTrackCompatibleWithOutline(track, outline)
+      const checked = outline.targetTrackIds.includes(track.id)
+      const disabled = (!compatible && !checked) || (checked && outline.targetTrackIds.length === 1)
+      return `<label title="${compatible ? '' : 'Vertical chromosome is not compatible with this outline'}"><input type="checkbox" data-outline-id="${id}" data-outline-target="${encodeURIComponent(track.id)}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''} /><span>${escapeHtml(track.label)}</span>${compatible ? '' : '<small>Incompatible axes</small>'}</label>`
+    }).join('')}</div>` : ''}</div>`
+  }).join('') : '<p class="saved-region-empty">No matrix outlines yet.</p>'
   savedRegionItems.innerHTML = regions.length ? regions.map((saved) => {
     const id = encodeURIComponent(saved.id)
     const optionsOpen = openRegionOptionsId === saved.id
@@ -1375,11 +1412,35 @@ async function handleRegionMenuAction(event: Event): Promise<void> {
     if (action === 'select') browser.setRegionToolMode('select')
     else if (action === 'save-current') await saveBrowserRegion(browser.getRegion())
     else if (action === 'place-divider') browser.setRegionToolMode('divider')
+    else if (action === 'draw-matrix-outline') { pendingMatrixOutlineTargetIds = undefined; browser.setRegionToolMode('matrix-outline') }
     else if (action === 'clear-dividers') store.edit((draft) => { draft.comparisonDividers = [] })
+    else if (action === 'clear-matrix-outlines') store.edit((draft) => { draft.matrixOutlines = [] })
     return
   }
-  const button = target.closest<HTMLButtonElement>('[data-region-go], [data-region-toggle], [data-region-color], [data-region-options], [data-region-rename], [data-region-remove], [data-divider-go], [data-divider-style], [data-divider-color], [data-divider-remove]')
+  const button = target.closest<HTMLButtonElement>('[data-region-go], [data-region-toggle], [data-region-color], [data-region-options], [data-region-rename], [data-region-remove], [data-divider-go], [data-divider-style], [data-divider-color], [data-divider-remove], [data-outline-toggle], [data-outline-color], [data-outline-options], [data-outline-rename], [data-outline-remove]')
   if (!button) return
+  const encodedOutlineId = button.dataset.outlineToggle ?? button.dataset.outlineColor ?? button.dataset.outlineOptions ?? button.dataset.outlineRename ?? button.dataset.outlineRemove
+  if (encodedOutlineId) {
+    const outlineId = decodeURIComponent(encodedOutlineId)
+    const outline = store.current.matrixOutlines.find((item) => item.id === outlineId)
+    if (!outline) return
+    if (button.dataset.outlineOptions !== undefined) {
+      openMatrixOutlineOptionsId = openMatrixOutlineOptionsId === outlineId ? undefined : outlineId
+      renderRegionMenu()
+      return
+    }
+    closeMenus()
+    if (button.dataset.outlineToggle !== undefined) store.edit((draft) => { const item = draft.matrixOutlines.find((candidate) => candidate.id === outlineId); if (item) item.visible = !item.visible })
+    else if (button.dataset.outlineRemove !== undefined) store.edit((draft) => { draft.matrixOutlines = draft.matrixOutlines.filter((item) => item.id !== outlineId) })
+    else if (button.dataset.outlineRename !== undefined) {
+      const label = (await requestText({ title: 'Rename matrix outline', label: 'Outline name', initial: outline.label, submitLabel: 'Rename', validate: requiredName }))?.trim()
+      if (label) store.edit((draft) => { const item = draft.matrixOutlines.find((candidate) => candidate.id === outlineId); if (item) item.label = label })
+    } else {
+      const color = await requestColor('Set matrix outline color', outline.color)
+      if (color) store.edit((draft) => { const item = draft.matrixOutlines.find((candidate) => candidate.id === outlineId); if (item) item.color = color })
+    }
+    return
+  }
   const encodedDividerId = button.dataset.dividerGo ?? button.dataset.dividerStyle ?? button.dataset.dividerColor ?? button.dataset.dividerRemove
   if (encodedDividerId) {
     const dividerId = decodeURIComponent(encodedDividerId)
@@ -1446,6 +1507,18 @@ function handleRegionMenuSettingPreview(event: Event): void {
 
 function handleRegionMenuSettingChange(event: Event): void {
   const element = event.target as HTMLInputElement | HTMLSelectElement
+  if (element instanceof HTMLInputElement && element.dataset.outlineId && element.dataset.outlineTarget) {
+    const outlineId = decodeURIComponent(element.dataset.outlineId)
+    const trackId = decodeURIComponent(element.dataset.outlineTarget)
+    store.edit((draft) => {
+      const outline = draft.matrixOutlines.find((item) => item.id === outlineId)
+      const track = draft.tracks.find((item) => item.id === trackId && item.kind === 'matrix')
+      if (!outline || !track) return
+      if (element.checked && matrixTrackCompatibleWithOutline(track, outline)) outline.targetTrackIds = [...new Set([...outline.targetTrackIds, trackId])]
+      else if (outline.targetTrackIds.length > 1) outline.targetTrackIds = outline.targetTrackIds.filter((id) => id !== trackId)
+    })
+    return
+  }
   const encodedId = element.dataset.regionBoundary ?? element.dataset.regionFill ?? element.dataset.regionOpacity
   if (!encodedId) return
   const id = decodeURIComponent(encodedId)
@@ -1457,6 +1530,47 @@ function handleRegionMenuSettingChange(event: Event): void {
     else if (element.dataset.regionFill !== undefined && element instanceof HTMLInputElement) region.fill = element.checked
     else if (element.dataset.regionOpacity !== undefined) region.shadeOpacity = Math.max(0.01, Math.min(0.5, Number(element.value) / 100))
   })
+}
+
+function matrixTrackCompatibleWithOutline(track: TrackSpec, outline: Pick<MatrixOutline, 'axis1' | 'axis2'>): boolean {
+  if (track.kind !== 'matrix') return false
+  const verticalChr = track.matrixSecondaryRegion?.chr
+  return outline.axis1.chr === outline.axis2.chr
+    ? verticalChr === undefined || verticalChr === outline.axis2.chr
+    : verticalChr === outline.axis2.chr
+}
+
+async function saveMatrixOutline(selection: { sourceTrackId: string; axis1: Region; axis2: Region; resolution: number }): Promise<void> {
+  const source = store.current.tracks.find((track) => track.id === selection.sourceTrackId && track.kind === 'matrix')
+  if (!source) return
+  const explicitTargets = pendingMatrixOutlineTargetIds
+  pendingMatrixOutlineTargetIds = undefined
+  const selectedMatrices = store.current.tracks.filter((track) => track.kind === 'matrix' && selectedTrackIds.has(track.id))
+  const groupedMatrices = source.displayGroupId
+    ? store.current.tracks.filter((track) => track.kind === 'matrix' && track.displayGroupId === source.displayGroupId)
+    : []
+  const candidates = explicitTargets
+    ? store.current.tracks.filter((track) => track.kind === 'matrix' && explicitTargets.includes(track.id))
+    : selectedMatrices.length > 1 && selectedMatrices.some((track) => track.id === source.id) ? selectedMatrices
+      : groupedMatrices.length > 1 ? groupedMatrices : [source]
+  const outlineShape = { axis1: selection.axis1, axis2: selection.axis2 }
+  const targetTrackIds = [...new Set([source, ...candidates]
+    .filter((track) => matrixTrackCompatibleWithOutline(track, outlineShape))
+    .map((track) => track.id))]
+  const sequence = store.current.matrixOutlines.length + 1
+  const label = (await requestText({
+    title: 'Add matrix outline', label: 'Outline name', initial: `Matrix outline ${sequence}`, submitLabel: 'Add outline', validate: requiredName,
+    message: `${formatLocus(selection.axis1)} × ${formatLocus(selection.axis2)}\n${formatBases(selection.resolution)} source bins · ${targetTrackIds.length} compatible target track${targetTrackIds.length === 1 ? '' : 's'}`,
+  }))?.trim()
+  if (!label) return
+  const color = TRACK_COLORS[store.current.matrixOutlines.length % TRACK_COLORS.length]
+  store.edit((draft) => {
+    draft.matrixOutlines.push({
+      id: crypto.randomUUID(), label, axis1: { ...selection.axis1 }, axis2: { ...selection.axis2 }, color,
+      visible: true, sourceTrackId: source.id, targetTrackIds,
+    })
+  })
+  showToast(`Added ${label} to ${targetTrackIds.length} matrix track${targetTrackIds.length === 1 ? '' : 's'}`)
 }
 
 async function saveBrowserRegion(region: Region): Promise<void> {
@@ -1493,8 +1607,8 @@ async function switchReference(id: string): Promise<void> {
     const start = Math.max(0, Math.min(current.start, length - span))
     browser.setRegion({ chr, start, end: start + span })
   } else browser.setRegion(defaultRegion(reference))
-  if (previousReferenceId !== reference.id && (store.current.savedRegions.length || store.current.comparisonDividers.length)) {
-    store.edit((draft) => { draft.savedRegions = []; draft.comparisonDividers = [] })
+  if (previousReferenceId !== reference.id && (store.current.savedRegions.length || store.current.comparisonDividers.length || store.current.matrixOutlines.length)) {
+    store.edit((draft) => { draft.savedRegions = []; draft.comparisonDividers = []; draft.matrixOutlines = [] })
     showToast('Cleared saved regions and comparison dividers for the new reference.')
   }
   await activateGeneTrack(reference)
@@ -1882,6 +1996,7 @@ function matrixContextMenuMarkup(
   const overlayLimit = sameValue(matrixTracks.map((track) => track.matrixOverlayMaxFeatures ?? 250))
     ? matrixTracks[0].matrixOverlayMaxFeatures ?? 250 : undefined
   return [
+    action('matrix-outline-draw', 'Draw matrix outline…', matrixTracks.length > 1 ? `${matrixTracks.length} tracks` : ''),
     action('matrix-flip', 'Toggle matrix orientation'),
     submenu('matrix-resolution', 'Resolution', resolutionLabel,
       action('matrix-resolution-auto', 'Automatic', matrixTracks.every((track) => track.matrixResolution === undefined) ? 'current' : '')
@@ -2291,6 +2406,11 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
 
 async function applyMatrixContextAction(command: string | undefined, matrixIds: readonly string[]): Promise<void> {
   if (!command?.startsWith('matrix-') || !matrixIds.length) return
+  if (command === 'matrix-outline-draw') {
+    pendingMatrixOutlineTargetIds = [...matrixIds]
+    browser.setRegionToolMode('matrix-outline')
+    return
+  }
   if (command === 'matrix-details') {
     await showMatrixDetails(matrixIds[0])
     return
@@ -2971,7 +3091,7 @@ function renderInputHistory(list: HTMLDataListElement, key: string, rawQuery: st
 }
 
 function showInteractionGuide(): Promise<void> {
-  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click on track labels to select additional tracks and Shift+click to select a range; clicking or right-clicking a group card adds all of its tracks. Hold Ctrl and drag in the genomic plot to add a highlighted region. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for a quarter second before dragging its height. Drag horizontally anywhere in the track area, including blank space, to pan. The mouse wheel scrolls; Ctrl+wheel zooms. Use Regions to change highlight appearance, snap selections to matrix bins, or add multiple colored, independently scaled comparison dividers. Hover a visible region boundary or divider for the horizontal-resize cursor, then drag it to move that line. Matrix highlights follow triangular cis geometry. Right-click a track or group card for options.')
+  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click on track labels to select additional tracks and Shift+click to select a range; clicking or right-clicking a group card adds all of its tracks. Hold Ctrl and drag in the genomic plot to add a highlighted region. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for a quarter second before dragging its height. Drag horizontally anywhere in the track area, including blank space, to pan. The mouse wheel scrolls; Ctrl+wheel zooms. Use Regions to change highlight appearance, snap selections to matrix bins, draw shared matrix outlines, or add multiple colored, independently scaled comparison dividers. Hover a visible region boundary or divider for the horizontal-resize cursor, then drag it to move that line. Matrix highlights follow triangular cis geometry; manual matrix outlines follow both selected bin axes. Right-click a track or group card for options.')
 }
 
 function showFirstRunInteractionHint(): void {

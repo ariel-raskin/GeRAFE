@@ -3,7 +3,7 @@ import { MatrixTileRenderer, matrixTileCacheKey } from './matrix-tiles.ts'
 import type { Cytoband } from './cytoband.ts'
 import type { GeneFeature, GeneSource, TranscriptFeature } from './reference.ts'
 import { computeScaleDomains, computeSegmentScaleDomains, createTrackDocument, signalFeatureKey } from './track-document.ts'
-import type { ComparisonDivider, DisplayGroup, SavedRegion, ScaleDomainSegment, TrackDocument, TrackSpec } from './track-document.ts'
+import type { ComparisonDivider, DisplayGroup, MatrixOutline, SavedRegion, ScaleDomainSegment, TrackDocument, TrackSpec } from './track-document.ts'
 import type { AlignmentCoverageFeature, AlignmentFeature, InteractionFeature, IntervalFeature, MatrixCellPosition, MatrixFeature, Region, SignalFeature, TrackSource, TrackRuntime } from './types.ts'
 
 const RULER_HEIGHT = 70
@@ -25,6 +25,7 @@ export interface BrowserCallbacks {
   onRegionChange(region: Region): void
   onRegionSelected(region: Region): void
   onSavedRegionResize(id: string, region: Region): void
+  onMatrixOutlineSelected(selection: { sourceTrackId: string; axis1: Region; axis2: Region; resolution: number }): void
   onComparisonDividerCreate(position: number): void
   onComparisonDividerMove(id: string, position: number): void
   onRegionToolModeChange(mode?: RegionToolMode): void
@@ -40,7 +41,7 @@ export interface BrowserCallbacks {
   onTrackHeightsResize(updates: readonly { id: string; pixels: number }[]): void
 }
 
-export type RegionToolMode = 'select' | 'divider'
+export type RegionToolMode = 'select' | 'divider' | 'matrix-outline'
 type ScaleDomain = { min: number; max: number }
 interface TrackScaleSegment { start: number; end: number; domain?: ScaleDomain }
 
@@ -128,6 +129,18 @@ export class GenomeBrowser {
   private regionSelection?: { canvas: HTMLCanvasElement; startX: number; currentX: number }
   private regionBoundaryDrag?: { canvas: HTMLCanvasElement; id: string; edge: 'start' | 'end'; region: Region }
   private dividerDrag?: { canvas: HTMLCanvasElement; id: string; position: number; color: string }
+  private matrixOutlineSelection?: {
+    canvas: HTMLCanvasElement
+    pane: 'main' | 'bottom'
+    trackId: string
+    resolution: number
+    axis1Chr: string
+    axis2Chr: string
+    startBin1: number
+    startBin2: number
+    currentBin1: number
+    currentBin2: number
+  }
   private readonly regionShadePreviews = new Map<string, number>()
   private trackDrag?: {
     sourceCanvas: HTMLCanvasElement
@@ -318,6 +331,7 @@ export class GenomeBrowser {
     for (const canvas of [this.headerCanvas, this.canvas, this.bottomCanvas]) {
       canvas.classList.toggle('is-region-selecting', mode === 'select')
       canvas.classList.toggle('is-divider-placing', mode === 'divider')
+      canvas.classList.toggle('is-matrix-outline-selecting', mode === 'matrix-outline')
       canvas.classList.remove('is-region-line-hover')
     }
     this.callbacks.onRegionToolModeChange(mode)
@@ -473,8 +487,43 @@ export class GenomeBrowser {
     return hovered
   }
 
-  private beginRegionInteraction(canvas: HTMLCanvasElement, event: PointerEvent): boolean {
+  private matrixInspectionAt(canvas: HTMLCanvasElement, pane: 'main' | 'bottom', event: PointerEvent, trackId?: string): { spec: TrackSpec; matrix: MatrixFeature; inspection: MatrixCellInspection } | undefined {
+    if (event.offsetX < PLOT_LEFT) return undefined
+    const hit = this.itemAt(canvas, pane, event.offsetX, event.offsetY)
+    const spec = hit?.kind === 'track' ? this.document.tracks.find((track) => track.id === hit.id && track.kind === 'matrix') : undefined
+    if (!spec || (trackId && spec.id !== trackId)) return undefined
+    const matrix = this.runtimes.get(spec.id)?.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
+    if (!matrix) return undefined
+    const specs = this.visibleSpecs(pane)
+    const index = specs.findIndex((track) => track.id === spec.id)
+    const top = specs.slice(0, index).reduce((sum, track) => sum + this.trackHeight(track), 0)
+    const bottom = top + this.trackHeight(spec)
+    const maximumDistance = matrixQueryMaximumDistance(this.region.end - this.region.start, spec.matrixDepthMode ?? 'full', spec.matrixMaxDistance)
+    const inspection = matrix.axis2
+      ? inspectRectangularMatrixPoint(matrix, this.region, event.offsetX, event.offsetY, PLOT_LEFT, this.cssWidth(canvas), top, bottom)
+      : inspectMatrixPoint(matrix, this.region, event.offsetX, event.offsetY, PLOT_LEFT, this.cssWidth(canvas), top, bottom, spec.matrixDirection ?? 'up', maximumDistance)
+    return inspection ? { spec, matrix, inspection } : undefined
+  }
+
+  private beginRegionInteraction(canvas: HTMLCanvasElement, event: PointerEvent, pane?: 'main' | 'bottom'): boolean {
     if (event.offsetX < PLOT_LEFT) return false
+    if (this.regionToolMode === 'matrix-outline') {
+      if (!pane) return true
+      const hit = this.matrixInspectionAt(canvas, pane, event)
+      if (!hit) return true
+      canvas.setPointerCapture(event.pointerId)
+      this.matrixOutlineSelection = {
+        canvas, pane, trackId: hit.spec.id, resolution: hit.matrix.resolution,
+        axis1Chr: this.region.chr, axis2Chr: hit.matrix.axis2?.chr ?? this.region.chr,
+        startBin1: hit.inspection.bin1, startBin2: hit.inspection.bin2,
+        currentBin1: hit.inspection.bin1, currentBin2: hit.inspection.bin2,
+      }
+      canvas.classList.add('is-matrix-outline-dragging')
+      this.clearMatrixHover()
+      this.clearBamHover()
+      this.scheduleRender()
+      return true
+    }
     const divider = this.dividerAt(canvas, event.offsetX)
     if (!this.regionToolMode && divider) {
       canvas.setPointerCapture(event.pointerId)
@@ -512,6 +561,15 @@ export class GenomeBrowser {
   }
 
   private updateRegionInteraction(canvas: HTMLCanvasElement, event: PointerEvent): boolean {
+    if (this.matrixOutlineSelection?.canvas === canvas) {
+      const hit = this.matrixInspectionAt(canvas, this.matrixOutlineSelection.pane, event, this.matrixOutlineSelection.trackId)
+      if (hit) {
+        this.matrixOutlineSelection.currentBin1 = hit.inspection.bin1
+        this.matrixOutlineSelection.currentBin2 = hit.inspection.bin2
+        this.scheduleRender()
+      }
+      return true
+    }
     if (this.regionSelection?.canvas === canvas) {
       this.regionSelection.currentX = Math.max(PLOT_LEFT, Math.min(this.cssWidth(canvas), event.offsetX))
       this.scheduleRender()
@@ -539,6 +597,20 @@ export class GenomeBrowser {
   }
 
   private finishRegionInteraction(canvas: HTMLCanvasElement, event: PointerEvent): boolean {
+    if (this.matrixOutlineSelection?.canvas === canvas) {
+      const selection = this.matrixOutlineSelection
+      this.matrixOutlineSelection = undefined
+      canvas.classList.remove('is-matrix-outline-dragging')
+      if (event.type === 'pointerup') this.callbacks.onMatrixOutlineSelected({
+        sourceTrackId: selection.trackId,
+        axis1: { chr: selection.axis1Chr, start: Math.min(selection.startBin1, selection.currentBin1), end: Math.max(selection.startBin1, selection.currentBin1) + selection.resolution },
+        axis2: { chr: selection.axis2Chr, start: Math.min(selection.startBin2, selection.currentBin2), end: Math.max(selection.startBin2, selection.currentBin2) + selection.resolution },
+        resolution: selection.resolution,
+      })
+      this.setRegionToolMode(undefined)
+      this.scheduleRender()
+      return true
+    }
     if (this.regionSelection?.canvas === canvas) {
       const selection = this.regionSelection
       this.regionSelection = undefined
@@ -578,7 +650,7 @@ export class GenomeBrowser {
     canvas.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return
       this.clearMatrixHover()
-      if (this.beginRegionInteraction(canvas, event)) return
+      if (this.beginRegionInteraction(canvas, event, pane)) return
       const resizeHit = this.resizeBoundaryAt(pane, event.offsetY)
       const resizeIsArmed = resizeHit
         && this.trackResizeHover?.canvas === canvas
@@ -2015,6 +2087,7 @@ export class GenomeBrowser {
     drawMissingMatrixCells(ctx, matrix.missingCells ?? [], matrix.resolution, this.region, scale, baseline, direction, halfCell, spec.matrixMissingStyle === 'custom' ? spec.matrixMissingColor ?? '#9197a3' : trackBackground)
     drawMaskedMatrixBins(ctx, matrix.maskedBins ?? [], matrix.resolution, this.region, scale, PLOT_LEFT, width, baseline, direction, depthPixels, spec, trackBackground, palette)
     if (overlay) this.drawTriangularMatrixOverlay(overlay, matrix, scale, baseline, direction, halfCell, palette)
+    this.drawTriangularMatrixOutlines(spec, matrix, scale, baseline, direction, depthPixels, width, palette)
     if (this.matrixHover?.trackId === spec.id) drawMatrixCrosshair(ctx, this.matrixHover, matrix.resolution, PLOT_LEFT, width, geometry.clipTop, geometry.clipBottom, halfCell, direction, palette)
     ctx.globalAlpha = 1
     ctx.strokeStyle = palette.axisLine
@@ -2073,6 +2146,7 @@ export class GenomeBrowser {
     for (const bin of matrix.maskedBins ?? []) ctx.fillRect(PLOT_LEFT + (bin - this.region.start) * scaleX, top, Math.max(1, matrix.resolution * scaleX), bottom - top)
     for (const bin of matrix.maskedBins2 ?? []) ctx.fillRect(PLOT_LEFT, top + (bin - axis.start) * scaleY, width - PLOT_LEFT, Math.max(1, matrix.resolution * scaleY))
     if (overlay) this.drawRectangularMatrixOverlay(overlay, matrix, scaleX, scaleY, top, palette)
+    this.drawRectangularMatrixOutlines(spec, matrix, scaleX, scaleY, top, palette)
     if (this.matrixHover?.trackId === spec.id) {
       ctx.globalAlpha = 1; ctx.strokeStyle = palette.axisLine
       ctx.strokeRect(this.matrixHover.x - matrix.resolution * scaleX / 2, this.matrixHover.y - matrix.resolution * scaleY / 2,
@@ -2084,6 +2158,46 @@ export class GenomeBrowser {
     ctx.fillText(`Y: ${formatLocus(axis)}`, PLOT_LEFT + 6, Math.min(bottom - 5, top + 13))
     this.drawMatrixOverlayTruncation(overlay, Math.min(bottom - 5, top + 27), palette)
     return matrix.cells.length + (matrix.missingCells?.length ?? 0) + (overlay?.features.length ?? 0)
+  }
+
+  private matrixOutlinesForTrack(spec: TrackSpec, matrix: MatrixFeature, palette: CanvasPalette): Array<Pick<MatrixOutline, 'axis1' | 'axis2' | 'color'>> {
+    const verticalChr = matrix.axis2?.chr ?? this.region.chr
+    const outlines: Array<Pick<MatrixOutline, 'axis1' | 'axis2' | 'color'>> = this.document.matrixOutlines
+      .filter((outline) => matrixOutlineTargetsTrack(outline, spec.id, this.region.chr, verticalChr))
+    const selection = this.matrixOutlineSelection
+    if (selection?.trackId === spec.id) outlines.push({
+      axis1: { chr: selection.axis1Chr, start: Math.min(selection.startBin1, selection.currentBin1), end: Math.max(selection.startBin1, selection.currentBin1) + selection.resolution },
+      axis2: { chr: selection.axis2Chr, start: Math.min(selection.startBin2, selection.currentBin2), end: Math.max(selection.startBin2, selection.currentBin2) + selection.resolution },
+      color: palette.selection,
+    })
+    return outlines
+  }
+
+  private drawTriangularMatrixOutlines(spec: TrackSpec, matrix: MatrixFeature, scale: number, baseline: number, direction: number, depthPixels: number, width: number, palette: CanvasPalette): void {
+    const outlines = this.matrixOutlinesForTrack(spec, matrix, palette)
+    if (!outlines.length) return
+    const ctx = this.context
+    ctx.save()
+    matrixDomainPath(ctx, PLOT_LEFT, width, baseline, direction, depthPixels)
+    ctx.clip()
+    for (const outline of outlines) {
+      const points = matrixOutlinePolygon(outline.axis1, outline.axis2, this.region, scale, baseline, direction)
+      strokeClosedPolygon(ctx, points, outline.color)
+    }
+    ctx.restore()
+  }
+
+  private drawRectangularMatrixOutlines(spec: TrackSpec, matrix: MatrixFeature, scaleX: number, scaleY: number, top: number, palette: CanvasPalette): void {
+    const outlines = this.matrixOutlinesForTrack(spec, matrix, palette)
+    if (!outlines.length || !matrix.axis2) return
+    const ctx = this.context
+    for (const outline of outlines) {
+      const left = PLOT_LEFT + (outline.axis1.start - this.region.start) * scaleX
+      const right = PLOT_LEFT + (outline.axis1.end - this.region.start) * scaleX
+      const y1 = top + (outline.axis2.start - matrix.axis2.start) * scaleY
+      const y2 = top + (outline.axis2.end - matrix.axis2.start) * scaleY
+      strokeClosedPolygon(ctx, [{ x: left, y: y1 }, { x: right, y: y1 }, { x: right, y: y2 }, { x: left, y: y2 }], outline.color)
+    }
   }
 
   private matrixOverlaySelection(spec: TrackSpec, matrix: MatrixFeature): MatrixOverlaySelection | undefined {
@@ -3355,6 +3469,24 @@ export function resizeRegionBoundary(region: Region, edge: 'start' | 'end', coor
   return { ...region, end: Math.max(region.start + 1, Math.min(snapped, chromosomeLength)) }
 }
 
+export function matrixOutlineTargetsTrack(outline: Pick<MatrixOutline, 'visible' | 'targetTrackIds' | 'axis1' | 'axis2'>, trackId: string, horizontalChr: string, verticalChr: string): boolean {
+  return outline.visible && outline.targetTrackIds.includes(trackId)
+    && outline.axis1.chr === horizontalChr && outline.axis2.chr === verticalChr
+}
+
+export function matrixOutlinePolygon(axis1: Region, axis2: Region, viewport: Region, scale: number, baseline: number, direction: number): Array<{ x: number; y: number }> {
+  const point = (first: number, second: number) => ({
+    x: PLOT_LEFT + (((first + second) / 2) - viewport.start) * scale,
+    y: baseline + direction * ((second - first) / 2) * scale,
+  })
+  return [
+    point(axis1.start, axis2.start),
+    point(axis1.end, axis2.start),
+    point(axis1.end, axis2.end),
+    point(axis1.start, axis2.end),
+  ]
+}
+
 export function verticalRegionBoundaryLines(x1: number, x2: number, ranges: readonly { top: number; bottom: number }[]): Array<{ x1: number; y1: number; x2: number; y2: number }> {
   return ranges.flatMap((range) => range.bottom > range.top ? [
     { x1: x1 + 0.5, y1: range.top, x2: x1 + 0.5, y2: range.bottom },
@@ -3368,6 +3500,18 @@ function matrixDomainPath(ctx: CanvasRenderingContext2D, left: number, right: nu
   ctx.moveTo(points[0]!.x, points[0]!.y)
   for (const point of points.slice(1)) ctx.lineTo(point.x, point.y)
   ctx.closePath()
+}
+
+function strokeClosedPolygon(ctx: CanvasRenderingContext2D, points: readonly { x: number; y: number }[], color: string): void {
+  if (!points.length) return
+  const path = () => {
+    ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y)
+    for (const point of points.slice(1)) ctx.lineTo(point.x, point.y)
+    ctx.closePath()
+  }
+  ctx.globalAlpha = 0.82; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 4; path(); ctx.stroke()
+  ctx.globalAlpha = 1; ctx.strokeStyle = color; ctx.lineWidth = 2; path(); ctx.stroke()
+  ctx.lineWidth = 1
 }
 
 function drawMatrixDiamond(ctx: CanvasRenderingContext2D, x: number, y: number, halfCell: number): void {
