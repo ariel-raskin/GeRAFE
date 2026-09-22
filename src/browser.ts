@@ -24,6 +24,7 @@ const BAM_READS_MAX_VISIBLE_SPAN = 150_000
 export interface BrowserCallbacks {
   onRegionChange(region: Region): void
   onRegionSelected(region: Region): void
+  onSavedRegionResize(id: string, region: Region): void
   onComparisonDividerCreate(position: number): void
   onComparisonDividerMove(id: string, position: number): void
   onRegionToolModeChange(mode?: RegionToolMode): void
@@ -125,7 +126,9 @@ export class GenomeBrowser {
   private dragging?: { x: number; region: Region; canvas: HTMLCanvasElement }
   private regionToolMode?: RegionToolMode
   private regionSelection?: { canvas: HTMLCanvasElement; startX: number; currentX: number }
+  private regionBoundaryDrag?: { canvas: HTMLCanvasElement; id: string; edge: 'start' | 'end'; region: Region }
   private dividerDrag?: { canvas: HTMLCanvasElement; id: string; position: number; color: string }
+  private readonly regionShadePreviews = new Map<string, number>()
   private trackDrag?: {
     sourceCanvas: HTMLCanvasElement
     draggedIds: string[]
@@ -304,11 +307,18 @@ export class GenomeBrowser {
     return resolutions.length ? Math.min(...resolutions) : undefined
   }
 
+  previewSavedRegionShade(id: string, shadeOpacity?: number): void {
+    if (shadeOpacity === undefined) this.regionShadePreviews.delete(id)
+    else this.regionShadePreviews.set(id, Math.max(0.01, Math.min(0.5, shadeOpacity)))
+    this.scheduleRender()
+  }
+
   setRegionToolMode(mode?: RegionToolMode): void {
     this.regionToolMode = mode
     for (const canvas of [this.headerCanvas, this.canvas, this.bottomCanvas]) {
       canvas.classList.toggle('is-region-selecting', mode === 'select')
       canvas.classList.toggle('is-divider-placing', mode === 'divider')
+      canvas.classList.remove('is-region-line-hover')
     }
     this.callbacks.onRegionToolModeChange(mode)
     this.scheduleRender()
@@ -332,6 +342,7 @@ export class GenomeBrowser {
       }
     }
     this.document = document
+    for (const id of this.regionShadePreviews.keys()) if (!document.savedRegions.some((saved) => saved.id === id)) this.regionShadePreviews.delete(id)
     const matrixIds = new Set(document.tracks.filter((track) => track.kind === 'matrix').map((track) => track.id))
     this.matrixTiles.retain(matrixIds)
     for (const id of this.matrixRendererModes.keys()) if (!matrixIds.has(id)) this.matrixRendererModes.delete(id)
@@ -439,16 +450,45 @@ export class GenomeBrowser {
       .sort((a, b) => a.position - b.position)
   }
 
-  private beginRegionInteraction(canvas: HTMLCanvasElement, event: PointerEvent): boolean {
-    if (event.offsetX < PLOT_LEFT) return false
-    const divider = this.visibleComparisonDividers()
-      .map((candidate) => ({ candidate, distance: Math.abs(event.offsetX - this.plotX(canvas, candidate.position)) }))
+  private savedRegionBoundaryAt(canvas: HTMLCanvasElement, offsetX: number): { saved: SavedRegion; edge: 'start' | 'end' } | undefined {
+    if (canvas === this.headerCanvas) return undefined
+    return this.document.savedRegions
+      .filter((saved) => saved.highlighted && saved.boundaryStyle !== 'none' && saved.region.chr === this.region.chr)
+      .flatMap((saved) => (['start', 'end'] as const).map((edge) => ({ saved, edge, distance: Math.abs(offsetX - this.plotX(canvas, saved.region[edge])) })))
+      .filter(({ saved, edge, distance }) => saved.region[edge] >= this.region.start && saved.region[edge] <= this.region.end && distance <= 6)
+      .sort((a, b) => a.distance - b.distance)[0]
+  }
+
+  private dividerAt(canvas: HTMLCanvasElement, offsetX: number): ComparisonDivider | undefined {
+    return this.visibleComparisonDividers()
+      .map((candidate) => ({ candidate, distance: Math.abs(offsetX - this.plotX(canvas, candidate.position)) }))
       .filter(({ distance }) => distance <= 6)
       .sort((a, b) => a.distance - b.distance)[0]?.candidate
+  }
+
+  private updateRegionLineHover(canvas: HTMLCanvasElement, event: PointerEvent): boolean {
+    const hovered = !this.regionToolMode && event.offsetX >= PLOT_LEFT
+      && Boolean(this.dividerAt(canvas, event.offsetX) || this.savedRegionBoundaryAt(canvas, event.offsetX))
+    canvas.classList.toggle('is-region-line-hover', hovered)
+    return hovered
+  }
+
+  private beginRegionInteraction(canvas: HTMLCanvasElement, event: PointerEvent): boolean {
+    if (event.offsetX < PLOT_LEFT) return false
+    const divider = this.dividerAt(canvas, event.offsetX)
     if (!this.regionToolMode && divider) {
       canvas.setPointerCapture(event.pointerId)
       this.dividerDrag = { canvas, id: divider.id, position: divider.position, color: divider.color }
       canvas.classList.add('is-divider-dragging')
+      this.clearMatrixHover()
+      this.clearBamHover()
+      return true
+    }
+    const boundary = this.savedRegionBoundaryAt(canvas, event.offsetX)
+    if (!this.regionToolMode && boundary) {
+      canvas.setPointerCapture(event.pointerId)
+      this.regionBoundaryDrag = { canvas, id: boundary.saved.id, edge: boundary.edge, region: { ...boundary.saved.region } }
+      canvas.classList.add('is-region-boundary-dragging')
       this.clearMatrixHover()
       this.clearBamHover()
       return true
@@ -482,6 +522,19 @@ export class GenomeBrowser {
       this.scheduleRender()
       return true
     }
+    if (this.regionBoundaryDrag?.canvas === canvas) {
+      const chromosomeLength = this.chromosomes.get(this.regionBoundaryDrag.region.chr) ?? Number.MAX_SAFE_INTEGER
+      const snapResolution = this.document.regionSnapToMatrixBins ? this.getMatrixSnapResolution() : undefined
+      this.regionBoundaryDrag.region = resizeRegionBoundary(
+        this.regionBoundaryDrag.region,
+        this.regionBoundaryDrag.edge,
+        this.plotCoordinate(canvas, event.offsetX),
+        snapResolution,
+        chromosomeLength,
+      )
+      this.scheduleRender()
+      return true
+    }
     return false
   }
 
@@ -507,6 +560,14 @@ export class GenomeBrowser {
       this.dividerDrag = undefined
       canvas.classList.remove('is-divider-dragging')
       if (event.type === 'pointerup') this.callbacks.onComparisonDividerMove(id, position)
+      this.scheduleRender()
+      return true
+    }
+    if (this.regionBoundaryDrag?.canvas === canvas) {
+      const drag = this.regionBoundaryDrag
+      this.regionBoundaryDrag = undefined
+      canvas.classList.remove('is-region-boundary-dragging')
+      if (event.type === 'pointerup') this.callbacks.onSavedRegionResize(drag.id, drag.region)
       this.scheduleRender()
       return true
     }
@@ -616,6 +677,12 @@ export class GenomeBrowser {
       }
       if (this.trackBodyHold?.canvas === canvas && Math.hypot(event.clientX - this.trackBodyHold.startX, event.clientY - this.trackBodyHold.startY) >= 5) this.cancelTrackBodyHold()
       if (!this.dragging || this.dragging.canvas !== canvas) {
+        if (this.updateRegionLineHover(canvas, event)) {
+          this.clearTrackResizeHover(canvas)
+          this.clearMatrixHover()
+          this.clearBamHover()
+          return
+        }
         const hit = this.resizeBoundaryAt(pane, event.offsetY)
         this.updateTrackResizeHover(canvas, pane, hit?.y)
         if (hit) { this.clearMatrixHover(); this.clearBamHover() }
@@ -675,6 +742,7 @@ export class GenomeBrowser {
     canvas.addEventListener('pointercancel', finishPointer)
     canvas.addEventListener('pointerleave', () => {
       if (this.trackResize?.canvas === canvas) return
+      canvas.classList.remove('is-region-line-hover')
       this.clearTrackResizeHover(canvas)
       this.clearMatrixHover()
     })
@@ -721,6 +789,7 @@ export class GenomeBrowser {
     })
     canvas.addEventListener('pointermove', (event) => {
       if (this.updateRegionInteraction(canvas, event)) return
+      if (!this.dragging || this.dragging.canvas !== canvas) this.updateRegionLineHover(canvas, event)
       if (!this.dragging || this.dragging.canvas !== canvas) return
       const plotWidth = Math.max(1, this.cssWidth(canvas) - PLOT_LEFT)
       const shift = (this.dragging.x - event.clientX) * ((this.dragging.region.end - this.dragging.region.start) / plotWidth)
@@ -740,6 +809,7 @@ export class GenomeBrowser {
     }
     canvas.addEventListener('pointerup', finish)
     canvas.addEventListener('pointercancel', finish)
+    canvas.addEventListener('pointerleave', () => { if (!this.dragging) canvas.classList.remove('is-region-line-hover') })
     canvas.addEventListener('wheel', (event) => {
       if (!event.ctrlKey && !event.metaKey) {
         if (event.deltaX !== 0) {
@@ -1107,12 +1177,17 @@ export class GenomeBrowser {
   private drawRegionOverlays(pane: 'main' | 'bottom', specs: readonly TrackSpec[], width: number, height: number, palette: CanvasPalette): void {
     const ctx = this.context
     const canvas = pane === 'main' ? this.canvas : this.bottomCanvas
-    const regions: Array<Pick<SavedRegion, 'region' | 'color' | 'boundaryStyle' | 'fill' | 'shadeOpacity'>> = this.document.savedRegions
+    const regions: Array<Pick<SavedRegion, 'id' | 'region' | 'color' | 'boundaryStyle' | 'fill' | 'shadeOpacity'>> = this.document.savedRegions
       .filter((saved) => saved.highlighted && saved.region.chr === this.region.chr)
+      .map((saved) => ({
+        ...saved,
+        region: this.regionBoundaryDrag?.id === saved.id ? this.regionBoundaryDrag.region : saved.region,
+        shadeOpacity: this.regionShadePreviews.get(saved.id) ?? saved.shadeOpacity,
+      }))
     if (this.regionSelection) {
       const first = this.plotCoordinate(this.regionSelection.canvas, Math.min(this.regionSelection.startX, this.regionSelection.currentX))
       const second = this.plotCoordinate(this.regionSelection.canvas, Math.max(this.regionSelection.startX, this.regionSelection.currentX))
-      regions.push({ region: { chr: this.region.chr, start: first, end: second }, color: palette.selection, boundaryStyle: 'dashed', fill: true, shadeOpacity: 0.09 })
+      regions.push({ id: '', region: { chr: this.region.chr, start: first, end: second }, color: palette.selection, boundaryStyle: 'dashed', fill: true, shadeOpacity: 0.09 })
     }
     const stripRanges: Array<{ top: number; bottom: number }> = []
     const triangleRanges: Array<{ spec: TrackSpec; top: number; bottom: number }> = []
@@ -3270,6 +3345,14 @@ export function snapRegionToMatrixBins(region: Region, resolution: number | unde
   }
   const boundedStart = Math.max(0, Math.min(Math.floor(start), chromosomeLength - 1))
   return { chr: region.chr, start: boundedStart, end: Math.max(boundedStart + 1, Math.min(Math.ceil(end), chromosomeLength)) }
+}
+
+export function resizeRegionBoundary(region: Region, edge: 'start' | 'end', coordinate: number, resolution: number | undefined, chromosomeLength: number): Region {
+  const snapped = resolution && Number.isFinite(resolution) && resolution > 0
+    ? Math.round(coordinate / resolution) * resolution
+    : Math.round(coordinate)
+  if (edge === 'start') return { ...region, start: Math.max(0, Math.min(snapped, region.end - 1)) }
+  return { ...region, end: Math.max(region.start + 1, Math.min(snapped, chromosomeLength)) }
 }
 
 export function verticalRegionBoundaryLines(x1: number, x2: number, ranges: readonly { top: number; bottom: number }[]): Array<{ x1: number; y1: number; x2: number; y2: number }> {

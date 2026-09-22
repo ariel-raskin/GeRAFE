@@ -32,6 +32,13 @@ function documentWithTwoTracks() {
 }
 
 describe('track document', () => {
+  it('enables matrix-bin region snapping for new workspaces and preserves an explicit choice', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
+    expect(document.regionSnapToMatrixBins).toBe(true)
+    document.regionSnapToMatrixBins = false
+    expect(normalizeTrackDocument(JSON.parse(JSON.stringify(document))).regionSnapToMatrixBins).toBe(false)
+  })
+
   it('migrates v21 workspaces and preserves a two-file matrix comparison', () => {
     const legacy = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
     expect(normalizeTrackDocument({ ...legacy, schemaVersion: 21 }).schemaVersion).toBe(TRACK_DOCUMENT_VERSION)

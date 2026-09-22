@@ -297,7 +297,7 @@ export function createTrackDocument(referenceId: string, region: Region, options
     scales: [],
     savedRegions: [],
     comparisonDividers: [],
-    regionSnapToMatrixBins: false,
+    regionSnapToMatrixBins: true,
   }
 }
 
