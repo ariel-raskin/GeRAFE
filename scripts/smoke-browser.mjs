@@ -109,6 +109,66 @@ const secondTrackHeight = secondTrackSpec
 const canvas = page.locator('#genome-canvas')
 const box = await canvas.boundingBox()
 if (!box) throw new Error('Genome canvas was not visible.')
+const blankCanvasFillsPane = dataPaths.length > 0 || await page.evaluate(() => {
+  const canvas = document.querySelector('#genome-canvas')?.getBoundingClientRect()
+  const scroll = document.querySelector('#main-track-scroll')?.getBoundingClientRect()
+  return Boolean(canvas && scroll && canvas.height >= scroll.height - 72)
+})
+const regionMenuText = await (async () => {
+  await page.locator('#region-menu-button').click()
+  const text = await page.locator('#region-menu-popup').textContent()
+  await page.locator('[data-region-action="select"]').click()
+  return text
+})()
+const headerBoxForRegion = await page.locator('#genome-header').boundingBox()
+if (!headerBoxForRegion) throw new Error('Genome header was not visible for region selection.')
+const regionCanvasBefore = await canvas.evaluate((element) => element.toDataURL())
+await page.mouse.move(headerBoxForRegion.x + headerBoxForRegion.width * 0.42, headerBoxForRegion.y + 48)
+await page.mouse.down()
+await page.mouse.move(headerBoxForRegion.x + headerBoxForRegion.width * 0.56, headerBoxForRegion.y + 48, { steps: 6 })
+await page.mouse.up()
+await page.waitForSelector('#action-dialog:not([hidden])')
+await page.locator('#action-dialog-input').fill('Smoke region')
+await page.locator('#action-dialog-submit').click()
+await page.waitForFunction(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').savedRegions?.[0]?.label === 'Smoke region')
+const regionCanvasAfter = await canvas.evaluate((element) => element.toDataURL())
+const regionHighlightChanged = regionCanvasBefore !== regionCanvasAfter
+await page.locator('#region-menu-button').click()
+await page.locator('[data-region-action="place-divider"]').click()
+await page.mouse.click(box.x + box.width * 0.64, box.y + Math.min(95, box.height - 5))
+await page.waitForFunction(() => Number.isFinite(JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').comparisonDivider?.position))
+const regionStateBeforeReload = await page.evaluate(() => {
+  const document = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+  return { saved: document.savedRegions?.[0], divider: document.comparisonDivider }
+})
+if (!dataPaths.length) {
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.waitForSelector('#track-status')
+}
+const regionStateAfterReload = await page.evaluate(() => {
+  const document = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+  return { saved: document.savedRegions?.[0], divider: document.comparisonDivider }
+})
+const regionRoundTrip = JSON.stringify(regionStateBeforeReload) === JSON.stringify(regionStateAfterReload)
+await page.locator('#region-menu-button').click()
+const savedRegionMenuText = await page.locator('#region-menu-popup').textContent()
+await page.screenshot({ path: 'dist/smoke-region-tools.png', fullPage: true })
+await page.keyboard.press('Escape')
+const dividerDragStart = await page.evaluate(() => {
+  const documentState = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+  const canvas = document.querySelector('#genome-header')?.getBoundingClientRect()
+  const region = documentState.region
+  const divider = documentState.comparisonDivider
+  if (!canvas || !region || !divider) return undefined
+  return { x: canvas.left + 176 + ((divider.position - region.start) / (region.end - region.start)) * (canvas.width - 176), y: canvas.top + 35, position: divider.position }
+})
+if (dividerDragStart) {
+  await page.mouse.move(dividerDragStart.x, dividerDragStart.y)
+  await page.mouse.down()
+  await page.mouse.move(dividerDragStart.x + 45, dividerDragStart.y, { steps: 5 })
+  await page.mouse.up()
+}
+const dividerMoved = dividerDragStart ? await page.waitForFunction((position) => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').comparisonDivider?.position !== position, dividerDragStart.position).then(() => true).catch(() => false) : false
 await page.mouse.move(box.x + box.width * 0.72, box.y + 95)
 await page.mouse.down()
 await page.mouse.move(box.x + box.width * 0.48, box.y + 95, { steps: 12 })
@@ -689,10 +749,11 @@ const matrixTilePerformance = await page.evaluate(async () => {
 })
 await browser.close()
 
-console.log(JSON.stringify({ ...result, matrixInspectorSizing, emptyWorkspaceVisible, emptyWorkspaceText: emptyWorkspaceText?.trim(), emptyWorkspaceBrand, emptyWorkspaceHiddenAfterLoad, cornerBrandCount, footerHeight, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixMetadataOptionCount, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixOverlaySourceText, matrixOverlayFocusText, matrixOverlayGroupLinked, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, matrixDetailsMenuVisible, matrixDetailsText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log(JSON.stringify({ ...result, matrixInspectorSizing, emptyWorkspaceVisible, emptyWorkspaceText: emptyWorkspaceText?.trim(), emptyWorkspaceBrand, emptyWorkspaceHiddenAfterLoad, cornerBrandCount, footerHeight, blankCanvasFillsPane, regionMenuText, savedRegionMenuText, regionHighlightChanged, regionRoundTrip, regionStateAfterReload, dividerMoved, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixMetadataOptionCount, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixOverlaySourceText, matrixOverlayFocusText, matrixOverlayGroupLinked, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, matrixDetailsMenuVisible, matrixDetailsText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 console.log('Matrix tile fidelity and synthetic 100k-cell pan benchmark:', matrixTileFidelity, matrixTilePerformance)
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!emptyWorkspaceVisible || !emptyWorkspaceText?.includes('Open or drop genomics files') || !emptyWorkspaceText.includes('GeRAFE') || Math.abs(emptyWorkspaceBrand.centerOffset) > 1 || emptyWorkspaceBrand.headingOffset > 30 || emptyWorkspaceBrand.headingFontSize < 18 || emptyWorkspaceBrand.imageGap > 16 || emptyWorkspaceBrand.imageHeight < 600 || emptyWorkspaceBrand.wordmarkHeight < 60 || cornerBrandCount !== 0 || footerHeight > 24 || emptyWorkspaceHiddenAfterLoad === false) process.exitCode = 1
+if (!blankCanvasFillsPane || !regionMenuText?.includes('Select highlighted region') || !regionMenuText.includes('Place comparison divider') || !savedRegionMenuText?.includes('Smoke region') || !regionHighlightChanged || !regionRoundTrip || !dividerMoved || regionStateAfterReload.saved?.highlighted !== true || !Number.isFinite(regionStateAfterReload.divider?.position)) process.exitCode = 1
 if (!(matrixInspectorSizing.expandedWidth > matrixInspectorSizing.compactWidth) || !(matrixInspectorSizing.expandedHeight > matrixInspectorSizing.compactHeight)) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
 if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button' || helpMenuActiveElement !== 'help-menu-button') process.exitCode = 1

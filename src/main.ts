@@ -1,7 +1,7 @@
 import './style.css'
 import { ungzip } from 'pako-esm2'
 import { distributeFittedPixels, GenomeBrowser, heightScoreForPixels, MATRIX_BLUE_BLACK_COLORS, MATRIX_WARM_COLORS, trackPixelHeight } from './browser.ts'
-import type { MatrixDisplayPreferences } from './browser.ts'
+import type { MatrixDisplayPreferences, RegionToolMode } from './browser.ts'
 import { BedGraphSource, MAX_BEDGRAPH_BYTES } from './data/bedgraph.ts'
 import { gzipText } from './data/gzip.ts'
 import { BedSource } from './data/bed.ts'
@@ -35,6 +35,7 @@ import {
   reorderTracks,
   pairStrandedTracks,
   TrackDocumentStore,
+  TRACK_COLORS,
   unlinkScales,
   unlinkStrandedTrack,
 } from './track-document.ts'
@@ -163,6 +164,19 @@ app.innerHTML = `
         <button type="submit" aria-label="Go to locus">Go</button>
       </form>
       <div class="toolbar-spacer"></div>
+      <div class="app-menu region-tools-control" id="region-menu-root">
+        <button class="menu-trigger region-tools-button" id="region-menu-button" type="button" aria-haspopup="menu" aria-expanded="false" title="Select, save, and revisit genomic regions">Regions <small id="region-menu-count"></small></button>
+        <div class="menu-popover region-menu-popover" id="region-menu-popup" role="menu" hidden>
+          <button class="menu-item" type="button" data-region-action="select"><span>Select highlighted region…</span></button>
+          <button class="menu-item" type="button" data-region-action="save-current"><span>Save current view…</span></button>
+          <span class="menu-separator"></span>
+          <button class="menu-item" type="button" data-region-action="place-divider"><span>Place comparison divider…</span><small id="comparison-divider-locus"></small></button>
+          <button class="menu-item" id="clear-comparison-divider" type="button" data-region-action="clear-divider"><span>Clear comparison divider</span></button>
+          <span class="menu-separator"></span>
+          <div class="region-menu-heading">Saved regions</div>
+          <div id="saved-region-items"></div>
+        </div>
+      </div>
       <div class="fit-tracks-control">
         <button class="fit-tracks-button" id="fit-tracks" type="button" title="Fit all upper tracks into the visible upper pane">Fit tracks</button>
         <button class="fit-tracks-auto" id="fit-tracks-auto" type="button" aria-pressed="false" title="Automatically keep upper tracks fitted"><i aria-hidden="true"></i></button>
@@ -410,6 +424,12 @@ const actionDialogCancel = document.querySelector<HTMLButtonElement>('#action-di
 const actionDialogSubmit = document.querySelector<HTMLButtonElement>('#action-dialog-submit')!
 const zoomLevel = document.querySelector<HTMLInputElement>('#zoom-level')!
 const fitTracksAuto = document.querySelector<HTMLButtonElement>('#fit-tracks-auto')!
+const regionMenuButton = document.querySelector<HTMLButtonElement>('#region-menu-button')!
+const regionMenuCount = document.querySelector<HTMLElement>('#region-menu-count')!
+const regionMenuPopup = document.querySelector<HTMLElement>('#region-menu-popup')!
+const savedRegionItems = document.querySelector<HTMLElement>('#saved-region-items')!
+const comparisonDividerLocus = document.querySelector<HTMLElement>('#comparison-divider-locus')!
+const clearComparisonDivider = document.querySelector<HTMLButtonElement>('#clear-comparison-divider')!
 
 const runtimeSources = new Map<string, TrackSource>()
 const selectedTrackIds = new Set<string>()
@@ -433,6 +453,7 @@ let appUpdater: AppUpdateController | undefined
 let appUpdaterPromise: Promise<AppUpdateController> | undefined
 let currentWorkspacePath = savedWorkspacePath()
 let lastWorkspaceSaveDirectory = savedWorkspaceDirectory() ?? workspaceDirectory(currentWorkspacePath ?? '')
+let activeRegionTool: RegionToolMode | undefined
 
 interface OpenedSource {
   source: TrackSource
@@ -458,6 +479,19 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
     store.setViewport(activeReference.id, region)
     void ensureGeneDetails(region.chr)
     if (bottomPaneAutoFit) requestAnimationFrame(fitBottomPaneToContent)
+  },
+  onRegionSelected(region) {
+    void saveBrowserRegion(region)
+  },
+  onComparisonDividerChange(position) {
+    store.edit((draft) => {
+      draft.comparisonDivider = position === undefined ? undefined : { chr: browser.getRegion().chr, position }
+    })
+  },
+  onRegionToolModeChange(mode) {
+    activeRegionTool = mode
+    regionMenuButton.classList.toggle('is-active', Boolean(mode))
+    regionMenuButton.setAttribute('aria-pressed', String(Boolean(mode)))
   },
   onPerformance(sample) {
     document.querySelector('#fps-value')!.textContent = sample.fps.toFixed(0)
@@ -530,6 +564,7 @@ store.subscribe((document, reason) => {
   browser.setSelectedTracks(selectedTrackIds)
   if (bottomPaneAutoFit && reason !== 'viewport') requestAnimationFrame(fitBottomPaneToContent)
   if (reason !== 'viewport') scheduleUpperAutoFit()
+  renderRegionMenu()
 })
 emptyWorkspace.hidden = store.current.tracks.some((track) => track.kind !== 'genes')
 browser.syncDocument(store.current, runtimeSources)
@@ -539,6 +574,7 @@ fitBottomPaneToContent()
 window.setTimeout(fitBottomPaneToContent, 0)
 updateUpperAutoFitControl()
 scheduleUpperAutoFit()
+renderRegionMenu()
 
 populateReferences()
 populateChromosomes(activeChromosomes)
@@ -708,7 +744,7 @@ document.addEventListener('pointerdown', (event) => {
   if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog, #track-options-dialog, #matrix-settings-dialog, #action-dialog')) clearTrackSelection()
 })
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') { closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeMatrixSettingsDialog(); closeActionDialog(undefined) }
+  if (event.key === 'Escape') { closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeMatrixSettingsDialog(); closeActionDialog(undefined); browser.setRegionToolMode(undefined) }
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'o') {
     event.preventDefault()
     closeMenus()
@@ -760,6 +796,7 @@ fitTracksAuto.addEventListener('click', () => {
   updateUpperAutoFitControl()
   if (upperPaneAutoFit) scheduleUpperAutoFit()
 })
+regionMenuPopup.addEventListener('click', (event) => void handleRegionMenuAction(event))
 const themeToggle = document.querySelector<HTMLButtonElement>('#theme-toggle')!
 updateThemeButton(themeToggle)
 themeToggle.addEventListener('click', () => {
@@ -1227,9 +1264,88 @@ function closeMenus(): void {
   }
 }
 
+function renderRegionMenu(): void {
+  const regions = store.current.savedRegions
+  regionMenuCount.textContent = regions.length ? String(regions.length) : ''
+  regionMenuButton.title = activeRegionTool === 'select' ? 'Drag across the ruler or track area to save a region'
+    : activeRegionTool === 'divider' ? 'Click in the ruler or track area to place the comparison divider'
+      : 'Select, save, and revisit genomic regions'
+  const divider = store.current.comparisonDivider
+  comparisonDividerLocus.textContent = divider ? `${divider.chr}:${(divider.position + 1).toLocaleString()}` : ''
+  clearComparisonDivider.disabled = !divider
+  savedRegionItems.innerHTML = regions.length ? regions.map((saved) => {
+    const id = encodeURIComponent(saved.id)
+    return `<div class="saved-region-row">
+      <button class="saved-region-go" type="button" data-region-go="${id}" title="Go to ${escapeHtml(saved.label)}">
+        <i style="background:${escapeHtml(saved.color)}"></i><span><strong>${escapeHtml(saved.label)}</strong><small>${escapeHtml(formatLocus(saved.region))}</small></span>
+      </button>
+      <button class="saved-region-icon ${saved.highlighted ? 'is-active' : ''}" type="button" data-region-toggle="${id}" title="${saved.highlighted ? 'Hide' : 'Show'} highlight" aria-label="${saved.highlighted ? 'Hide' : 'Show'} ${escapeHtml(saved.label)} highlight">◉</button>
+      <button class="saved-region-icon" type="button" data-region-color="${id}" title="Set highlight color" aria-label="Set ${escapeHtml(saved.label)} color">●</button>
+      <button class="saved-region-icon" type="button" data-region-rename="${id}" title="Rename region" aria-label="Rename ${escapeHtml(saved.label)}">✎</button>
+      <button class="saved-region-icon remove" type="button" data-region-remove="${id}" title="Remove region" aria-label="Remove ${escapeHtml(saved.label)}">×</button>
+    </div>`
+  }).join('') : '<p class="saved-region-empty">No saved regions yet.</p>'
+}
+
+async function handleRegionMenuAction(event: Event): Promise<void> {
+  const target = event.target as Element
+  const action = target.closest<HTMLElement>('[data-region-action]')?.dataset.regionAction
+  if (action) {
+    closeMenus()
+    if (action === 'select') browser.setRegionToolMode('select')
+    else if (action === 'save-current') await saveBrowserRegion(browser.getRegion())
+    else if (action === 'place-divider') browser.setRegionToolMode('divider')
+    else if (action === 'clear-divider') store.edit((draft) => { delete draft.comparisonDivider })
+    return
+  }
+  const button = target.closest<HTMLButtonElement>('[data-region-go], [data-region-toggle], [data-region-color], [data-region-rename], [data-region-remove]')
+  if (!button) return
+  const encodedId = button.dataset.regionGo ?? button.dataset.regionToggle ?? button.dataset.regionColor ?? button.dataset.regionRename ?? button.dataset.regionRemove
+  if (!encodedId) return
+  const id = decodeURIComponent(encodedId)
+  const saved = store.current.savedRegions.find((region) => region.id === id)
+  if (!saved) return
+  closeMenus()
+  if (button.dataset.regionGo !== undefined) {
+    browser.setRegion(saved.region)
+    return
+  }
+  if (button.dataset.regionToggle !== undefined) {
+    store.edit((draft) => { const region = draft.savedRegions.find((item) => item.id === id); if (region) region.highlighted = !region.highlighted })
+    return
+  }
+  if (button.dataset.regionRemove !== undefined) {
+    store.edit((draft) => { draft.savedRegions = draft.savedRegions.filter((region) => region.id !== id) })
+    showToast(`Removed ${saved.label}`)
+    return
+  }
+  if (button.dataset.regionRename !== undefined) {
+    const label = (await requestText({ title: 'Rename saved region', label: 'Region name', initial: saved.label, submitLabel: 'Rename', validate: requiredName }))?.trim()
+    if (label) store.edit((draft) => { const region = draft.savedRegions.find((item) => item.id === id); if (region) region.label = label })
+    return
+  }
+  const color = await requestText({ title: 'Set highlight color', label: 'Hex color', initial: saved.color, placeholder: '#6d55e0', submitLabel: 'Set color',
+    validate: (value) => normalizedHexColor(value) ? undefined : 'Enter a six-digit hex color such as #6d55e0.' })
+  const normalized = color ? normalizedHexColor(color) : undefined
+  if (normalized) store.edit((draft) => { const region = draft.savedRegions.find((item) => item.id === id); if (region) region.color = normalized })
+}
+
+async function saveBrowserRegion(region: Region): Promise<void> {
+  const sequence = store.current.savedRegions.length + 1
+  const label = (await requestText({ title: 'Save genomic region', label: 'Region name', initial: `Region ${sequence}`, submitLabel: 'Save region',
+    message: formatLocus(region), validate: requiredName }))?.trim()
+  if (!label) return
+  const color = TRACK_COLORS[store.current.savedRegions.length % TRACK_COLORS.length]
+  store.edit((draft) => {
+    draft.savedRegions.push({ id: crypto.randomUUID(), label, region: { ...region }, color, highlighted: true })
+  })
+  showToast(`Saved ${label} · ${formatLocus(region)}`)
+}
+
 async function switchReference(id: string): Promise<void> {
   const reference = references.get(id)
   if (!reference) return
+  const previousReferenceId = activeReference.id
   activeReference = reference
   activeChromosomes = reference.chromosomes
   localStorage.setItem(REFERENCE_KEY, reference.id)
@@ -1245,6 +1361,10 @@ async function switchReference(id: string): Promise<void> {
     const start = Math.max(0, Math.min(current.start, length - span))
     browser.setRegion({ chr, start, end: start + span })
   } else browser.setRegion(defaultRegion(reference))
+  if (previousReferenceId !== reference.id && (store.current.savedRegions.length || store.current.comparisonDivider)) {
+    store.edit((draft) => { draft.savedRegions = []; delete draft.comparisonDivider })
+    showToast('Cleared saved regions and the comparison divider for the new reference.')
+  }
   await activateGeneTrack(reference)
   localStorage.setItem(WORKSPACE_KEY, JSON.stringify(store.current))
   showToast(`${reference.name} is now the default reference.`)
@@ -2694,7 +2814,7 @@ function closeActionDialog(value: string | boolean | undefined): void {
 }
 
 function showInteractionGuide(): Promise<void> {
-  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click to select additional tracks and Shift+click to select a range; clicking or right-clicking a group card adds all of its tracks. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for a quarter second before dragging its height. The mouse wheel scrolls; Ctrl+wheel zooms. Right-click a track or group card for options.')
+  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click to select additional tracks and Shift+click to select a range; clicking or right-clicking a group card adds all of its tracks. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for a quarter second before dragging its height. Drag horizontally anywhere in the track area, including blank space, to pan. The mouse wheel scrolls; Ctrl+wheel zooms. Use Regions to select and save highlighted intervals or place an independently scaled comparison divider. Right-click a track or group card for options.')
 }
 
 function showFirstRunInteractionHint(): void {
