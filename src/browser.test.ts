@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionFeatures, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixRegionHighlightPolygon, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, snapRegionToMatrixBins, trackPixelHeight, verticalRegionBoundaryLines, verticallyCenteredBaseline } from './browser.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionFeatures, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixRegionHighlightPolygon, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resizeRegionBoundary, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, snapRegionToMatrixBins, trackPixelHeight, verticalRegionBoundaryLines, verticallyCenteredBaseline } from './browser.ts'
 import type { AlignmentFeature, InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
@@ -265,6 +265,14 @@ describe('contact-matrix rendering helpers', () => {
       .toEqual({ chr: 'chr8', start: 10_000, end: 30_000 })
     expect(snapRegionToMatrixBins({ chr: 'chr8', start: 99_100, end: 99_900 }, 10_000, 100_000))
       .toEqual({ chr: 'chr8', start: 99_999, end: 100_000 })
+  })
+
+  it('resizes either saved-region boundary and snaps the moved edge without crossing', () => {
+    const region = { chr: 'chr8', start: 10_000, end: 30_000 }
+    expect(resizeRegionBoundary(region, 'start', 16_100, 10_000, 100_000)).toEqual({ chr: 'chr8', start: 20_000, end: 30_000 })
+    expect(resizeRegionBoundary(region, 'end', 44_900, 10_000, 100_000)).toEqual({ chr: 'chr8', start: 10_000, end: 40_000 })
+    expect(resizeRegionBoundary(region, 'start', 35_000, undefined, 100_000).start).toBe(29_999)
+    expect(resizeRegionBoundary(region, 'end', -1, undefined, 100_000).end).toBe(10_001)
   })
 
   it('draws ordinary region boundaries as vertical lines without horizontal edges', () => {

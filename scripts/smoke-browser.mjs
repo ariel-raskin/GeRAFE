@@ -124,8 +124,8 @@ const regionMenuText = await (async () => {
   await page.keyboard.press('Escape')
   return text
 })()
-const regionMenuOrder = regionMenuText.indexOf('Comparison dividers') < regionMenuText.indexOf('Select highlighted region')
-  && regionMenuText.indexOf('Select highlighted region') < regionMenuText.indexOf('Saved regions')
+const regionMenuOrder = regionMenuText.indexOf('Comparison dividers') < regionMenuText.indexOf('Add region')
+  && regionMenuText.indexOf('Add region') < regionMenuText.indexOf('Saved regions')
 const headerBoxForRegion = await page.locator('#genome-header').boundingBox()
 if (!headerBoxForRegion) throw new Error('Genome header was not visible for region selection.')
 const regionHeaderBefore = await page.locator('#genome-header').evaluate((element) => element.toDataURL())
@@ -159,11 +159,16 @@ await page.locator('#track-color-input').fill('#1188cc')
 await page.locator('#color-dialog-form').evaluate((form) => form.requestSubmit())
 await page.waitForFunction(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').savedRegions?.[0]?.color === '#1188cc')
 await page.locator('#region-menu-button').click()
-  if (!await page.locator('.saved-region-options').isVisible().catch(() => false)) await page.locator('[data-region-options]').click()
+const regionColorIcon = await page.locator('[data-region-color]').evaluate((element) => element.style.color)
+if (!await page.locator('.saved-region-options').isVisible().catch(() => false)) await page.locator('[data-region-options]').click()
 const regionAppearanceControlsVisible = await page.locator('.saved-region-options').isVisible()
-await page.locator('[data-region-boundary]').selectOption('none')
-await page.locator('[data-region-opacity]').evaluate((input) => { input.value = '25'; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })) })
-await page.locator('[data-region-action="toggle-snap"]').click()
+await page.locator('[data-region-boundary]').selectOption('solid')
+const regionCanvasBeforeShadePreview = await canvas.evaluate((element) => element.toDataURL())
+await page.locator('[data-region-opacity]').evaluate((input) => { input.value = '25'; input.dispatchEvent(new Event('input', { bubbles: true })) })
+await page.waitForTimeout(50)
+const regionCanvasAfterShadePreview = await canvas.evaluate((element) => element.toDataURL())
+const regionShadePreviewChanged = regionCanvasBeforeShadePreview !== regionCanvasAfterShadePreview
+await page.locator('[data-region-opacity]').dispatchEvent('change')
 const regionSnapStatusText = await page.locator('#region-snap-status').textContent()
 await page.locator('[data-region-action="place-divider"]').click()
 await page.mouse.click(box.x + box.width * 0.64, box.y + Math.min(95, box.height - 5))
@@ -180,6 +185,9 @@ const visualDividerColorPicker = await page.locator('#color-dialog:not([hidden])
 await page.locator('#track-color-input').fill('#22aa44')
 await page.locator('#color-dialog-form').evaluate((form) => form.requestSubmit())
 await page.waitForFunction(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').comparisonDividers?.[0]?.color === '#22aa44')
+await page.locator('#region-menu-button').click()
+const dividerColorIcon = await page.locator('[data-divider-color]').first().evaluate((element) => element.style.color)
+await page.keyboard.press('Escape')
 const regionStateBeforeReload = await page.evaluate(() => {
   const document = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
   return { saved: document.savedRegions?.[0], dividers: document.comparisonDividers, snap: document.regionSnapToMatrixBins }
@@ -198,6 +206,23 @@ const savedRegionMenuText = await page.locator('#region-menu-popup').textContent
 await page.locator('[data-region-options]').click()
 await page.screenshot({ path: 'dist/smoke-region-tools.png', fullPage: true })
 await page.keyboard.press('Escape')
+const regionBoundaryDragStart = await page.evaluate(() => {
+  const documentState = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+  const canvas = document.querySelector('#genome-canvas')?.getBoundingClientRect()
+  const region = documentState.region
+  const saved = documentState.savedRegions?.[0]
+  if (!canvas || !region || !saved) return undefined
+  return { id: saved.id, x: canvas.left + 176 + ((saved.region.start - region.start) / (region.end - region.start)) * (canvas.width - 176), y: canvas.top + Math.min(60, canvas.height - 5), start: saved.region.start }
+})
+let regionBoundaryHoverCursor = ''
+if (regionBoundaryDragStart) {
+  await page.mouse.move(regionBoundaryDragStart.x, regionBoundaryDragStart.y)
+  regionBoundaryHoverCursor = await canvas.evaluate((element) => getComputedStyle(element).cursor)
+  await page.mouse.down()
+  await page.mouse.move(regionBoundaryDragStart.x + 35, regionBoundaryDragStart.y, { steps: 5 })
+  await page.mouse.up()
+}
+const regionBoundaryMoved = regionBoundaryDragStart ? await page.waitForFunction(({ id, start }) => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').savedRegions?.find((region) => region.id === id)?.region?.start !== start, { id: regionBoundaryDragStart.id, start: regionBoundaryDragStart.start }).then(() => true).catch(() => false) : false
 const dividerDragStart = await page.evaluate(() => {
   const documentState = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
   const canvas = document.querySelector('#genome-header')?.getBoundingClientRect()
@@ -206,8 +231,10 @@ const dividerDragStart = await page.evaluate(() => {
   if (!canvas || !region || !divider) return undefined
   return { id: divider.id, x: canvas.left + 176 + ((divider.position - region.start) / (region.end - region.start)) * (canvas.width - 176), y: canvas.top + 35, position: divider.position }
 })
+let dividerHoverCursor = ''
 if (dividerDragStart) {
   await page.mouse.move(dividerDragStart.x, dividerDragStart.y)
+  dividerHoverCursor = await page.locator('#genome-header').evaluate((element) => getComputedStyle(element).cursor)
   await page.mouse.down()
   await page.mouse.move(dividerDragStart.x + 45, dividerDragStart.y, { steps: 5 })
   await page.mouse.up()
@@ -793,11 +820,11 @@ const matrixTilePerformance = await page.evaluate(async () => {
 })
 await browser.close()
 
-console.log(JSON.stringify({ ...result, matrixInspectorSizing, emptyWorkspaceVisible, emptyWorkspaceText: emptyWorkspaceText?.trim(), emptyWorkspaceBrand, emptyWorkspaceHiddenAfterLoad, cornerBrandCount, footerHeight, blankCanvasFillsPane, canvasWidthsAligned, regionMenuText, regionMenuOrder, savedRegionMenuText, ctrlRegionSelectionActivated, regionHighlightChanged, regionHeaderUnchanged, actionHistoryEmptyBeforeTyping, actionAutocompleteDisabled, actionHistoryMatches, regionAppearanceControlsVisible, regionSnapStatusText, visualRegionColorPicker, visualDividerColorPicker, regionRoundTrip, regionStateAfterReload, dividerMoved, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixMetadataOptionCount, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixOverlaySourceText, matrixOverlayFocusText, matrixOverlayGroupLinked, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, matrixDetailsMenuVisible, matrixDetailsText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log(JSON.stringify({ ...result, matrixInspectorSizing, emptyWorkspaceVisible, emptyWorkspaceText: emptyWorkspaceText?.trim(), emptyWorkspaceBrand, emptyWorkspaceHiddenAfterLoad, cornerBrandCount, footerHeight, blankCanvasFillsPane, canvasWidthsAligned, regionMenuText, regionMenuOrder, savedRegionMenuText, ctrlRegionSelectionActivated, regionHighlightChanged, regionHeaderUnchanged, actionHistoryEmptyBeforeTyping, actionAutocompleteDisabled, actionHistoryMatches, regionAppearanceControlsVisible, regionShadePreviewChanged, regionSnapStatusText, regionColorIcon, dividerColorIcon, visualRegionColorPicker, visualDividerColorPicker, regionRoundTrip, regionStateAfterReload, regionBoundaryHoverCursor, regionBoundaryMoved, dividerHoverCursor, dividerMoved, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixMetadataOptionCount, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixOverlaySourceText, matrixOverlayFocusText, matrixOverlayGroupLinked, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, matrixDetailsMenuVisible, matrixDetailsText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 console.log('Matrix tile fidelity and synthetic 100k-cell pan benchmark:', matrixTileFidelity, matrixTilePerformance)
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!emptyWorkspaceVisible || !emptyWorkspaceText?.includes('Open or drop genomics files') || !emptyWorkspaceText.includes('GeRAFE') || Math.abs(emptyWorkspaceBrand.centerOffset) > 1 || emptyWorkspaceBrand.headingOffset > 30 || emptyWorkspaceBrand.headingFontSize < 18 || emptyWorkspaceBrand.imageGap > 16 || emptyWorkspaceBrand.imageHeight < 600 || emptyWorkspaceBrand.wordmarkHeight < 60 || cornerBrandCount !== 0 || footerHeight > 24 || emptyWorkspaceHiddenAfterLoad === false) process.exitCode = 1
-if (!blankCanvasFillsPane || !canvasWidthsAligned || !regionMenuOrder || !regionMenuText?.includes('Select highlighted region') || !regionMenuText.includes('Place comparison divider') || !savedRegionMenuText?.includes('Smoke region') || !ctrlRegionSelectionActivated || !regionHighlightChanged || !regionHeaderUnchanged || !actionHistoryEmptyBeforeTyping || !actionAutocompleteDisabled || !actionHistoryMatches.includes('Smoke region') || !regionAppearanceControlsVisible || !regionSnapStatusText?.startsWith('On') || !visualRegionColorPicker || !visualDividerColorPicker || !regionRoundTrip || !dividerMoved || regionStateAfterReload.snap !== true || regionStateAfterReload.saved?.highlighted !== true || regionStateAfterReload.saved?.color !== '#1188cc' || regionStateAfterReload.saved?.boundaryStyle !== 'none' || regionStateAfterReload.saved?.fill !== true || regionStateAfterReload.saved?.shadeOpacity !== 0.25 || regionStateAfterReload.dividers?.length !== 2 || regionStateAfterReload.dividers[0]?.color !== '#22aa44' || regionStateAfterReload.dividers[0]?.lineStyle !== 'solid' || !regionStateAfterReload.dividers.every((divider) => Number.isFinite(divider.position) && /^#[0-9a-f]{6}$/i.test(divider.color))) process.exitCode = 1
+if (!blankCanvasFillsPane || !canvasWidthsAligned || !regionMenuOrder || !regionMenuText?.includes('Add region') || !regionMenuText.includes('Add comparison divider') || !regionMenuText.includes('Add current view as region') || !savedRegionMenuText?.includes('Smoke region') || !ctrlRegionSelectionActivated || !regionHighlightChanged || !regionHeaderUnchanged || !actionHistoryEmptyBeforeTyping || !actionAutocompleteDisabled || !actionHistoryMatches.includes('Smoke region') || !regionAppearanceControlsVisible || !regionShadePreviewChanged || !regionSnapStatusText?.startsWith('On') || regionColorIcon !== 'rgb(17, 136, 204)' || dividerColorIcon !== 'rgb(34, 170, 68)' || !visualRegionColorPicker || !visualDividerColorPicker || !regionRoundTrip || !regionBoundaryHoverCursor.includes('ew-resize') || !regionBoundaryMoved || !dividerHoverCursor.includes('ew-resize') || !dividerMoved || regionStateAfterReload.snap !== true || regionStateAfterReload.saved?.highlighted !== true || regionStateAfterReload.saved?.color !== '#1188cc' || regionStateAfterReload.saved?.boundaryStyle !== 'solid' || regionStateAfterReload.saved?.fill !== true || regionStateAfterReload.saved?.shadeOpacity !== 0.25 || regionStateAfterReload.dividers?.length !== 2 || regionStateAfterReload.dividers[0]?.color !== '#22aa44' || regionStateAfterReload.dividers[0]?.lineStyle !== 'solid' || !regionStateAfterReload.dividers.every((divider) => Number.isFinite(divider.position) && /^#[0-9a-f]{6}$/i.test(divider.color))) process.exitCode = 1
 if (!(matrixInspectorSizing.expandedWidth > matrixInspectorSizing.compactWidth) || !(matrixInspectorSizing.expandedHeight > matrixInspectorSizing.compactHeight)) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
 if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button' || helpMenuActiveElement !== 'help-menu-button') process.exitCode = 1

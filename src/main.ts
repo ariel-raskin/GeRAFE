@@ -172,12 +172,12 @@ app.innerHTML = `
         <button class="menu-trigger region-tools-button" id="region-menu-button" type="button" aria-haspopup="menu" aria-expanded="false" title="Select, save, and revisit genomic regions">Regions <small id="region-menu-count"></small></button>
         <div class="menu-popover region-menu-popover" id="region-menu-popup" role="menu" hidden>
           <div class="region-menu-heading">Comparison dividers</div>
-          <button class="menu-item" type="button" data-region-action="place-divider"><span>Place comparison divider…</span></button>
+          <button class="menu-item" type="button" data-region-action="place-divider"><span>Add comparison divider…</span></button>
           <button class="menu-item" id="clear-comparison-dividers" type="button" data-region-action="clear-dividers"><span>Clear all comparison dividers</span></button>
           <div id="comparison-divider-items"></div>
           <span class="menu-separator"></span>
-          <button class="menu-item" type="button" data-region-action="select"><span>Select highlighted region…</span><small>Hold Ctrl</small></button>
-          <button class="menu-item" type="button" data-region-action="save-current"><span>Save current view…</span></button>
+          <button class="menu-item" type="button" data-region-action="select"><span>Add region…</span><small>Hold Ctrl</small></button>
+          <button class="menu-item" type="button" data-region-action="save-current"><span>Add current view as region…</span></button>
           <button class="menu-item" id="region-snap-matrix-bins" type="button" data-region-action="toggle-snap"><span>Snap selection to matrix bins</span><small id="region-snap-status"></small></button>
           <div class="region-menu-heading">Saved regions</div>
           <div id="saved-region-items"></div>
@@ -496,6 +496,9 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
   },
   onRegionSelected(region) {
     void saveBrowserRegion(region)
+  },
+  onSavedRegionResize(id, region) {
+    store.edit((draft) => { const saved = draft.savedRegions.find((item) => item.id === id); if (saved) saved.region = region })
   },
   onComparisonDividerCreate(position) {
     store.edit((draft) => {
@@ -1336,7 +1339,7 @@ function renderRegionMenu(): void {
         <i style="background:${escapeHtml(divider.color)}"></i><span><strong>Divider ${index + 1}</strong><small>${escapeHtml(`${divider.chr}:${(divider.position + 1).toLocaleString()}`)}</small></span>
       </button>
       <button class="saved-region-icon" type="button" data-divider-style="${id}" title="Use ${divider.lineStyle === 'dashed' ? 'solid' : 'dashed'} line" aria-label="Toggle divider ${index + 1} line style">${divider.lineStyle === 'dashed' ? '┄' : '—'}</button>
-      <button class="saved-region-icon" type="button" data-divider-color="${id}" title="Set divider color" aria-label="Set divider ${index + 1} color">●</button>
+      <button class="saved-region-icon" type="button" data-divider-color="${id}" title="Set divider color" aria-label="Set divider ${index + 1} color" style="color:${escapeHtml(divider.color)}">●</button>
       <button class="saved-region-icon remove" type="button" data-divider-remove="${id}" title="Remove divider" aria-label="Remove divider ${index + 1}">×</button>
     </div>`
   }).join('') : '<p class="saved-region-empty">No comparison dividers yet.</p>'
@@ -1348,7 +1351,7 @@ function renderRegionMenu(): void {
         <i style="background:${escapeHtml(saved.color)}"></i><span><strong>${escapeHtml(saved.label)}</strong><small>${escapeHtml(formatLocus(saved.region))}</small></span>
       </button>
       <button class="saved-region-icon ${saved.highlighted ? 'is-active' : ''}" type="button" data-region-toggle="${id}" title="${saved.highlighted ? 'Hide' : 'Show'} highlight" aria-label="${saved.highlighted ? 'Hide' : 'Show'} ${escapeHtml(saved.label)} highlight">◉</button>
-      <button class="saved-region-icon" type="button" data-region-color="${id}" title="Set highlight color" aria-label="Set ${escapeHtml(saved.label)} color">●</button>
+      <button class="saved-region-icon" type="button" data-region-color="${id}" title="Set highlight color" aria-label="Set ${escapeHtml(saved.label)} color" style="color:${escapeHtml(saved.color)}">●</button>
       <button class="saved-region-icon ${optionsOpen ? 'is-active' : ''}" type="button" data-region-options="${id}" title="Highlight appearance" aria-label="Set ${escapeHtml(saved.label)} appearance">⚙</button>
       <button class="saved-region-icon" type="button" data-region-rename="${id}" title="Rename region" aria-label="Rename ${escapeHtml(saved.label)}">✎</button>
       <button class="saved-region-icon remove" type="button" data-region-remove="${id}" title="Remove region" aria-label="Remove ${escapeHtml(saved.label)}">×</button>
@@ -1437,6 +1440,8 @@ function handleRegionMenuSettingPreview(event: Event): void {
   if (!input) return
   const output = input.nextElementSibling
   if (output) output.textContent = `${input.value}%`
+  const encodedId = input.dataset.regionOpacity
+  if (encodedId) browser.previewSavedRegionShade(decodeURIComponent(encodedId), Number(input.value) / 100)
 }
 
 function handleRegionMenuSettingChange(event: Event): void {
@@ -1444,6 +1449,7 @@ function handleRegionMenuSettingChange(event: Event): void {
   const encodedId = element.dataset.regionBoundary ?? element.dataset.regionFill ?? element.dataset.regionOpacity
   if (!encodedId) return
   const id = decodeURIComponent(encodedId)
+  if (element.dataset.regionOpacity !== undefined) browser.previewSavedRegionShade(id)
   store.edit((draft) => {
     const region = draft.savedRegions.find((item) => item.id === id)
     if (!region) return
@@ -2965,7 +2971,7 @@ function renderInputHistory(list: HTMLDataListElement, key: string, rawQuery: st
 }
 
 function showInteractionGuide(): Promise<void> {
-  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click on track labels to select additional tracks and Shift+click to select a range; clicking or right-clicking a group card adds all of its tracks. Hold Ctrl and drag in the genomic plot to select a highlighted region. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for a quarter second before dragging its height. Drag horizontally anywhere in the track area, including blank space, to pan. The mouse wheel scrolls; Ctrl+wheel zooms. Use Regions to change highlight appearance, snap selections to matrix bins, or place multiple colored, independently scaled comparison dividers. Matrix highlights follow triangular cis geometry. Right-click a track or group card for options.')
+  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click on track labels to select additional tracks and Shift+click to select a range; clicking or right-clicking a group card adds all of its tracks. Hold Ctrl and drag in the genomic plot to add a highlighted region. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for a quarter second before dragging its height. Drag horizontally anywhere in the track area, including blank space, to pan. The mouse wheel scrolls; Ctrl+wheel zooms. Use Regions to change highlight appearance, snap selections to matrix bins, or add multiple colored, independently scaled comparison dividers. Hover a visible region boundary or divider for the horizontal-resize cursor, then drag it to move that line. Matrix highlights follow triangular cis geometry. Right-click a track or group card for options.')
 }
 
 function showFirstRunInteractionHint(): void {
