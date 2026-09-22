@@ -26,16 +26,21 @@ import {
   applyAutomaticStrandedColors,
   autoPairStrandedTracks,
   assignDisplayGroup,
+  canSignalStack,
+  collapseSignalStack,
   createTrackDocument,
   duplicateTrack,
+  expandSignalStack,
   inferSignalStrand,
   linkScales,
+  moveSignalStackTrack,
   normalizeTrackDocument,
   removeTrack,
   reorderTracks,
   pairStrandedTracks,
   TrackDocumentStore,
   TRACK_COLORS,
+  setSignalStackTrackVisible,
   unlinkScales,
   unlinkStrandedTrack,
 } from './track-document.ts'
@@ -1764,6 +1769,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
     allFittable ? action('height-lock', 'Lock track height', selected.every((track) => track.heightLocked) ? 'current' : '') : '',
   ].join('')
   const groupingItems = (selected.length > 1 && !exactExistingGroupSelection ? action('group', 'Group selected…') : '')
+    + (ordinarySignalsOnly && selected.length > 1 && samePane ? action('signal-stack-collapse', exactExistingGroupSelection ? 'Collapse group into signal stack' : 'Collapse selected into signal stack') : '')
     + (selected.every((track) => track.displayGroupId) ? action('remove-from-group', one ? 'Remove from group' : 'Remove selected tracks from groups') : '')
   let typeItems = ''
   if (signalsOnly) {
@@ -2096,6 +2102,7 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
   const hasMinusColor = members.some((track) => track.kind === 'stranded' || (track.kind === 'signal' && track.signalStrand === 'minus'))
   const memberIds = new Set(members.map((track) => track.id))
   const selectedOutside = store.current.tracks.filter((track) => track.kind !== 'genes' && selectedTrackIds.has(track.id) && !memberIds.has(track.id))
+  const stackCompatible = canSignalStack(members)
   const action = (id: string, label: string, detail = '', disabled = false, danger = false) => {
     const current = detail === 'current' || detail === 'on'
     const visibleDetail = current || detail === 'off' ? '' : detail
@@ -2107,6 +2114,27 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
     contextSubmenuItems.set(id, items)
     return `<button class="context-item context-submenu-trigger" data-context-submenu="${id}" type="button" role="menuitem" aria-haspopup="menu" aria-expanded="false"><span>${label}</span><small>${detail}</small></button>`
   }
+  const stackItems = group.signalStackMode === 'collapsed' ? [
+    action('signal-stack-expand', 'Expand into separate tracks'),
+    '<span class="context-separator"></span>',
+    action('signal-stack-diff-shades', 'Automatic shades', group.signalStackDifferentiation === 'shades' ? 'current' : ''),
+    action('signal-stack-diff-colors', 'Original track colors', group.signalStackDifferentiation === 'colors' ? 'current' : ''),
+    action('signal-stack-diff-patterns', 'Line patterns', group.signalStackDifferentiation === 'patterns' ? 'current' : ''),
+    action('signal-stack-diff-shades-patterns', 'Shades and patterns', !group.signalStackDifferentiation || group.signalStackDifferentiation === 'shades-patterns' ? 'current' : ''),
+    '<span class="context-separator"></span>',
+    action('signal-stack-style-fill-line', 'Translucent fills + outlines', !group.signalStackRenderStyle || group.signalStackRenderStyle === 'fill-line' ? 'current' : ''),
+    action('signal-stack-style-line', 'Lines only', group.signalStackRenderStyle === 'line' ? 'current' : ''),
+    action('signal-stack-opacity', 'Set fill opacity…', `${group.signalStackOpacity ?? 38}%`, group.signalStackRenderStyle === 'line'),
+    '<span class="context-separator"></span>',
+    ...members.flatMap((track, index) => {
+      const hidden = (group.signalStackHiddenTrackIds ?? []).includes(track.id)
+      return [
+        action(`signal-stack-visible-${encodeURIComponent(track.id)}`, `${hidden ? 'Show' : 'Hide'} ${escapeHtml(track.label)}`, hidden ? 'off' : 'on'),
+        action(`signal-stack-up-${encodeURIComponent(track.id)}`, `Move ${escapeHtml(track.label)} up`, '', index === 0),
+        action(`signal-stack-down-${encodeURIComponent(track.id)}`, `Move ${escapeHtml(track.label)} down`, '', index === members.length - 1),
+      ]
+    }),
+  ].join('') : action('signal-stack-collapse', 'Collapse into signal stack')
   trackContextMenu.innerHTML = `
     <div class="context-heading"><strong>${escapeHtml(group.label)}</strong><span>${members.length} track${members.length === 1 ? '' : 's'} · group options</span></div>
     ${[
@@ -2118,9 +2146,10 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
         + (hasPlusColor ? action('group-color-plus', 'Set positive-strand color…') : '')
         + (hasMinusColor ? action('group-color-minus', 'Set negative-strand color…') : '')
         + action('group-height', 'Set group track height…')),
+      stackCompatible ? submenu('signal-stack', 'Signal stack', group.signalStackMode === 'collapsed' ? 'Collapsed · shared scale' : 'Separate tracks', stackItems) : '',
       signalIds.length ? submenu('group-scaling', 'Signal scaling', group.scaleBehavior === 'independent' ? 'Independent' : 'Shared',
         action('group-auto-linked', 'Share automatic scales', group.scaleBehavior === 'linked' ? 'current' : '')
-        + action('group-auto-independent', 'Scale tracks independently', group.scaleBehavior === 'independent' ? 'current' : '')
+        + action('group-auto-independent', 'Scale tracks independently', group.scaleBehavior === 'independent' ? 'current' : '', group.signalStackMode === 'collapsed')
         + action('group-fixed', 'Set shared fixed range…')) : '',
       matricesOnly ? matrixContextMenuMarkup(matrixTracks, action, submenu) : '',
       action('group-rename', 'Rename group…'),
@@ -2229,6 +2258,26 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
     const current = store.current.groups.find((group) => group.id === first?.displayGroupId)?.label ?? ''
     const label = await requestText({ title: 'Group selected tracks', label: 'Group name', initial: current, submitLabel: 'Group tracks', validate: requiredName })
     if (label !== undefined) store.edit((draft) => assignDisplayGroup(draft, ids, label, { autoScale: savedGroupAutoscale() }))
+  }
+  if (command === 'signal-stack-collapse') {
+    let collapsedGroupId: string | undefined
+    store.edit((draft) => {
+      const targets = draft.tracks.filter((track) => ids.includes(track.id))
+      if (!canSignalStack(targets) || !targets.every((track) => track.pane === targets[0]?.pane)) return
+      const existingId = targets[0]?.displayGroupId
+      const exactGroup = existingId && targets.every((track) => track.displayGroupId === existingId)
+        && draft.tracks.filter((track) => track.displayGroupId === existingId).length === targets.length
+      if (exactGroup) collapsedGroupId = existingId
+      else {
+        const used = new Set(draft.groups.map((group) => group.label.toLocaleLowerCase()))
+        let label = 'Signal stack'
+        for (let suffix = 2; used.has(label.toLocaleLowerCase()); suffix += 1) label = `Signal stack ${suffix}`
+        assignDisplayGroup(draft, ids, label, { autoScale: true })
+        collapsedGroupId = draft.tracks.find((track) => ids.includes(track.id))?.displayGroupId
+      }
+      if (collapsedGroupId) collapseSignalStack(draft, collapsedGroupId)
+    })
+    if (collapsedGroupId) showToast('Collapsed selected signal tracks into a shared-scale stack.')
   }
   if (command === 'remove-from-group') store.edit((draft) => {
     const groupedIds = draft.tracks.filter((track) => ids.includes(track.id) && track.displayGroupId).map((track) => track.id)
@@ -2744,6 +2793,34 @@ async function handleGroupContextAction(command: string | undefined, groupId: st
   const matricesOnly = matrixIds.length > 0 && matrixIds.length === memberIds.length
   const hasLinkedStranded = store.current.tracks.some((track) => track.displayGroupId === groupId && track.kind === 'stranded')
   const signalIds = store.current.tracks.filter((track) => (track.kind === 'signal' || track.kind === 'stranded') && track.displayGroupId === groupId).map((track) => track.id)
+  if (command === 'signal-stack-collapse') store.edit((draft) => collapseSignalStack(draft, groupId))
+  if (command === 'signal-stack-expand') store.edit((draft) => expandSignalStack(draft, groupId))
+  if (command?.startsWith('signal-stack-diff-')) store.edit((draft) => {
+    const draftGroup = draft.groups.find((item) => item.id === groupId)
+    if (draftGroup) draftGroup.signalStackDifferentiation = command.slice('signal-stack-diff-'.length) as typeof draftGroup.signalStackDifferentiation
+  })
+  if (command?.startsWith('signal-stack-style-')) store.edit((draft) => {
+    const draftGroup = draft.groups.find((item) => item.id === groupId)
+    if (draftGroup) draftGroup.signalStackRenderStyle = command.slice('signal-stack-style-'.length) as typeof draftGroup.signalStackRenderStyle
+  })
+  if (command === 'signal-stack-opacity') {
+    const entered = await requestText({ title: 'Set signal stack fill opacity', label: 'Opacity (10–100%)', initial: String(group.signalStackOpacity ?? 38), submitLabel: 'Set opacity', validate: (value) => Number(value) >= 10 && Number(value) <= 100 ? undefined : 'Enter a value from 10 to 100.' })
+    const opacity = Number(entered)
+    if (Number.isFinite(opacity)) store.edit((draft) => {
+      const draftGroup = draft.groups.find((item) => item.id === groupId)
+      if (draftGroup) draftGroup.signalStackOpacity = Math.round(opacity)
+    })
+  }
+  if (command?.startsWith('signal-stack-visible-')) {
+    const trackId = decodeURIComponent(command.slice('signal-stack-visible-'.length))
+    const hidden = (group.signalStackHiddenTrackIds ?? []).includes(trackId)
+    store.edit((draft) => setSignalStackTrackVisible(draft, groupId, trackId, hidden))
+  }
+  if (command?.startsWith('signal-stack-up-') || command?.startsWith('signal-stack-down-')) {
+    const up = command.startsWith('signal-stack-up-')
+    const trackId = decodeURIComponent(command.slice(up ? 'signal-stack-up-'.length : 'signal-stack-down-'.length))
+    store.edit((draft) => moveSignalStackTrack(draft, groupId, trackId, up ? -1 : 1))
+  }
   if (command === 'group-open') {
     pendingOpenGroupId = groupId
     void openTrackPicker()
@@ -2772,7 +2849,7 @@ async function handleGroupContextAction(command: string | undefined, groupId: st
     const scaleIds = new Set(draft.tracks.filter((track) => signalIds.includes(track.id)).flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
     for (const scale of draft.scales) if (scaleIds.has(scale.id)) scale.mode = 'auto-visible'
   })
-  if (command === 'group-auto-independent') store.edit((draft) => {
+  if (command === 'group-auto-independent' && group.signalStackMode !== 'collapsed') store.edit((draft) => {
     const draftGroup = draft.groups.find((item) => item.id === groupId)
     if (draftGroup) draftGroup.scaleBehavior = 'independent'
     unlinkScales(draft, signalIds)
@@ -2826,7 +2903,15 @@ async function setTrackHeights(trackIds: readonly string[]): Promise<void> {
 }
 
 function fitUpperTracks(announce = true): void {
-  const upperTracks = store.current.tracks.filter((track) => track.enabled && track.pane === 'main')
+  const representedStacks = new Set<string>()
+  const upperTracks = store.current.tracks.filter((track) => {
+    if (!track.enabled || track.pane !== 'main') return false
+    const group = track.displayGroupId ? store.current.groups.find((item) => item.id === track.displayGroupId && item.signalStackMode === 'collapsed') : undefined
+    if (!group || (group.signalStackHiddenTrackIds ?? []).includes(track.id)) return !group
+    if (representedStacks.has(group.id)) return false
+    representedStacks.add(group.id)
+    return true
+  })
   if (!upperTracks.length) {
     if (announce) showToast('There are no upper tracks to fit.')
     return

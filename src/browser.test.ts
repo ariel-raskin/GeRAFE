@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionFeatures, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixOutlinePolygon, matrixOutlineTargetsTrack, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixRegionBoundarySegments, matrixRegionHighlightPolygon, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, pointToLineSegmentDistance, resizedTrackPixels, resizeMatrixOutlineCorner, resizeRegionBoundary, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, snapRegionToMatrixBins, trackPixelHeight, verticalRegionBoundaryLines, verticallyCenteredBaseline } from './browser.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionFeatures, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixOutlinePolygon, matrixOutlineTargetsTrack, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixRegionBoundarySegments, matrixRegionHighlightPolygon, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, pointToLineSegmentDistance, resizedTrackPixels, resizeMatrixOutlineCorner, resizeRegionBoundary, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalStackColor, signalStackDash, signalTransform, snapRegionToMatrixBins, trackPixelHeight, verticalRegionBoundaryLines, verticallyCenteredBaseline } from './browser.ts'
 import type { AlignmentFeature, InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
@@ -19,6 +19,14 @@ describe('gene direction arrow geometry', () => {
 })
 
 describe('track layout and ruler formatting', () => {
+  it('creates distinguishable stack shades and repeatable line patterns', () => {
+    expect(signalStackColor('#6d55e0', 0, 3, 'shades')).not.toBe(signalStackColor('#6d55e0', 2, 3, 'shades'))
+    expect(signalStackColor('#6d55e0', 1, 3, 'colors')).toBe('#6d55e0')
+    expect(signalStackDash(0, 'patterns')).toEqual([])
+    expect(signalStackDash(1, 'patterns')).toEqual([7, 4])
+    expect(signalStackDash(1, 'shades')).toEqual([])
+  })
+
   it('gives each stranded channel the same height as a regular signal track', () => {
     const regular = trackPixelHeight('signal', 32)
     expect(trackPixelHeight('stranded', 32)).toBe(regular * 2)

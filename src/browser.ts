@@ -3,7 +3,7 @@ import { MatrixTileRenderer, matrixTileCacheKey } from './matrix-tiles.ts'
 import type { Cytoband } from './cytoband.ts'
 import type { GeneFeature, GeneSource, TranscriptFeature } from './reference.ts'
 import { computeScaleDomains, computeSegmentScaleDomains, createTrackDocument, signalFeatureKey } from './track-document.ts'
-import type { ComparisonDivider, DisplayGroup, MatrixOutline, SavedRegion, ScaleDomainSegment, TrackDocument, TrackSpec } from './track-document.ts'
+import type { ComparisonDivider, DisplayGroup, MatrixOutline, SavedRegion, ScaleDomainSegment, SignalStackDifferentiation, TrackDocument, TrackSpec } from './track-document.ts'
 import type { AlignmentCoverageFeature, AlignmentFeature, InteractionFeature, IntervalFeature, MatrixCellPosition, MatrixFeature, Region, SignalFeature, TrackSource, TrackRuntime } from './types.ts'
 
 const RULER_HEIGHT = 70
@@ -1295,10 +1295,14 @@ export class GenomeBrowser {
       }
       const rowHeight = this.trackHeight(spec)
       if (spec.kind === 'signal') {
-        const runtime = this.runtimes.get(signalFeatureKey(spec.id, spec.signalStrand))!
-        const domain = spec.scaleBindingId ? domains.get(spec.scaleBindingId) : undefined
-        const segments = spec.scaleBindingId && segmentDomains ? segmentDomains.map((segment) => ({ start: segment.start, end: segment.end, domain: segment.domains.get(spec.scaleBindingId!) })) : undefined
-        visibleFeatures += this.drawTrack(spec, runtime, index, top, rowHeight, width, palette, domain, segments)
+        const stack = this.signalStackForRepresentative(spec)
+        if (stack) visibleFeatures += this.drawSignalStack(stack.group, stack.members, index, top, rowHeight, width, palette, domains, segmentDomains)
+        else {
+          const runtime = this.runtimes.get(signalFeatureKey(spec.id, spec.signalStrand))!
+          const domain = spec.scaleBindingId ? domains.get(spec.scaleBindingId) : undefined
+          const segments = spec.scaleBindingId && segmentDomains ? segmentDomains.map((segment) => ({ start: segment.start, end: segment.end, domain: segment.domains.get(spec.scaleBindingId!) })) : undefined
+          visibleFeatures += this.drawTrack(spec, runtime, index, top, rowHeight, width, palette, domain, segments)
+        }
       } else if (spec.kind === 'stranded') {
         const plus = this.runtimes.get(signalFeatureKey(spec.id, 'plus'))!
         const minus = this.runtimes.get(signalFeatureKey(spec.id, 'minus'))!
@@ -1735,6 +1739,80 @@ export class GenomeBrowser {
       ctx.lineTo(LABEL_WIDTH + 7, tickY)
       ctx.stroke()
     }
+    return visible.length
+  }
+
+  private drawSignalStack(
+    group: DisplayGroup,
+    members: readonly TrackSpec[],
+    index: number,
+    top: number,
+    height: number,
+    width: number,
+    palette: CanvasPalette,
+    domains: ReadonlyMap<string, ScaleDomain>,
+    segmentDomains?: readonly ScaleDomainSegment[],
+  ): number {
+    const visibleMembers = members.filter((track) => track.enabled && !(group.signalStackHiddenTrackIds ?? []).includes(track.id))
+    const first = visibleMembers[0]
+    if (!first) return 0
+    const differentiation = group.signalStackDifferentiation ?? 'shades-patterns'
+    const firstColor = signalStackColor(first.color, 0, visibleMembers.length, differentiation)
+    const firstSpec: TrackSpec = {
+      ...first,
+      label: `${group.label} (${visibleMembers.length})`,
+      color: firstColor,
+      signalRenderStyle: group.signalStackRenderStyle === 'line' ? 'line' : 'fill',
+      signalOpacity: group.signalStackRenderStyle === 'line' ? 100 : group.signalStackOpacity ?? 38,
+    }
+    const domain = first.scaleBindingId ? domains.get(first.scaleBindingId) : undefined
+    const segments = first.scaleBindingId && segmentDomains ? segmentDomains.map((segment) => ({ start: segment.start, end: segment.end, domain: segment.domains.get(first.scaleBindingId!) })) : undefined
+    let count = this.drawTrack(firstSpec, this.runtimes.get(signalFeatureKey(first.id, first.signalStrand))!, index, top, height, width, palette, domain, segments)
+    if (group.signalStackRenderStyle !== 'line') this.drawSignalStackMember(first, firstColor, signalStackDash(0, differentiation), top, height, width, palette, domain, segments, 'line', 0.9)
+    for (let memberIndex = 1; memberIndex < visibleMembers.length; memberIndex += 1) {
+      const member = visibleMembers[memberIndex]!
+      const memberDomain = member.scaleBindingId ? domains.get(member.scaleBindingId) : domain
+      const memberSegments = member.scaleBindingId && segmentDomains ? segmentDomains.map((segment) => ({ start: segment.start, end: segment.end, domain: segment.domains.get(member.scaleBindingId!) })) : segments
+      const color = signalStackColor(member.color, memberIndex, visibleMembers.length, differentiation)
+      if (group.signalStackRenderStyle !== 'line') count += this.drawSignalStackMember(member, color, [], top, height, width, palette, memberDomain, memberSegments, 'fill', (group.signalStackOpacity ?? 38) / 100)
+      else count += this.visibleSignalFeatures(member).length
+      this.drawSignalStackMember(member, color, signalStackDash(memberIndex, differentiation), top, height, width, palette, memberDomain, memberSegments, 'line', 0.9)
+    }
+    return count
+  }
+
+  private visibleSignalFeatures(spec: TrackSpec): SignalFeature[] {
+    const runtime = this.runtimes.get(signalFeatureKey(spec.id, spec.signalStrand))
+    const raw = (runtime?.features ?? []).filter((feature) => feature.end > this.region.start && feature.start < this.region.end) as SignalFeature[]
+    return spec.allowNegativeValues === false ? raw.map((feature) => ({ ...feature, score: Math.max(0, feature.score) })) : raw
+  }
+
+  private drawSignalStackMember(
+    spec: TrackSpec,
+    color: string,
+    dash: readonly number[],
+    top: number,
+    height: number,
+    width: number,
+    palette: CanvasPalette,
+    domain: ScaleDomain | undefined,
+    segments: readonly TrackScaleSegment[] | undefined,
+    style: 'fill' | 'line',
+    opacity: number,
+  ): number {
+    const visible = this.visibleSignalFeatures(spec)
+    if (!visible.length) return 0
+    const bins = binFeatures(visible, this.region, Math.floor(width - PLOT_LEFT))
+    const fallbackDomain = resolvedSignalDomain(bins, domain)
+    const binding = spec.scaleBindingId ? this.document.scales.find((scale) => scale.id === spec.scaleBindingId) : undefined
+    const canvas = this.context === this.bottomContext ? this.bottomCanvas : this.canvas
+    const activeDomains = !segments?.length
+      ? [{ domain: fallbackDomain, x1: PLOT_LEFT, x2: width }]
+      : segments.map((segment) => ({ domain: segment.domain ?? fallbackDomain, x1: this.plotX(canvas, segment.start), x2: this.plotX(canvas, segment.end) }))
+    const allNonnegative = activeDomains.every((item) => item.domain.min >= 0)
+    const chart = signalChartBounds(top, top + height, allNonnegative)
+    const paintSpec = { ...spec, color, signalRenderStyle: style, signalOpacity: Math.round(opacity * 100) }
+    for (const item of activeDomains) paintSignalDomain(this.context, bins, paintSpec, item.domain, binding?.transform ?? 'linear', chart.top, chart.bottom, item.x1, item.x2, palette, dash)
     return visible.length
   }
 
@@ -2966,7 +3044,23 @@ export class GenomeBrowser {
   }
 
   private visibleSpecs(pane: 'main' | 'bottom'): TrackSpec[] {
-    return this.document.tracks.filter((track) => track.enabled && track.pane === pane)
+    const representedGroups = new Set<string>()
+    return this.document.tracks.filter((track) => {
+      if (!track.enabled || track.pane !== pane) return false
+      const group = track.displayGroupId ? this.document.groups.find((item) => item.id === track.displayGroupId && item.signalStackMode === 'collapsed') : undefined
+      if (!group) return true
+      if ((group.signalStackHiddenTrackIds ?? []).includes(track.id)) return false
+      if (representedGroups.has(group.id)) return false
+      representedGroups.add(group.id)
+      return true
+    })
+  }
+
+  private signalStackForRepresentative(track: TrackSpec): { group: DisplayGroup; members: TrackSpec[] } | undefined {
+    const group = track.displayGroupId ? this.document.groups.find((item) => item.id === track.displayGroupId && item.signalStackMode === 'collapsed') : undefined
+    if (!group) return undefined
+    const members = this.document.tracks.filter((item) => item.displayGroupId === group.id && item.kind === 'signal' && !item.signalStrand)
+    return members.length >= 2 ? { group, members } : undefined
   }
 
   private trackHeight(track: TrackSpec): number {
@@ -2994,7 +3088,8 @@ export class GenomeBrowser {
     let top = 0
     for (const track of this.visibleSpecs(pane)) {
       const bottom = top + this.trackHeight(track)
-      if (y >= top && y < bottom) return x < GROUP_RAIL_WIDTH && track.displayGroupId
+      const stacked = Boolean(this.signalStackForRepresentative(track))
+      if (y >= top && y < bottom) return (stacked || x < GROUP_RAIL_WIDTH) && track.displayGroupId
         ? { kind: 'group', id: track.displayGroupId }
         : { kind: 'track', id: track.id }
       top = bottom
@@ -3980,6 +4075,7 @@ function drawSignalBins(
   color: string,
   style: 'fill' | 'line' | 'bar',
   opacity: number,
+  lineDash: readonly number[] = [],
 ): void {
   ctx.fillStyle = color
   ctx.globalAlpha = opacity
@@ -4013,7 +4109,13 @@ function drawSignalBins(
       ctx.lineTo(left + x + 1, y)
       ctx.lineTo(left + x, y)
     }
-    if (style === 'line') { ctx.strokeStyle = color; ctx.lineWidth = 1.25; ctx.stroke() } else { ctx.closePath(); ctx.fill() }
+    if (style === 'line') {
+      ctx.strokeStyle = color
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([...lineDash])
+      ctx.stroke()
+      ctx.setLineDash([])
+    } else { ctx.closePath(); ctx.fill() }
     start = end + 1
   }
   ctx.restore()
@@ -4216,6 +4318,7 @@ function paintSignalDomain(
   clipStart: number,
   clipEnd: number,
   palette: CanvasPalette,
+  lineDash: readonly number[] = [],
 ): void {
   if (clipEnd <= clipStart) return
   const amplitude = Math.max(1e-9, domain.max - domain.min)
@@ -4236,9 +4339,25 @@ function paintSignalDomain(
     (value) => spec.signalStrand === 'minus'
       ? chartTop + (signalTransform(value, transform) / Math.max(1e-9, transformedMax)) * chartHeight
       : chartBottom - ((signalTransform(value, transform) - transformedMin) / transformedAmplitude) * chartHeight,
-    spec.color, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 100) / 100,
+    spec.color, spec.signalRenderStyle ?? 'fill', (spec.signalOpacity ?? 100) / 100, lineDash,
   )
   ctx.restore()
+}
+
+export function signalStackDash(index: number, differentiation: SignalStackDifferentiation): number[] {
+  if (differentiation !== 'patterns' && differentiation !== 'shades-patterns') return []
+  return [[], [7, 4], [2, 3], [10, 3, 2, 3]][index % 4]!.slice()
+}
+
+export function signalStackColor(base: string, index: number, count: number, differentiation: SignalStackDifferentiation): string {
+  if (differentiation === 'colors' || differentiation === 'patterns' || count <= 1 || !/^#[0-9a-f]{6}$/i.test(base)) return base
+  const number = Number.parseInt(base.slice(1), 16)
+  const rgb = [(number >> 16) & 255, (number >> 8) & 255, number & 255]
+  const midpoint = (count - 1) / 2
+  const signed = midpoint ? (index - midpoint) / midpoint : 0
+  const target = signed < 0 ? 255 : 0
+  const amount = Math.abs(signed) * 0.42
+  return `#${rgb.map((channel) => Math.round(channel + (target - channel) * amount).toString(16).padStart(2, '0')).join('')}`
 }
 
 function binFeatures(features: SignalFeature[], region: Region, width: number): Array<Bin | undefined> {
