@@ -48,8 +48,9 @@ interface TrackDocument {
   tracks: TrackSpec[]
   groups: DisplayGroup[]
   scales: ScaleBinding[]
-  savedRegions: SavedRegion[]
-  comparisonDividers: Array<{ id: string; chr: string; position: number; color: string }>
+  savedRegions: Array<SavedRegion & { boundaryStyle: 'dashed' | 'solid' | 'none'; fill: boolean; shadeOpacity: number }>
+  comparisonDividers: Array<{ id: string; chr: string; position: number; color: string; lineStyle: 'dashed' | 'solid' }>
+  regionSnapToMatrixBins: boolean
   annotations: AnnotationObject[]
 }
 

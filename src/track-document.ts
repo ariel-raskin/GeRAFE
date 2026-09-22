@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 27 as const
+export const TRACK_DOCUMENT_VERSION = 28 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -61,6 +61,9 @@ export interface SavedRegion {
   region: Region
   color: string
   highlighted: boolean
+  boundaryStyle: 'dashed' | 'solid' | 'none'
+  fill: boolean
+  shadeOpacity: number
 }
 
 export interface ComparisonDivider {
@@ -68,6 +71,7 @@ export interface ComparisonDivider {
   chr: string
   position: number
   color: string
+  lineStyle: 'dashed' | 'solid'
 }
 
 export interface ScaleBinding {
@@ -200,6 +204,7 @@ export interface TrackDocument {
   scales: ScaleBinding[]
   savedRegions: SavedRegion[]
   comparisonDividers: ComparisonDivider[]
+  regionSnapToMatrixBins: boolean
 }
 
 export type DocumentChangeReason = 'edit' | 'undo' | 'redo' | 'replace' | 'viewport'
@@ -292,6 +297,7 @@ export function createTrackDocument(referenceId: string, region: Region, options
     scales: [],
     savedRegions: [],
     comparisonDividers: [],
+    regionSnapToMatrixBins: false,
   }
 }
 
@@ -797,7 +803,7 @@ export function computeSegmentScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
@@ -813,11 +819,14 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
       region: { ...saved.region },
       color: typeof saved.color === 'string' && /^#[0-9a-f]{6}$/i.test(saved.color) ? saved.color.toLowerCase() : '#6d55e0',
       highlighted: saved.highlighted !== false,
+      boundaryStyle: saved.boundaryStyle === 'solid' || saved.boundaryStyle === 'none' ? saved.boundaryStyle : 'dashed',
+      fill: saved.fill !== false,
+      shadeOpacity: typeof saved.shadeOpacity === 'number' && Number.isFinite(saved.shadeOpacity) ? Math.max(0.01, Math.min(0.5, saved.shadeOpacity)) : 0.09,
     }]
   }).slice(0, 500) : []
   const dividerIds = new Set<string>()
   const rawDividers = Array.isArray(value.comparisonDividers) ? value.comparisonDividers
-    : isRecord(value.comparisonDivider) ? [{ ...value.comparisonDivider, id: 'comparison-divider-legacy', color: '#ee7b2d' }] : []
+    : isRecord(value.comparisonDivider) ? [{ ...value.comparisonDivider, id: 'comparison-divider-legacy', color: '#ee7b2d', lineStyle: 'dashed' }] : []
   const comparisonDividers: ComparisonDivider[] = rawDividers.flatMap((divider): ComparisonDivider[] => {
     if (!isRecord(divider) || typeof divider.id !== 'string' || !divider.id.trim() || dividerIds.has(divider.id)
       || typeof divider.chr !== 'string' || !divider.chr.trim() || typeof divider.position !== 'number'
@@ -828,6 +837,7 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
       chr: divider.chr,
       position: Math.round(divider.position),
       color: typeof divider.color === 'string' && /^#[0-9a-f]{6}$/i.test(divider.color) ? divider.color.toLowerCase() : '#ee7b2d',
+      lineStyle: divider.lineStyle === 'solid' ? 'solid' : 'dashed',
     }]
   }).slice(0, 50)
   const sourceIds = new Set(sources.map((source) => source.id))
@@ -994,6 +1004,7 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     scales,
     savedRegions,
     comparisonDividers,
+    regionSnapToMatrixBins: value.regionSnapToMatrixBins === true,
   }
   for (const track of document.tracks) {
     const sourceFormat = document.sources.find((source) => track.sourceIds.includes(source.id))?.format

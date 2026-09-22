@@ -294,6 +294,16 @@ export class GenomeBrowser {
     this.scheduleRender()
   }
 
+  getMatrixSnapResolution(): number | undefined {
+    const resolutions = this.document.tracks.flatMap((spec): number[] => {
+      if (!spec.enabled || spec.kind !== 'matrix') return []
+      const matrix = this.runtimes.get(spec.id)?.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
+      const resolution = matrix?.resolution ?? spec.matrixResolution
+      return resolution && Number.isFinite(resolution) && resolution > 0 ? [resolution] : []
+    })
+    return resolutions.length ? Math.min(...resolutions) : undefined
+  }
+
   setRegionToolMode(mode?: RegionToolMode): void {
     this.regionToolMode = mode
     for (const canvas of [this.headerCanvas, this.canvas, this.bottomCanvas]) {
@@ -443,7 +453,7 @@ export class GenomeBrowser {
       this.clearBamHover()
       return true
     }
-    if (this.regionToolMode === 'select') {
+    if (this.regionToolMode === 'select' || event.ctrlKey) {
       canvas.setPointerCapture(event.pointerId)
       const x = Math.max(PLOT_LEFT, Math.min(this.cssWidth(canvas), event.offsetX))
       this.regionSelection = { canvas, startX: x, currentX: x }
@@ -484,7 +494,9 @@ export class GenomeBrowser {
       if (event.type === 'pointerup' && Math.abs(selection.currentX - selection.startX) >= 3) {
         const first = this.plotCoordinate(canvas, Math.min(selection.startX, selection.currentX))
         const second = this.plotCoordinate(canvas, Math.max(selection.startX, selection.currentX))
-        this.callbacks.onRegionSelected({ chr: this.region.chr, start: Math.floor(first), end: Math.max(Math.floor(first) + 1, Math.ceil(second)) })
+        const snapResolution = this.document.regionSnapToMatrixBins ? this.getMatrixSnapResolution() : undefined
+        const chromosomeLength = this.chromosomes.get(this.region.chr) ?? Number.MAX_SAFE_INTEGER
+        this.callbacks.onRegionSelected(snapRegionToMatrixBins({ chr: this.region.chr, start: first, end: second }, snapResolution, chromosomeLength))
       }
       this.scheduleRender()
       return true
@@ -1095,12 +1107,12 @@ export class GenomeBrowser {
   private drawRegionOverlays(pane: 'main' | 'bottom', specs: readonly TrackSpec[], width: number, height: number, palette: CanvasPalette): void {
     const ctx = this.context
     const canvas = pane === 'main' ? this.canvas : this.bottomCanvas
-    const regions: Array<Pick<SavedRegion, 'region' | 'color'>> = this.document.savedRegions
+    const regions: Array<Pick<SavedRegion, 'region' | 'color' | 'boundaryStyle' | 'fill' | 'shadeOpacity'>> = this.document.savedRegions
       .filter((saved) => saved.highlighted && saved.region.chr === this.region.chr)
     if (this.regionSelection) {
       const first = this.plotCoordinate(this.regionSelection.canvas, Math.min(this.regionSelection.startX, this.regionSelection.currentX))
       const second = this.plotCoordinate(this.regionSelection.canvas, Math.max(this.regionSelection.startX, this.regionSelection.currentX))
-      regions.push({ region: { chr: this.region.chr, start: first, end: second }, color: palette.selection })
+      regions.push({ region: { chr: this.region.chr, start: first, end: second }, color: palette.selection, boundaryStyle: 'dashed', fill: true, shadeOpacity: 0.09 })
     }
     const stripRanges: Array<{ top: number; bottom: number }> = []
     const triangleRanges: Array<{ spec: TrackSpec; top: number; bottom: number }> = []
@@ -1126,13 +1138,21 @@ export class GenomeBrowser {
       if (x2 <= x1) continue
       for (const range of stripRanges) {
         if (range.bottom <= range.top) continue
-        ctx.fillStyle = saved.color
-        ctx.globalAlpha = 0.09
-        ctx.fillRect(x1, range.top, Math.max(1, x2 - x1), range.bottom - range.top)
-        ctx.globalAlpha = 0.58
-        ctx.strokeStyle = saved.color
-        ctx.setLineDash([4, 3])
-        ctx.strokeRect(x1 + 0.5, range.top + 0.5, Math.max(0, x2 - x1 - 1), Math.max(0, range.bottom - range.top - 1))
+        if (saved.fill) {
+          ctx.fillStyle = saved.color
+          ctx.globalAlpha = saved.shadeOpacity
+          ctx.fillRect(x1, range.top, Math.max(1, x2 - x1), range.bottom - range.top)
+        }
+        if (saved.boundaryStyle !== 'none') {
+          ctx.globalAlpha = 0.7
+          ctx.strokeStyle = saved.color
+          ctx.setLineDash(saved.boundaryStyle === 'dashed' ? [4, 3] : [])
+          ctx.beginPath()
+          for (const line of verticalRegionBoundaryLines(x1, x2, [range])) {
+            ctx.moveTo(line.x1, line.y1); ctx.lineTo(line.x2, line.y2)
+          }
+          ctx.stroke()
+        }
       }
       for (const range of triangleRanges) {
         const geometry = matrixVerticalGeometry(range.top, range.bottom, range.spec.matrixDirection ?? 'up')
@@ -1140,15 +1160,19 @@ export class GenomeBrowser {
         const scale = (width - PLOT_LEFT) / Math.max(1, this.region.end - this.region.start)
         const maximumDistance = matrixQueryMaximumDistance(this.region.end - this.region.start, range.spec.matrixDepthMode ?? 'full', range.spec.matrixMaxDistance)
         const depth = Math.min((x2 - x1) / 2, maximumDistance * scale / 2, Math.abs(geometry.clipBottom - geometry.clipTop))
-        ctx.fillStyle = saved.color
-        ctx.globalAlpha = 0.11
-        matrixDomainPath(ctx, x1, x2, geometry.baseline, direction, depth)
-        ctx.fill()
-        ctx.globalAlpha = 0.66
-        ctx.strokeStyle = saved.color
-        ctx.setLineDash([4, 3])
-        matrixDomainPath(ctx, x1, x2, geometry.baseline, direction, depth)
-        ctx.stroke()
+        if (saved.fill) {
+          ctx.fillStyle = saved.color
+          ctx.globalAlpha = saved.shadeOpacity
+          matrixDomainPath(ctx, x1, x2, geometry.baseline, direction, depth)
+          ctx.fill()
+        }
+        if (saved.boundaryStyle !== 'none') {
+          ctx.globalAlpha = 0.7
+          ctx.strokeStyle = saved.color
+          ctx.setLineDash(saved.boundaryStyle === 'dashed' ? [4, 3] : [])
+          matrixDomainPath(ctx, x1, x2, geometry.baseline, direction, depth)
+          ctx.stroke()
+        }
       }
     }
     ctx.restore()
@@ -1165,7 +1189,7 @@ export class GenomeBrowser {
       ctx.globalAlpha = 0.95
       ctx.strokeStyle = divider.color
       ctx.lineWidth = 1.5
-      ctx.setLineDash([6, 4])
+      ctx.setLineDash(divider.lineStyle === 'dashed' ? [6, 4] : [])
       ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, height); ctx.stroke()
       ctx.setLineDash([])
       if (header) {
@@ -3234,6 +3258,25 @@ export function matrixRegionHighlightPolygon(left: number, right: number, baseli
     { x: right - depth, y: baseline + direction * depth },
     { x: left + depth, y: baseline + direction * depth },
   ]
+}
+
+export function snapRegionToMatrixBins(region: Region, resolution: number | undefined, chromosomeLength: number): Region {
+  let start = region.start
+  let end = region.end
+  if (resolution && Number.isFinite(resolution) && resolution > 0) {
+    start = Math.round(start / resolution) * resolution
+    end = Math.round(end / resolution) * resolution
+    if (end <= start) end = start + resolution
+  }
+  const boundedStart = Math.max(0, Math.min(Math.floor(start), chromosomeLength - 1))
+  return { chr: region.chr, start: boundedStart, end: Math.max(boundedStart + 1, Math.min(Math.ceil(end), chromosomeLength)) }
+}
+
+export function verticalRegionBoundaryLines(x1: number, x2: number, ranges: readonly { top: number; bottom: number }[]): Array<{ x1: number; y1: number; x2: number; y2: number }> {
+  return ranges.flatMap((range) => range.bottom > range.top ? [
+    { x1: x1 + 0.5, y1: range.top, x2: x1 + 0.5, y2: range.bottom },
+    { x1: x2 - 0.5, y1: range.top, x2: x2 - 0.5, y2: range.bottom },
+  ] : [])
 }
 
 function matrixDomainPath(ctx: CanvasRenderingContext2D, left: number, right: number, baseline: number, direction: number, depthPixels: number): void {

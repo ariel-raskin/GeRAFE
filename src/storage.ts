@@ -16,6 +16,7 @@ export const STORAGE_KEYS = {
   matrixInspectorBins: 'gerafe-matrix-inspector-bins',
   matrixInspectorDetails: 'gerafe-matrix-inspector-details',
   matrixLegend: 'gerafe-matrix-color-scale',
+  inputHistory: 'gerafe-input-history',
 } as const
 
 export const LEGACY_STORAGE_KEYS = {
@@ -36,6 +37,7 @@ export const LEGACY_STORAGE_KEYS = {
   matrixInspectorBins: 'locus-glide-matrix-inspector-bins',
   matrixInspectorDetails: 'locus-glide-matrix-inspector-details',
   matrixLegend: 'locus-glide-matrix-color-scale',
+  inputHistory: 'locus-glide-input-history',
 } as const
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>

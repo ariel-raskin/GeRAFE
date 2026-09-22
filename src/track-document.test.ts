@@ -153,25 +153,29 @@ describe('track document', () => {
   it('persists valid saved regions and comparison dividers while migrating the schema-v26 divider', () => {
     const document = documentWithTwoTracks() as any
     document.savedRegions = [
-      { id: 'promoter', label: ' RUNX1 promoter ', region: { chr: 'chr21', start: 35_000_000, end: 35_010_000 }, color: '#AABBCC', highlighted: true },
+      { id: 'promoter', label: ' RUNX1 promoter ', region: { chr: 'chr21', start: 35_000_000, end: 35_010_000 }, color: '#AABBCC', highlighted: true,
+        boundaryStyle: 'solid', fill: false, shadeOpacity: 0.22 },
       { id: 'bad', label: '', region: { chr: 'chr21', start: -1, end: 10 }, color: 'red' },
     ]
     document.comparisonDividers = [
-      { id: 'boundary-a', chr: 'chr21', position: 35_005_000.4, color: '#AABBCC' },
+      { id: 'boundary-a', chr: 'chr21', position: 35_005_000.4, color: '#AABBCC', lineStyle: 'solid' },
       { id: 'bad', chr: '', position: -1, color: 'orange' },
     ]
+    document.regionSnapToMatrixBins = true
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
     expect(restored.savedRegions).toEqual([{
       id: 'promoter', label: 'RUNX1 promoter', region: { chr: 'chr21', start: 35_000_000, end: 35_010_000 }, color: '#aabbcc', highlighted: true,
+      boundaryStyle: 'solid', fill: false, shadeOpacity: 0.22,
     }])
-    expect(restored.comparisonDividers).toEqual([{ id: 'boundary-a', chr: 'chr21', position: 35_005_000, color: '#aabbcc' }])
+    expect(restored.comparisonDividers).toEqual([{ id: 'boundary-a', chr: 'chr21', position: 35_005_000, color: '#aabbcc', lineStyle: 'solid' }])
+    expect(restored.regionSnapToMatrixBins).toBe(true)
 
     const legacy = JSON.parse(JSON.stringify(document))
     legacy.schemaVersion = 26
     delete legacy.comparisonDividers
     legacy.comparisonDivider = { chr: 'chr21', position: 35_006_000.4 }
     expect(normalizeTrackDocument(legacy).comparisonDividers).toEqual([
-      { id: 'comparison-divider-legacy', chr: 'chr21', position: 35_006_000, color: '#ee7b2d' },
+      { id: 'comparison-divider-legacy', chr: 'chr21', position: 35_006_000, color: '#ee7b2d', lineStyle: 'dashed' },
     ])
   })
 

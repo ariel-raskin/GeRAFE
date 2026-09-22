@@ -317,6 +317,16 @@ button, label { -webkit-tap-highlight-color: transparent; }
 .saved-region-icon:hover, .saved-region-icon:focus-visible { color: white; background: var(--accent); outline: none; }
 .saved-region-icon.is-active { color: var(--accent); }
 .saved-region-icon.remove:hover, .saved-region-icon.remove:focus-visible { background: #a93e51; }
+.region-menu-popover .menu-item.current { color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.saved-region-options { display: grid; grid-template-columns: 1fr auto; gap: 7px 12px; margin: 0 6px 7px 14px; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--button-muted); }
+.saved-region-options label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; }
+.saved-region-options label:first-child { grid-column: 1; }
+.saved-region-options select { min-width: 86px; height: 25px; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; color: var(--ink); background: var(--field); font-size: 10px; }
+.saved-region-fill { grid-column: 2; justify-self: end; }
+.saved-region-fill input { margin: 0; }
+.saved-region-shade { grid-column: 1 / -1; display: grid !important; grid-template-columns: auto 1fr 30px; }
+.saved-region-shade input { min-width: 0; width: 100%; accent-color: var(--accent); }
+.saved-region-shade output { color: var(--ink); text-align: right; font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; }
 
 .browser-body {
   position: relative;

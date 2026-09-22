@@ -51,6 +51,7 @@ import { workspaceDirectory, workspaceFileName, workspaceSaveDefaultPath } from 
 import { AppUpdateController, createTauriUpdateBackend, updateProgressPercent } from './app-update.ts'
 import type { AppUpdateState } from './app-update.ts'
 import { installWindowsCursorScaleCorrection } from './platform-cursors.ts'
+import { addInputHistory, matchingInputHistory, parseInputHistory } from './input-history.ts'
 
 void installWindowsCursorScaleCorrection()
 
@@ -59,6 +60,7 @@ type ActionDialogRequest = {
   mode: 'input' | 'confirm' | 'notice'
   title: string
   message?: string
+  historyKey?: string
   label?: string
   initial?: string
   placeholder?: string
@@ -85,6 +87,7 @@ const {
   matrixInspectorBins: MATRIX_INSPECTOR_BINS_KEY,
   matrixInspectorDetails: MATRIX_INSPECTOR_DETAILS_KEY,
   matrixLegend: MATRIX_LEGEND_KEY,
+  inputHistory: INPUT_HISTORY_KEY,
 } = STORAGE_KEYS
 migrateLegacyStorage(localStorage)
 applyTheme(savedTheme())
@@ -155,26 +158,27 @@ app.innerHTML = `
       <input id="file-input" type="file" multiple />
       <input id="workspace-file-input" type="file" accept=".json,.gerafe.json,.locus.json" />
       <input id="relink-file-input" type="file" multiple />
-      <form class="locus-form" id="locus-form">
+      <form class="locus-form" id="locus-form" autocomplete="off">
         <div class="reference-picker chromosome-picker" id="chromosome-picker">
           <button class="reference-trigger chromosome-trigger" id="chromosome-button" type="button" aria-haspopup="listbox" aria-expanded="false" title="Choose a chromosome"><span id="chromosome-label"></span><i aria-hidden="true"></i></button>
           <div class="reference-popover chromosome-popover" id="chromosome-popup" role="listbox" hidden></div>
         </div>
-        <input id="locus-input" aria-label="Gene name or genomic locus" placeholder="Gene or locus" spellcheck="false" />
+        <input id="locus-input" aria-label="Gene name or genomic locus" placeholder="Gene or locus" spellcheck="false" autocomplete="off" list="locus-input-history" />
+        <datalist id="locus-input-history"></datalist>
         <button type="submit" aria-label="Go to locus">Go</button>
       </form>
       <div class="toolbar-spacer"></div>
       <div class="app-menu region-tools-control" id="region-menu-root">
         <button class="menu-trigger region-tools-button" id="region-menu-button" type="button" aria-haspopup="menu" aria-expanded="false" title="Select, save, and revisit genomic regions">Regions <small id="region-menu-count"></small></button>
         <div class="menu-popover region-menu-popover" id="region-menu-popup" role="menu" hidden>
-          <button class="menu-item" type="button" data-region-action="select"><span>Select highlighted region…</span></button>
-          <button class="menu-item" type="button" data-region-action="save-current"><span>Save current view…</span></button>
-          <span class="menu-separator"></span>
+          <div class="region-menu-heading">Comparison dividers</div>
           <button class="menu-item" type="button" data-region-action="place-divider"><span>Place comparison divider…</span></button>
           <button class="menu-item" id="clear-comparison-dividers" type="button" data-region-action="clear-dividers"><span>Clear all comparison dividers</span></button>
-          <div class="region-menu-heading">Comparison dividers</div>
           <div id="comparison-divider-items"></div>
           <span class="menu-separator"></span>
+          <button class="menu-item" type="button" data-region-action="select"><span>Select highlighted region…</span><small>Hold Ctrl</small></button>
+          <button class="menu-item" type="button" data-region-action="save-current"><span>Save current view…</span></button>
+          <button class="menu-item" id="region-snap-matrix-bins" type="button" data-region-action="toggle-snap"><span>Snap selection to matrix bins</span><small id="region-snap-status"></small></button>
           <div class="region-menu-heading">Saved regions</div>
           <div id="saved-region-items"></div>
         </div>
@@ -227,11 +231,11 @@ app.innerHTML = `
   <div class="track-context-menu" id="track-context-menu" role="menu" hidden></div>
   <div class="track-context-menu track-context-flyout" id="track-context-flyout" role="menu" hidden></div>
   <div class="color-dialog" id="color-dialog" role="dialog" aria-modal="true" aria-labelledby="color-dialog-title" hidden>
-    <form class="color-dialog-card" id="color-dialog-form">
+    <form class="color-dialog-card" id="color-dialog-form" autocomplete="off">
       <strong id="color-dialog-title">Set track color</strong>
       <canvas class="color-field" id="track-color-field" width="238" height="142" aria-label="Color saturation and brightness"></canvas>
       <input class="color-hue" id="track-color-hue" type="range" min="0" max="360" step="1" aria-label="Color hue" />
-      <label class="color-value"><i id="track-color-preview"></i><span>Hex</span><input id="track-color-input" type="text" maxlength="7" spellcheck="false" aria-label="Track color hexadecimal value" /></label>
+      <label class="color-value"><i id="track-color-preview"></i><span>Hex</span><input id="track-color-input" type="text" maxlength="7" spellcheck="false" autocomplete="off" aria-label="Track color hexadecimal value" /></label>
       <div><button class="dialog-button secondary" id="color-cancel" type="button">Cancel</button><button class="dialog-button primary" type="submit">Set color</button></div>
     </form>
   </div>
@@ -320,11 +324,11 @@ app.innerHTML = `
     </form>
   </div>
   <div class="action-dialog" id="action-dialog" role="dialog" aria-modal="true" aria-labelledby="action-dialog-title" hidden>
-    <form class="action-dialog-card" id="action-dialog-form">
+    <form class="action-dialog-card" id="action-dialog-form" autocomplete="off">
       <header><strong id="action-dialog-title"></strong><button class="update-dialog-close" id="action-dialog-close" type="button" aria-label="Close">×</button></header>
       <div class="action-dialog-content">
         <p id="action-dialog-message" hidden></p>
-        <label id="action-dialog-field"><span id="action-dialog-label"></span><input id="action-dialog-input" type="text" spellcheck="false" /><small id="action-dialog-error" role="alert"></small></label>
+        <label id="action-dialog-field"><span id="action-dialog-label"></span><input id="action-dialog-input" type="text" spellcheck="false" autocomplete="off" list="action-input-history" /><datalist id="action-input-history"></datalist><small id="action-dialog-error" role="alert"></small></label>
       </div>
       <footer><button class="dialog-button secondary" id="action-dialog-cancel" type="button">Cancel</button><button class="dialog-button primary" id="action-dialog-submit" type="submit">Apply</button></footer>
     </form>
@@ -339,6 +343,7 @@ const bottomPane = document.querySelector<HTMLElement>('#bottom-pane')!
 const paneResizer = document.querySelector<HTMLElement>('#pane-resizer')!
 const mainTrackScroll = document.querySelector<HTMLElement>('#main-track-scroll')!
 const locusInput = document.querySelector<HTMLInputElement>('#locus-input')!
+const locusInputHistory = document.querySelector<HTMLDataListElement>('#locus-input-history')!
 const chromosomePicker = document.querySelector<HTMLElement>('#chromosome-picker')!
 const chromosomeButton = document.querySelector<HTMLButtonElement>('#chromosome-button')!
 const chromosomeLabel = document.querySelector<HTMLElement>('#chromosome-label')!
@@ -420,6 +425,7 @@ const actionDialogMessage = document.querySelector<HTMLElement>('#action-dialog-
 const actionDialogField = document.querySelector<HTMLElement>('#action-dialog-field')!
 const actionDialogLabel = document.querySelector<HTMLElement>('#action-dialog-label')!
 const actionDialogInput = document.querySelector<HTMLInputElement>('#action-dialog-input')!
+const actionInputHistory = document.querySelector<HTMLDataListElement>('#action-input-history')!
 const actionDialogError = document.querySelector<HTMLElement>('#action-dialog-error')!
 const actionDialogClose = document.querySelector<HTMLButtonElement>('#action-dialog-close')!
 const actionDialogCancel = document.querySelector<HTMLButtonElement>('#action-dialog-cancel')!
@@ -432,6 +438,8 @@ const regionMenuPopup = document.querySelector<HTMLElement>('#region-menu-popup'
 const savedRegionItems = document.querySelector<HTMLElement>('#saved-region-items')!
 const comparisonDividerItems = document.querySelector<HTMLElement>('#comparison-divider-items')!
 const clearComparisonDividers = document.querySelector<HTMLButtonElement>('#clear-comparison-dividers')!
+const regionSnapMatrixBins = document.querySelector<HTMLButtonElement>('#region-snap-matrix-bins')!
+const regionSnapStatus = document.querySelector<HTMLElement>('#region-snap-status')!
 
 const runtimeSources = new Map<string, TrackSource>()
 const selectedTrackIds = new Set<string>()
@@ -448,6 +456,7 @@ let pendingMatrixTrackIds: string[] = []
 let pendingMatrixGroupId: string | undefined
 let matrixDialogColors: string[] = []
 let pendingActionDialog: ActionDialogRequest | undefined
+let activeActionHistoryKey: string | undefined
 let bottomPaneAutoFit = true
 let upperPaneAutoFit = savedUpperPaneAutoFit()
 let upperAutoFitFrame: number | undefined
@@ -457,6 +466,8 @@ let appUpdaterPromise: Promise<AppUpdateController> | undefined
 let currentWorkspacePath = savedWorkspacePath()
 let lastWorkspaceSaveDirectory = savedWorkspaceDirectory() ?? workspaceDirectory(currentWorkspacePath ?? '')
 let activeRegionTool: RegionToolMode | undefined
+let openRegionOptionsId: string | undefined
+let ctrlRegionSelectionActive = false
 
 interface OpenedSource {
   source: TrackSource
@@ -491,6 +502,7 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
       draft.comparisonDividers.push({
         id: crypto.randomUUID(), chr: browser.getRegion().chr, position,
         color: TRACK_COLORS[draft.comparisonDividers.length % TRACK_COLORS.length],
+        lineStyle: 'dashed',
       })
     })
   },
@@ -589,13 +601,21 @@ populateReferences()
 populateChromosomes(activeChromosomes)
 locusInput.value = formatLocus(initialRegion)
 void activateGeneTrack(activeReference)
+locusInput.addEventListener('focus', () => { locusInputHistory.replaceChildren() })
+locusInput.addEventListener('input', () => renderInputHistory(locusInputHistory, 'locus', locusInput.value))
+actionDialogInput.addEventListener('focus', () => { actionInputHistory.replaceChildren() })
+actionDialogInput.addEventListener('input', () => {
+  if (activeActionHistoryKey) renderInputHistory(actionInputHistory, activeActionHistoryKey, actionDialogInput.value)
+})
 
 document.querySelector<HTMLFormElement>('#locus-form')!.addEventListener('submit', (event) => {
   event.preventDefault()
+  const query = locusInput.value.trim()
   const region = parseLocus(locusInput.value, activeChromosomes)
-  if (region) return browser.setRegion(region)
+  if (region) { rememberInputHistory('locus', query); return browser.setRegion(region) }
   const gene = activeGeneSource?.find(locusInput.value)
   if (gene) {
+    rememberInputHistory('locus', query)
     const geneSpan = gene.end - gene.start
     const padding = Math.max(5_000, Math.round(geneSpan * 0.25))
     browser.setRegion({ chr: gene.chr, start: gene.start - padding, end: gene.end + padding })
@@ -753,7 +773,12 @@ document.addEventListener('pointerdown', (event) => {
   if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog, #track-options-dialog, #matrix-settings-dialog, #action-dialog')) clearTrackSelection()
 })
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') { closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeMatrixSettingsDialog(); closeActionDialog(undefined); browser.setRegionToolMode(undefined) }
+  if (event.key === 'Control' && !event.repeat && !activeRegionTool
+    && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement) && !(event.target as HTMLElement).isContentEditable) {
+    ctrlRegionSelectionActive = true
+    browser.setRegionToolMode('select')
+  }
+  if (event.key === 'Escape') { ctrlRegionSelectionActive = false; closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeMatrixSettingsDialog(); closeActionDialog(undefined); browser.setRegionToolMode(undefined) }
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'o') {
     event.preventDefault()
     closeMenus()
@@ -786,6 +811,16 @@ document.addEventListener('keydown', (event) => {
     store.redo()
   }
 })
+document.addEventListener('keyup', (event) => {
+  if (event.key !== 'Control' || !ctrlRegionSelectionActive) return
+  ctrlRegionSelectionActive = false
+  if (activeRegionTool === 'select') browser.setRegionToolMode(undefined)
+})
+window.addEventListener('blur', () => {
+  if (!ctrlRegionSelectionActive) return
+  ctrlRegionSelectionActive = false
+  if (activeRegionTool === 'select') browser.setRegionToolMode(undefined)
+})
 
 function switchChromosome(chr: string): void {
   const length = activeChromosomes.get(chr)
@@ -806,6 +841,9 @@ fitTracksAuto.addEventListener('click', () => {
   if (upperPaneAutoFit) scheduleUpperAutoFit()
 })
 regionMenuPopup.addEventListener('click', (event) => void handleRegionMenuAction(event))
+regionMenuPopup.addEventListener('change', handleRegionMenuSettingChange)
+regionMenuPopup.addEventListener('input', handleRegionMenuSettingPreview)
+regionMenuButton.addEventListener('click', renderRegionMenu)
 const themeToggle = document.querySelector<HTMLButtonElement>('#theme-toggle')!
 updateThemeButton(themeToggle)
 themeToggle.addEventListener('click', () => {
@@ -1288,27 +1326,37 @@ function renderRegionMenu(): void {
       : 'Select, save, and revisit genomic regions'
   const dividers = store.current.comparisonDividers
   clearComparisonDividers.disabled = !dividers.length
+  const snapResolution = browser.getMatrixSnapResolution()
+  regionSnapMatrixBins.classList.toggle('current', store.current.regionSnapToMatrixBins)
+  regionSnapStatus.textContent = `${store.current.regionSnapToMatrixBins ? 'On' : 'Off'}${snapResolution ? ` · ${formatBases(snapResolution)}` : ' · no matrix grid'}`
   comparisonDividerItems.innerHTML = dividers.length ? dividers.map((divider, index) => {
     const id = encodeURIComponent(divider.id)
     return `<div class="saved-region-row">
       <button class="saved-region-go" type="button" data-divider-go="${id}" title="Center comparison divider">
         <i style="background:${escapeHtml(divider.color)}"></i><span><strong>Divider ${index + 1}</strong><small>${escapeHtml(`${divider.chr}:${(divider.position + 1).toLocaleString()}`)}</small></span>
       </button>
+      <button class="saved-region-icon" type="button" data-divider-style="${id}" title="Use ${divider.lineStyle === 'dashed' ? 'solid' : 'dashed'} line" aria-label="Toggle divider ${index + 1} line style">${divider.lineStyle === 'dashed' ? '┄' : '—'}</button>
       <button class="saved-region-icon" type="button" data-divider-color="${id}" title="Set divider color" aria-label="Set divider ${index + 1} color">●</button>
       <button class="saved-region-icon remove" type="button" data-divider-remove="${id}" title="Remove divider" aria-label="Remove divider ${index + 1}">×</button>
     </div>`
   }).join('') : '<p class="saved-region-empty">No comparison dividers yet.</p>'
   savedRegionItems.innerHTML = regions.length ? regions.map((saved) => {
     const id = encodeURIComponent(saved.id)
-    return `<div class="saved-region-row">
+    const optionsOpen = openRegionOptionsId === saved.id
+    return `<div class="saved-region-entry"><div class="saved-region-row">
       <button class="saved-region-go" type="button" data-region-go="${id}" title="Go to ${escapeHtml(saved.label)}">
         <i style="background:${escapeHtml(saved.color)}"></i><span><strong>${escapeHtml(saved.label)}</strong><small>${escapeHtml(formatLocus(saved.region))}</small></span>
       </button>
       <button class="saved-region-icon ${saved.highlighted ? 'is-active' : ''}" type="button" data-region-toggle="${id}" title="${saved.highlighted ? 'Hide' : 'Show'} highlight" aria-label="${saved.highlighted ? 'Hide' : 'Show'} ${escapeHtml(saved.label)} highlight">◉</button>
       <button class="saved-region-icon" type="button" data-region-color="${id}" title="Set highlight color" aria-label="Set ${escapeHtml(saved.label)} color">●</button>
+      <button class="saved-region-icon ${optionsOpen ? 'is-active' : ''}" type="button" data-region-options="${id}" title="Highlight appearance" aria-label="Set ${escapeHtml(saved.label)} appearance">⚙</button>
       <button class="saved-region-icon" type="button" data-region-rename="${id}" title="Rename region" aria-label="Rename ${escapeHtml(saved.label)}">✎</button>
       <button class="saved-region-icon remove" type="button" data-region-remove="${id}" title="Remove region" aria-label="Remove ${escapeHtml(saved.label)}">×</button>
-    </div>`
+    </div>${optionsOpen ? `<div class="saved-region-options">
+      <label><span>Boundary</span><select data-region-boundary="${id}"><option value="dashed" ${saved.boundaryStyle === 'dashed' ? 'selected' : ''}>Dashed</option><option value="solid" ${saved.boundaryStyle === 'solid' ? 'selected' : ''}>Solid</option><option value="none" ${saved.boundaryStyle === 'none' ? 'selected' : ''}>None</option></select></label>
+      <label class="saved-region-fill"><input type="checkbox" data-region-fill="${id}" ${saved.fill ? 'checked' : ''} /><span>Fill</span></label>
+      <label class="saved-region-shade"><span>Shade</span><input type="range" min="1" max="50" step="1" value="${Math.round(saved.shadeOpacity * 100)}" data-region-opacity="${id}" ${saved.fill ? '' : 'disabled'} /><output>${Math.round(saved.shadeOpacity * 100)}%</output></label>
+    </div>` : ''}</div>`
   }).join('') : '<p class="saved-region-empty">No saved regions yet.</p>'
 }
 
@@ -1316,6 +1364,10 @@ async function handleRegionMenuAction(event: Event): Promise<void> {
   const target = event.target as Element
   const action = target.closest<HTMLElement>('[data-region-action]')?.dataset.regionAction
   if (action) {
+    if (action === 'toggle-snap') {
+      store.edit((draft) => { draft.regionSnapToMatrixBins = !draft.regionSnapToMatrixBins })
+      return
+    }
     closeMenus()
     if (action === 'select') browser.setRegionToolMode('select')
     else if (action === 'save-current') await saveBrowserRegion(browser.getRegion())
@@ -1323,13 +1375,17 @@ async function handleRegionMenuAction(event: Event): Promise<void> {
     else if (action === 'clear-dividers') store.edit((draft) => { draft.comparisonDividers = [] })
     return
   }
-  const button = target.closest<HTMLButtonElement>('[data-region-go], [data-region-toggle], [data-region-color], [data-region-rename], [data-region-remove], [data-divider-go], [data-divider-color], [data-divider-remove]')
+  const button = target.closest<HTMLButtonElement>('[data-region-go], [data-region-toggle], [data-region-color], [data-region-options], [data-region-rename], [data-region-remove], [data-divider-go], [data-divider-style], [data-divider-color], [data-divider-remove]')
   if (!button) return
-  const encodedDividerId = button.dataset.dividerGo ?? button.dataset.dividerColor ?? button.dataset.dividerRemove
+  const encodedDividerId = button.dataset.dividerGo ?? button.dataset.dividerStyle ?? button.dataset.dividerColor ?? button.dataset.dividerRemove
   if (encodedDividerId) {
     const dividerId = decodeURIComponent(encodedDividerId)
     const divider = store.current.comparisonDividers.find((item) => item.id === dividerId)
     if (!divider) return
+    if (button.dataset.dividerStyle !== undefined) {
+      store.edit((draft) => { const item = draft.comparisonDividers.find((candidate) => candidate.id === dividerId); if (item) item.lineStyle = item.lineStyle === 'dashed' ? 'solid' : 'dashed' })
+      return
+    }
     closeMenus()
     if (button.dataset.dividerGo !== undefined) {
       const current = browser.getRegion()
@@ -1343,11 +1399,16 @@ async function handleRegionMenuAction(event: Event): Promise<void> {
     }
     return
   }
-  const encodedId = button.dataset.regionGo ?? button.dataset.regionToggle ?? button.dataset.regionColor ?? button.dataset.regionRename ?? button.dataset.regionRemove
+  const encodedId = button.dataset.regionGo ?? button.dataset.regionToggle ?? button.dataset.regionColor ?? button.dataset.regionOptions ?? button.dataset.regionRename ?? button.dataset.regionRemove
   if (!encodedId) return
   const id = decodeURIComponent(encodedId)
   const saved = store.current.savedRegions.find((region) => region.id === id)
   if (!saved) return
+  if (button.dataset.regionOptions !== undefined) {
+    openRegionOptionsId = openRegionOptionsId === id ? undefined : id
+    renderRegionMenu()
+    return
+  }
   closeMenus()
   if (button.dataset.regionGo !== undefined) {
     browser.setRegion(saved.region)
@@ -1371,6 +1432,27 @@ async function handleRegionMenuAction(event: Event): Promise<void> {
   if (color) store.edit((draft) => { const region = draft.savedRegions.find((item) => item.id === id); if (region) region.color = color })
 }
 
+function handleRegionMenuSettingPreview(event: Event): void {
+  const input = (event.target as Element).closest<HTMLInputElement>('[data-region-opacity]')
+  if (!input) return
+  const output = input.nextElementSibling
+  if (output) output.textContent = `${input.value}%`
+}
+
+function handleRegionMenuSettingChange(event: Event): void {
+  const element = event.target as HTMLInputElement | HTMLSelectElement
+  const encodedId = element.dataset.regionBoundary ?? element.dataset.regionFill ?? element.dataset.regionOpacity
+  if (!encodedId) return
+  const id = decodeURIComponent(encodedId)
+  store.edit((draft) => {
+    const region = draft.savedRegions.find((item) => item.id === id)
+    if (!region) return
+    if (element.dataset.regionBoundary !== undefined) region.boundaryStyle = element.value === 'solid' ? 'solid' : element.value === 'none' ? 'none' : 'dashed'
+    else if (element.dataset.regionFill !== undefined && element instanceof HTMLInputElement) region.fill = element.checked
+    else if (element.dataset.regionOpacity !== undefined) region.shadeOpacity = Math.max(0.01, Math.min(0.5, Number(element.value) / 100))
+  })
+}
+
 async function saveBrowserRegion(region: Region): Promise<void> {
   const sequence = store.current.savedRegions.length + 1
   const label = (await requestText({ title: 'Save genomic region', label: 'Region name', initial: `Region ${sequence}`, submitLabel: 'Save region',
@@ -1378,7 +1460,10 @@ async function saveBrowserRegion(region: Region): Promise<void> {
   if (!label) return
   const color = TRACK_COLORS[store.current.savedRegions.length % TRACK_COLORS.length]
   store.edit((draft) => {
-    draft.savedRegions.push({ id: crypto.randomUUID(), label, region: { ...region }, color, highlighted: true })
+    draft.savedRegions.push({
+      id: crypto.randomUUID(), label, region: { ...region }, color, highlighted: true,
+      boundaryStyle: 'dashed', fill: true, shadeOpacity: 0.09,
+    })
   })
   showToast(`Saved ${label} · ${formatLocus(region)}`)
 }
@@ -2792,11 +2877,13 @@ function requestText(options: {
   placeholder?: string
   submitLabel?: string
   message?: string
+  historyKey?: string
   validate?: (value: string) => string | undefined
 }): Promise<string | undefined> {
   return new Promise((resolve) => openActionDialog({
     mode: 'input',
     submitLabel: options.submitLabel ?? 'Apply',
+    historyKey: options.historyKey ?? `action:${options.title}:${options.label}`,
     ...options,
     resolve: (value) => resolve(typeof value === 'string' ? value : undefined),
   }))
@@ -2830,6 +2917,8 @@ function openActionDialog(request: ActionDialogRequest): void {
   actionDialogLabel.textContent = request.label ?? ''
   actionDialogInput.value = request.initial ?? ''
   actionDialogInput.placeholder = request.placeholder ?? ''
+  activeActionHistoryKey = request.mode === 'input' ? request.historyKey : undefined
+  actionInputHistory.replaceChildren()
   actionDialogError.textContent = ''
   actionDialogCancel.hidden = request.mode === 'notice'
   actionDialogSubmit.textContent = request.submitLabel
@@ -2846,6 +2935,7 @@ function handleActionDialogSubmit(event: SubmitEvent): void {
     const error = request.validate?.(actionDialogInput.value)
     actionDialogError.textContent = error ?? ''
     if (error) return actionDialogInput.focus()
+    if (request.historyKey) rememberInputHistory(request.historyKey, actionDialogInput.value)
     closeActionDialog(actionDialogInput.value)
     return
   }
@@ -2856,13 +2946,26 @@ function closeActionDialog(value: string | boolean | undefined): void {
   const request = pendingActionDialog
   if (!request) return
   pendingActionDialog = undefined
+  activeActionHistoryKey = undefined
+  actionInputHistory.replaceChildren()
   actionDialog.hidden = true
   actionDialogSubmit.classList.remove('danger')
   request.resolve(value)
 }
 
+function rememberInputHistory(key: string, rawValue: string): void {
+  const history = parseInputHistory(localStorage.getItem(INPUT_HISTORY_KEY))
+  localStorage.setItem(INPUT_HISTORY_KEY, JSON.stringify(addInputHistory(history, key, rawValue)))
+}
+
+function renderInputHistory(list: HTMLDataListElement, key: string, rawQuery: string): void {
+  list.replaceChildren()
+  const matches = matchingInputHistory(parseInputHistory(localStorage.getItem(INPUT_HISTORY_KEY)), key, rawQuery)
+  list.append(...matches.map((value) => Object.assign(document.createElement('option'), { value })))
+}
+
 function showInteractionGuide(): Promise<void> {
-  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click to select additional tracks and Shift+click to select a range; clicking or right-clicking a group card adds all of its tracks. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for a quarter second before dragging its height. Drag horizontally anywhere in the track area, including blank space, to pan. The mouse wheel scrolls; Ctrl+wheel zooms. Use Regions to save highlighted intervals or place multiple colored, independently scaled comparison dividers. Matrix highlights follow triangular cis geometry. Right-click a track or group card for options.')
+  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click on track labels to select additional tracks and Shift+click to select a range; clicking or right-clicking a group card adds all of its tracks. Hold Ctrl and drag in the genomic plot to select a highlighted region. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for a quarter second before dragging its height. Drag horizontally anywhere in the track area, including blank space, to pan. The mouse wheel scrolls; Ctrl+wheel zooms. Use Regions to change highlight appearance, snap selections to matrix bins, or place multiple colored, independently scaled comparison dividers. Matrix highlights follow triangular cis geometry. Right-click a track or group card for options.')
 }
 
 function showFirstRunInteractionHint(): void {

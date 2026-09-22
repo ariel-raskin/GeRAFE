@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionFeatures, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixRegionHighlightPolygon, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, trackPixelHeight, verticallyCenteredBaseline } from './browser.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionFeatures, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixRegionHighlightPolygon, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, snapRegionToMatrixBins, trackPixelHeight, verticalRegionBoundaryLines, verticallyCenteredBaseline } from './browser.ts'
 import type { AlignmentFeature, InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
@@ -257,6 +257,20 @@ describe('contact-matrix rendering helpers', () => {
     ])
     expect(matrixRegionHighlightPolygon(200, 400, 100, 1, 40)).toEqual([
       { x: 200, y: 100 }, { x: 400, y: 100 }, { x: 360, y: 140 }, { x: 240, y: 140 },
+    ])
+  })
+
+  it('snaps selected region boundaries to the nearest matrix-bin grid', () => {
+    expect(snapRegionToMatrixBins({ chr: 'chr8', start: 10_900, end: 29_100 }, 10_000, 100_000))
+      .toEqual({ chr: 'chr8', start: 10_000, end: 30_000 })
+    expect(snapRegionToMatrixBins({ chr: 'chr8', start: 99_100, end: 99_900 }, 10_000, 100_000))
+      .toEqual({ chr: 'chr8', start: 99_999, end: 100_000 })
+  })
+
+  it('draws ordinary region boundaries as vertical lines without horizontal edges', () => {
+    expect(verticalRegionBoundaryLines(200, 400, [{ top: 10, bottom: 90 }])).toEqual([
+      { x1: 200.5, y1: 10, x2: 200.5, y2: 90 },
+      { x1: 399.5, y1: 10, x2: 399.5, y2: 90 },
     ])
   })
 
