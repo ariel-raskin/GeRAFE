@@ -14,6 +14,7 @@ The Git history beginning with the import pull request is authoritative and repr
 - Added stack-wide color/pattern differentiation, a synchronized compact legend, smooth equal-opacity curves, and stack-only member visibility and ordering.
 - Migrated workspaces to schema version 31; v30 fill stacks become equal-weight patterned lines, while incompatible or incomplete stack state is expanded safely during normalization.
 - Fixed plain group clicks so they replace unrelated selections, removed the redundant selected-group dot, and kept saved-region/matrix annotation geometry fixed in genomic coordinates while the viewport pans.
+- Corrected cis-matrix outline clipping so upper edges remain visible and editable after an anchor interval pans beyond the base axis.
 
 ## September 13, 2026 — feasibility and first browser
 
