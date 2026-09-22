@@ -288,6 +288,49 @@ app.innerHTML = `
       </div>
     </section>
   </div>
+  <div class="action-dialog interaction-guide-dialog" id="interaction-guide-dialog" role="dialog" aria-modal="true" aria-labelledby="interaction-guide-title" hidden>
+    <section class="action-dialog-card interaction-guide-card">
+      <header><strong id="interaction-guide-title">Track interactions</strong><button class="update-dialog-close" id="interaction-guide-close" type="button" aria-label="Close">×</button></header>
+      <div class="interaction-guide-content">
+        <p>Quick reference for navigating the genome view and working directly with tracks.</p>
+        <div class="interaction-guide-grid">
+          <section>
+            <h3>Navigate the view</h3>
+            <ul>
+              <li><span>Drag the track area</span><small>Pan horizontally, including through blank track space.</small></li>
+              <li><span><kbd>Ctrl</kbd> + mouse wheel</span><small>Zoom around the pointer. A plain horizontal wheel gesture pans.</small></li>
+              <li><span>Double-click the plot</span><small>Zoom in around that genomic position.</small></li>
+            </ul>
+          </section>
+          <section>
+            <h3>Select and arrange</h3>
+            <ul>
+              <li><span>Click or hold a track</span><small>Select it from its label or body.</small></li>
+              <li><span><kbd>Ctrl</kbd>-click · <kbd>Shift</kbd>-click</span><small>Toggle tracks or select a range. <kbd>Ctrl</kbd>+<kbd>A</kbd> selects all.</small></li>
+              <li><span>Drag selected tracks</span><small>Reorder them or move them between the upper and lower areas.</small></li>
+              <li><span>Hover a track’s bottom edge</span><small>Pause briefly, then drag to resize its height.</small></li>
+            </ul>
+          </section>
+          <section>
+            <h3>Open track controls</h3>
+            <ul>
+              <li><span>Right-click a track or group card</span><small>Open display, appearance, scale, grouping, and source options.</small></li>
+              <li><span>Click or right-click a group card</span><small>Select every track in that visual group.</small></li>
+            </ul>
+          </section>
+          <section>
+            <h3>Regions and matrices</h3>
+            <ul>
+              <li><span>Hold <kbd>Ctrl</kbd> and drag</span><small>Add a highlighted genomic region.</small></li>
+              <li><span>Hover a region edge or divider</span><small>Drag the resize cursor to move that boundary.</small></li>
+              <li><span>Triangular matrix annotations</span><small>Resize regions from their slanted sides and manual outlines from their corners.</small></li>
+            </ul>
+          </section>
+        </div>
+      </div>
+      <footer><button class="dialog-button primary" id="interaction-guide-done" type="button">Close</button></footer>
+    </section>
+  </div>
   <div class="matrix-settings-dialog" id="matrix-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="matrix-settings-title" hidden>
     <form class="matrix-settings-card" id="matrix-settings-form">
       <header><div><strong id="matrix-settings-title">Matrix settings</strong><small id="matrix-settings-scope"></small></div><button class="update-dialog-close" id="matrix-settings-close" type="button" aria-label="Close">×</button></header>
@@ -387,6 +430,9 @@ const updateProgressBar = document.querySelector<HTMLProgressElement>('#update-p
 const updateProgressLabel = document.querySelector<HTMLElement>('#update-progress-label')!
 const trackOptionsDialog = document.querySelector<HTMLElement>('#track-options-dialog')!
 const trackOptionsClose = document.querySelector<HTMLButtonElement>('#track-options-close')!
+const interactionGuideDialog = document.querySelector<HTMLElement>('#interaction-guide-dialog')!
+const interactionGuideClose = document.querySelector<HTMLButtonElement>('#interaction-guide-close')!
+const interactionGuideDone = document.querySelector<HTMLButtonElement>('#interaction-guide-done')!
 const tssIndicatorsToggle = document.querySelector<HTMLInputElement>('#tss-indicators-toggle')!
 const strandedAutoLinkToggle = document.querySelector<HTMLInputElement>('#stranded-auto-link-toggle')!
 const groupAutoscaleToggle = document.querySelector<HTMLInputElement>('#group-autoscale-toggle')!
@@ -708,7 +754,7 @@ document.querySelector<HTMLButtonElement>('#redo-menu-item')!.addEventListener('
 document.querySelector<HTMLButtonElement>('#track-options-menu-item')!.addEventListener('click', () => { closeMenus(); openTrackOptionsDialog() })
 document.querySelector<HTMLButtonElement>('#interaction-guide-menu-item')!.addEventListener('click', () => {
   closeMenus()
-  void showInteractionGuide()
+  showInteractionGuide()
 })
 tssIndicatorsToggle.addEventListener('change', () => {
   localStorage.setItem(TSS_INDICATORS_KEY, String(tssIndicatorsToggle.checked))
@@ -728,6 +774,10 @@ for (const toggle of [matrixInspectorToggle, matrixInspectorValueToggle, matrixI
   toggle.addEventListener('change', saveMatrixDisplayPreferences)
 }
 trackOptionsClose.addEventListener('click', closeTrackOptionsDialog)
+trackOptionsDialog.addEventListener('pointerdown', (event) => { if (event.target === trackOptionsDialog) closeTrackOptionsDialog() })
+interactionGuideClose.addEventListener('click', closeInteractionGuide)
+interactionGuideDone.addEventListener('click', closeInteractionGuide)
+interactionGuideDialog.addEventListener('pointerdown', (event) => { if (event.target === interactionGuideDialog) closeInteractionGuide() })
 document.querySelector<HTMLButtonElement>('#matrix-settings-close')!.addEventListener('click', closeMatrixSettingsDialog)
 document.querySelector<HTMLButtonElement>('#matrix-settings-cancel')!.addEventListener('click', closeMatrixSettingsDialog)
 matrixScaleMode.addEventListener('change', updateMatrixSettingsVisibility)
@@ -791,7 +841,7 @@ document.addEventListener('pointerdown', (event) => {
   if (!(event.target as Element).closest?.('#reference-picker')) setReferenceMenu(false)
   if (!(event.target as Element).closest?.('#chromosome-picker')) setChromosomeMenu(false)
   if (!(event.target as Element).closest?.('.track-context-menu')) closeTrackContextMenu()
-  if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog, #track-options-dialog, #matrix-settings-dialog, #action-dialog')) clearTrackSelection()
+  if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog, #track-options-dialog, #interaction-guide-dialog, #matrix-settings-dialog, #action-dialog')) clearTrackSelection()
 })
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Control' && !event.repeat && !activeRegionTool
@@ -799,7 +849,7 @@ document.addEventListener('keydown', (event) => {
     ctrlRegionSelectionActive = true
     browser.setRegionToolMode('select')
   }
-  if (event.key === 'Escape') { ctrlRegionSelectionActive = false; pendingMatrixOutlineTargetIds = undefined; closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeMatrixSettingsDialog(); closeActionDialog(undefined); browser.setRegionToolMode(undefined) }
+  if (event.key === 'Escape') { ctrlRegionSelectionActive = false; pendingMatrixOutlineTargetIds = undefined; closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeInteractionGuide(); closeMatrixSettingsDialog(); closeActionDialog(undefined); browser.setRegionToolMode(undefined) }
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'o') {
     event.preventDefault()
     closeMenus()
@@ -3096,8 +3146,13 @@ function renderInputHistory(list: HTMLDataListElement, key: string, rawQuery: st
   list.append(...matches.map((value) => Object.assign(document.createElement('option'), { value })))
 }
 
-function showInteractionGuide(): Promise<void> {
-  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click on track labels to select additional tracks and Shift+click to select a range; clicking or right-clicking a group card adds all of its tracks. Hold Ctrl and drag in the genomic plot to add a highlighted region. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for a quarter second before dragging its height. Drag horizontally anywhere in the track area, including blank space, to pan. The mouse wheel scrolls; Ctrl+wheel zooms. Use Regions to change highlight appearance, snap selections to matrix bins, draw shared matrix outlines, or add multiple colored, independently scaled comparison dividers. Hover a visible region boundary or divider for the horizontal-resize cursor, then drag it to move that line. On triangular matrices, region resizing is limited to the visible slanted edges. Hover and drag a manual matrix outline corner to resize both of its bin axes. Right-click a track or group card for options.')
+function showInteractionGuide(): void {
+  interactionGuideDialog.hidden = false
+  window.setTimeout(() => interactionGuideClose.focus(), 0)
+}
+
+function closeInteractionGuide(): void {
+  interactionGuideDialog.hidden = true
 }
 
 function showFirstRunInteractionHint(): void {

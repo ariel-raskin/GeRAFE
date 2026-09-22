@@ -278,9 +278,21 @@ const helpMenuVisible = await page.locator('#help-menu-popup').isVisible()
 const helpMenuText = await page.locator('#help-menu-popup').textContent()
 const helpMenuActiveElement = await page.locator(':focus').getAttribute('id')
 await page.locator('#interaction-guide-menu-item').click()
-const interactionGuideVisible = await page.locator('#action-dialog').isVisible()
-const interactionGuideText = await page.locator('#action-dialog-message').textContent()
-await page.locator('#action-dialog-submit').click()
+const interactionGuideVisible = await page.locator('#interaction-guide-dialog').isVisible()
+const interactionGuideText = await page.locator('#interaction-guide-dialog').textContent()
+const interactionGuideSectionCount = await page.locator('#interaction-guide-dialog .interaction-guide-grid section').count()
+const interactionGuideKeyCount = await page.locator('#interaction-guide-dialog kbd').count()
+await page.screenshot({ path: 'dist/smoke-interaction-guide.png', fullPage: true })
+await page.locator('#interaction-guide-dialog').click({ position: { x: 5, y: 5 } })
+const interactionGuideBackdropDismissed = await page.locator('#interaction-guide-dialog').isHidden()
+await page.locator('#help-menu-button').click()
+await page.locator('#interaction-guide-menu-item').click()
+await page.keyboard.press('Escape')
+const interactionGuideEscapeDismissed = await page.locator('#interaction-guide-dialog').isHidden()
+await page.locator('#help-menu-button').click()
+await page.locator('#interaction-guide-menu-item').click()
+await page.locator('#interaction-guide-done').click()
+const interactionGuideButtonDismissed = await page.locator('#interaction-guide-dialog').isHidden()
 await page.locator('#help-menu-button').click()
 await page.locator('#about-menu-item').click()
 const aboutDialogVisible = await page.locator('#update-dialog').isVisible()
@@ -353,7 +365,9 @@ const matrixMetadataOptionCount = await page.locator('#matrix-metadata-toggle').
 await page.locator('#matrix-inspector-bins-toggle').check()
 await page.locator('#tss-indicators-toggle').click()
 const tssAfterToggle = await page.locator('#tss-indicators-toggle').isChecked()
-await page.keyboard.press('Escape')
+const trackOptionsStayedOpenForControls = await page.locator('#track-options-dialog').isVisible()
+await page.locator('#track-options-dialog').click({ position: { x: 5, y: 5 } })
+const trackOptionsBackdropDismissed = await page.locator('#track-options-dialog').isHidden()
 let linkedScaleText
 let groupMenuText
 let groupAppearanceText
@@ -880,7 +894,7 @@ const matrixTilePerformance = await page.evaluate(async () => {
 })
 await browser.close()
 
-console.log(JSON.stringify({ ...result, matrixInspectorSizing, emptyWorkspaceVisible, emptyWorkspaceText: emptyWorkspaceText?.trim(), emptyWorkspaceBrand, emptyWorkspaceHiddenAfterLoad, cornerBrandCount, footerHeight, blankCanvasFillsPane, canvasWidthsAligned, regionMenuText, regionMenuOrder, savedRegionMenuText, ctrlRegionSelectionActivated, regionHighlightChanged, regionHeaderUnchanged, actionHistoryEmptyBeforeTyping, actionAutocompleteDisabled, actionHistoryMatches, regionAppearanceControlsVisible, regionShadePreviewChanged, regionSnapStatusText, regionColorIcon, dividerColorIcon, visualRegionColorPicker, visualDividerColorPicker, regionRoundTrip, regionStateAfterReload, regionBoundaryHoverCursor, regionBoundaryMoved, dividerHoverCursor, dividerMoved, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixMetadataOptionCount, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixOutlineShortcutVisible, matrixOutlineDrawMode, matrixOutlineMenuText, matrixOutlineColorIcon, matrixOutlineTargetsBefore, matrixOutlineTargetRemoved, visualMatrixOutlineColorPicker, matrixImaginaryBoundaryCursor, matrixSlantedBoundaryCursor, matrixSlantedBoundaryMoved, matrixCornerResizeGeometry, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixOverlaySourceText, matrixOverlayFocusText, matrixOverlayGroupLinked, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, matrixDetailsMenuVisible, matrixDetailsText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log(JSON.stringify({ ...result, matrixInspectorSizing, emptyWorkspaceVisible, emptyWorkspaceText: emptyWorkspaceText?.trim(), emptyWorkspaceBrand, emptyWorkspaceHiddenAfterLoad, cornerBrandCount, footerHeight, blankCanvasFillsPane, canvasWidthsAligned, regionMenuText, regionMenuOrder, savedRegionMenuText, ctrlRegionSelectionActivated, regionHighlightChanged, regionHeaderUnchanged, actionHistoryEmptyBeforeTyping, actionAutocompleteDisabled, actionHistoryMatches, regionAppearanceControlsVisible, regionShadePreviewChanged, regionSnapStatusText, regionColorIcon, dividerColorIcon, visualRegionColorPicker, visualDividerColorPicker, regionRoundTrip, regionStateAfterReload, regionBoundaryHoverCursor, regionBoundaryMoved, dividerHoverCursor, dividerMoved, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, trackOptionsStayedOpenForControls, trackOptionsBackdropDismissed, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixMetadataOptionCount, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, interactionGuideSectionCount, interactionGuideKeyCount, interactionGuideBackdropDismissed, interactionGuideEscapeDismissed, interactionGuideButtonDismissed, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixOutlineShortcutVisible, matrixOutlineDrawMode, matrixOutlineMenuText, matrixOutlineColorIcon, matrixOutlineTargetsBefore, matrixOutlineTargetRemoved, visualMatrixOutlineColorPicker, matrixImaginaryBoundaryCursor, matrixSlantedBoundaryCursor, matrixSlantedBoundaryMoved, matrixCornerResizeGeometry, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixOverlaySourceText, matrixOverlayFocusText, matrixOverlayGroupLinked, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, matrixDetailsMenuVisible, matrixDetailsText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 console.log('Matrix tile fidelity and synthetic 100k-cell pan benchmark:', matrixTileFidelity, matrixTilePerformance)
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!emptyWorkspaceVisible || !emptyWorkspaceText?.includes('Open or drop genomics files') || !emptyWorkspaceText.includes('GeRAFE') || Math.abs(emptyWorkspaceBrand.centerOffset) > 1 || emptyWorkspaceBrand.headingOffset > 30 || emptyWorkspaceBrand.headingFontSize < 18 || emptyWorkspaceBrand.imageGap > 16 || emptyWorkspaceBrand.imageHeight < 600 || emptyWorkspaceBrand.wordmarkHeight < 60 || cornerBrandCount !== 0 || footerHeight > 24 || emptyWorkspaceHiddenAfterLoad === false) process.exitCode = 1
@@ -888,7 +902,11 @@ if (!blankCanvasFillsPane || !canvasWidthsAligned || !regionMenuOrder || !region
 if (!(matrixInspectorSizing.expandedWidth > matrixInspectorSizing.compactWidth) || !(matrixInspectorSizing.expandedHeight > matrixInspectorSizing.compactHeight)) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
 if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button' || helpMenuActiveElement !== 'help-menu-button') process.exitCode = 1
-if (!helpMenuVisible || !helpMenuText?.includes('Track interactions') || !helpMenuText?.includes('Check for updates') || !interactionGuideVisible || !interactionGuideText?.includes('Ctrl+click') || !aboutDialogVisible || !aboutVersionText?.startsWith('Version ') || !browserUpdateDisabled) process.exitCode = 1
+if (!helpMenuVisible || !helpMenuText?.includes('Track interactions') || !helpMenuText?.includes('Check for updates') || !interactionGuideVisible
+  || !interactionGuideText?.includes('Navigate the view') || !interactionGuideText.includes('Regions and matrices')
+  || interactionGuideSectionCount !== 4 || interactionGuideKeyCount < 4 || !interactionGuideBackdropDismissed
+  || !interactionGuideEscapeDismissed || !interactionGuideButtonDismissed
+  || !aboutDialogVisible || !aboutVersionText?.startsWith('Version ') || !browserUpdateDisabled) process.exitCode = 1
 if (!trackContextVisible) process.exitCode = 1
 if (!singleItemFlyoutFlattened || !flyoutClosesOnPlainAction || !redundantGroupingHidden || !crossGroupSelectionText?.includes('3 tracks selected') || !heightInputUsesPixels) process.exitCode = 1
 if (trackContextFocusedAction || groupContextFocusedAction) process.exitCode = 1
@@ -899,7 +917,7 @@ if (searchSelectAll.start !== 0 || searchSelectAll.end !== searchSelectAll.lengt
 if (Number(zoomBeforeWheel) === Number(zoomAfterWheel) || !zoomTitle?.includes('100% shows the full chromosome')) process.exitCode = 1
 if (!(Number(spanAfterSlider) < Number(spanBeforeSlider)) || !chromosomeMenuVisible || !chromosomeMenuOpenClass || !selectedChromosomeText) process.exitCode = 1
 if (!geneMenuText?.includes('Expanded transcripts')) process.exitCode = 1
-if (!settingsMenuText?.includes('Track behavior')) process.exitCode = 1
+if (!settingsMenuText?.includes('Track behavior') || !trackOptionsStayedOpenForControls || !trackOptionsBackdropDismissed) process.exitCode = 1
 if (tssBeforeToggle === tssAfterToggle || tssAfterToggle !== tssAfterReload) process.exitCode = 1
 if (!matrixDisplayDefaults.inspector || !matrixDisplayDefaults.value || matrixDisplayDefaults.bins || matrixDisplayDefaults.details || !matrixDisplayAfterReload.bins || matrixMetadataOptionCount !== 0) process.exitCode = 1
 if (autoFitBeforeToggle === autoFitAfterToggle || autoFitAfterToggle !== autoFitAfterReload) process.exitCode = 1
