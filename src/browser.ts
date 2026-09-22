@@ -501,8 +501,8 @@ export class GenomeBrowser {
           saved, edge, distance: Math.abs(offsetX - this.plotX(canvas, saved.region[edge])),
         }))
         const width = this.cssWidth(canvas)
-        const left = Math.max(PLOT_LEFT, this.plotX(canvas, saved.region.start))
-        const right = Math.min(width, this.plotX(canvas, saved.region.end))
+        const left = this.plotX(canvas, saved.region.start)
+        const right = this.plotX(canvas, saved.region.end)
         if (right <= left) return []
         const geometry = matrixVerticalGeometry(track.top, track.bottom, track.spec.matrixDirection ?? 'up')
         const direction = track.spec.matrixDirection === 'down' ? 1 : -1
@@ -1401,8 +1401,10 @@ export class GenomeBrowser {
     ctx.clip()
     for (const saved of regions) {
       if (saved.region.end <= this.region.start || saved.region.start >= this.region.end) continue
-      const x1 = Math.max(PLOT_LEFT, this.plotX(canvas, saved.region.start))
-      const x2 = Math.min(width, this.plotX(canvas, saved.region.end))
+      // Keep the annotation in genomic coordinates and let the canvas clip it.
+      // Clamping first would continuously shrink and reshape it while panning.
+      const x1 = this.plotX(canvas, saved.region.start)
+      const x2 = this.plotX(canvas, saved.region.end)
       if (x2 <= x1) continue
       for (const range of stripRanges) {
         if (range.bottom <= range.top) continue
@@ -1760,25 +1762,60 @@ export class GenomeBrowser {
     const firstColor = signalStackColor(first.color, 0, visibleMembers.length, differentiation)
     const firstSpec: TrackSpec = {
       ...first,
-      label: `${group.label} (${visibleMembers.length})`,
+      label: '',
       color: firstColor,
-      signalRenderStyle: group.signalStackRenderStyle === 'line' ? 'line' : 'fill',
-      signalOpacity: group.signalStackRenderStyle === 'line' ? 100 : group.signalStackOpacity ?? 38,
+      signalRenderStyle: 'line',
+      signalOpacity: 0,
     }
     const domain = first.scaleBindingId ? domains.get(first.scaleBindingId) : undefined
     const segments = first.scaleBindingId && segmentDomains ? segmentDomains.map((segment) => ({ start: segment.start, end: segment.end, domain: segment.domains.get(first.scaleBindingId!) })) : undefined
     let count = this.drawTrack(firstSpec, this.runtimes.get(signalFeatureKey(first.id, first.signalStrand))!, index, top, height, width, palette, domain, segments)
-    if (group.signalStackRenderStyle !== 'line') this.drawSignalStackMember(first, firstColor, signalStackDash(0, differentiation), top, height, width, palette, domain, segments, 'line', 0.9)
+    this.drawSignalStackMember(first, firstColor, signalStackDash(0, differentiation), top, height, width, domain, segments)
     for (let memberIndex = 1; memberIndex < visibleMembers.length; memberIndex += 1) {
       const member = visibleMembers[memberIndex]!
       const memberDomain = member.scaleBindingId ? domains.get(member.scaleBindingId) : domain
       const memberSegments = member.scaleBindingId && segmentDomains ? segmentDomains.map((segment) => ({ start: segment.start, end: segment.end, domain: segment.domains.get(member.scaleBindingId!) })) : segments
       const color = signalStackColor(member.color, memberIndex, visibleMembers.length, differentiation)
-      if (group.signalStackRenderStyle !== 'line') count += this.drawSignalStackMember(member, color, [], top, height, width, palette, memberDomain, memberSegments, 'fill', (group.signalStackOpacity ?? 38) / 100)
-      else count += this.visibleSignalFeatures(member).length
-      this.drawSignalStackMember(member, color, signalStackDash(memberIndex, differentiation), top, height, width, palette, memberDomain, memberSegments, 'line', 0.9)
+      count += this.drawSignalStackMember(member, color, signalStackDash(memberIndex, differentiation), top, height, width, memberDomain, memberSegments)
     }
+    this.drawSignalStackLegend(group, members, visibleMembers, top, height, palette)
     return count
+  }
+
+  private drawSignalStackLegend(group: DisplayGroup, members: readonly TrackSpec[], visibleMembers: readonly TrackSpec[], top: number, height: number, palette: CanvasPalette): void {
+    const ctx = this.context
+    const differentiation = group.signalStackDifferentiation ?? 'patterns'
+    const entries = signalStackLegendEntries(members, visibleMembers, differentiation, group.signalStackHiddenTrackIds ?? [])
+    const lineHeight = Math.max(7, Math.min(14, (height - 10) / Math.max(1, members.length)))
+    let fontSize = Math.max(5, Math.min(10, lineHeight - 3))
+    const sampleLeft = GROUP_RAIL_WIDTH + 6
+    const sampleRight = sampleLeft + 16
+    const labelLeft = sampleRight + 4
+    const labelWidth = Math.max(18, LABEL_WIDTH - SCALE_LANE_MIN_WIDTH - labelLeft - 3)
+    const startY = top + (height - lineHeight * members.length) / 2 + lineHeight / 2
+    ctx.save()
+    ctx.beginPath(); ctx.rect(GROUP_RAIL_WIDTH, top, LABEL_WIDTH - GROUP_RAIL_WIDTH, height); ctx.clip()
+    ctx.font = `500 ${fontSize}px Inter, system-ui, sans-serif`
+    const longestLabel = Math.max(1, ...entries.map((entry) => ctx.measureText(entry.label).width))
+    fontSize = Math.max(5, Math.min(fontSize, fontSize * labelWidth / longestLabel))
+    ctx.font = `500 ${fontSize}px Inter, system-ui, sans-serif`
+    ctx.textBaseline = 'middle'
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index]!
+      const color = entry.hidden ? palette.muted : entry.color
+      const dash = entry.hidden ? [2, 3] : entry.dash
+      const y = startY + index * lineHeight
+      ctx.globalAlpha = entry.hidden ? 0.42 : 1
+      ctx.strokeStyle = color
+      ctx.lineWidth = 1.7
+      ctx.lineCap = 'round'
+      ctx.setLineDash(dash)
+      ctx.beginPath(); ctx.moveTo(sampleLeft, y); ctx.lineTo(sampleRight, y); ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = entry.hidden ? palette.muted : palette.ink
+      ctx.fillText(ellipsize(ctx, entry.label, labelWidth), labelLeft, y)
+    }
+    ctx.restore()
   }
 
   private visibleSignalFeatures(spec: TrackSpec): SignalFeature[] {
@@ -1794,11 +1831,8 @@ export class GenomeBrowser {
     top: number,
     height: number,
     width: number,
-    palette: CanvasPalette,
     domain: ScaleDomain | undefined,
     segments: readonly TrackScaleSegment[] | undefined,
-    style: 'fill' | 'line',
-    opacity: number,
   ): number {
     const visible = this.visibleSignalFeatures(spec)
     if (!visible.length) return 0
@@ -1811,8 +1845,7 @@ export class GenomeBrowser {
       : segments.map((segment) => ({ domain: segment.domain ?? fallbackDomain, x1: this.plotX(canvas, segment.start), x2: this.plotX(canvas, segment.end) }))
     const allNonnegative = activeDomains.every((item) => item.domain.min >= 0)
     const chart = signalChartBounds(top, top + height, allNonnegative)
-    const paintSpec = { ...spec, color, signalRenderStyle: style, signalOpacity: Math.round(opacity * 100) }
-    for (const item of activeDomains) paintSignalDomain(this.context, bins, paintSpec, item.domain, binding?.transform ?? 'linear', chart.top, chart.bottom, item.x1, item.x2, palette, dash)
+    for (const item of activeDomains) paintSmoothSignalDomain(this.context, bins, item.domain, binding?.transform ?? 'linear', chart.top, chart.bottom, item.x1, item.x2, color, dash)
     return visible.length
   }
 
@@ -2197,6 +2230,7 @@ export class GenomeBrowser {
       ctx.fillStyle = palette.error
       ctx.font = '11px Inter, system-ui, sans-serif'
       wrapText(ctx, track.error ?? 'Could not load contact matrix', 24, bottom - 38, 136, 15, 2)
+      this.drawMatrixOutlinesWithoutData(spec, top, bottom, width, palette)
       return 0
     }
     if (!matrix) {
@@ -2206,6 +2240,7 @@ export class GenomeBrowser {
         const loadingSpan = track.lastQueryRegion ? formatBases(track.lastQueryRegion.end - track.lastQueryRegion.start) : undefined
         ctx.fillText(`Loading contacts · ${spec.matrixResolution ? formatBases(spec.matrixResolution) : 'automatic resolution'}${loadingSpan ? ` · ${loadingSpan} window` : ''}…`, PLOT_LEFT + 22, top + height / 2)
       }
+      this.drawMatrixOutlinesWithoutData(spec, top, bottom, width, palette)
       return 0
     }
 
@@ -2282,7 +2317,7 @@ export class GenomeBrowser {
     drawMissingMatrixCells(ctx, matrix.missingCells ?? [], matrix.resolution, this.region, scale, baseline, direction, halfCell, spec.matrixMissingStyle === 'custom' ? spec.matrixMissingColor ?? '#9197a3' : trackBackground)
     drawMaskedMatrixBins(ctx, matrix.maskedBins ?? [], matrix.resolution, this.region, scale, PLOT_LEFT, width, baseline, direction, depthPixels, spec, trackBackground, palette)
     if (overlay) this.drawTriangularMatrixOverlay(overlay, matrix, scale, baseline, direction, halfCell, palette)
-    this.drawTriangularMatrixOutlines(spec, matrix, scale, baseline, direction, depthPixels, width, palette)
+    this.drawTriangularMatrixOutlines(spec, scale, baseline, direction, depthPixels, width, palette)
     if (this.matrixHover?.trackId === spec.id) drawMatrixCrosshair(ctx, this.matrixHover, matrix.resolution, PLOT_LEFT, width, geometry.clipTop, geometry.clipBottom, halfCell, direction, palette)
     ctx.globalAlpha = 1
     ctx.strokeStyle = palette.axisLine
@@ -2341,7 +2376,7 @@ export class GenomeBrowser {
     for (const bin of matrix.maskedBins ?? []) ctx.fillRect(PLOT_LEFT + (bin - this.region.start) * scaleX, top, Math.max(1, matrix.resolution * scaleX), bottom - top)
     for (const bin of matrix.maskedBins2 ?? []) ctx.fillRect(PLOT_LEFT, top + (bin - axis.start) * scaleY, width - PLOT_LEFT, Math.max(1, matrix.resolution * scaleY))
     if (overlay) this.drawRectangularMatrixOverlay(overlay, matrix, scaleX, scaleY, top, palette)
-    this.drawRectangularMatrixOutlines(spec, matrix, scaleX, scaleY, top, palette)
+    this.drawRectangularMatrixOutlines(spec, axis, scaleX, scaleY, top, palette)
     if (this.matrixHover?.trackId === spec.id) {
       ctx.globalAlpha = 1; ctx.strokeStyle = palette.axisLine
       ctx.strokeRect(this.matrixHover.x - matrix.resolution * scaleX / 2, this.matrixHover.y - matrix.resolution * scaleY / 2,
@@ -2355,8 +2390,7 @@ export class GenomeBrowser {
     return matrix.cells.length + (matrix.missingCells?.length ?? 0) + (overlay?.features.length ?? 0)
   }
 
-  private matrixOutlinesForTrack(spec: TrackSpec, matrix: MatrixFeature, palette: CanvasPalette): Array<Pick<MatrixOutline, 'axis1' | 'axis2' | 'color'>> {
-    const verticalChr = matrix.axis2?.chr ?? this.region.chr
+  private matrixOutlinesForTrack(spec: TrackSpec, verticalChr: string, palette: CanvasPalette): Array<Pick<MatrixOutline, 'axis1' | 'axis2' | 'color'>> {
     const outlines: Array<Pick<MatrixOutline, 'axis1' | 'axis2' | 'color'>> = this.document.matrixOutlines
       .filter((outline) => matrixOutlineTargetsTrack(outline, spec.id, this.region.chr, verticalChr))
       .map((outline) => this.matrixOutlineCornerDrag?.id === outline.id
@@ -2371,8 +2405,8 @@ export class GenomeBrowser {
     return outlines
   }
 
-  private drawTriangularMatrixOutlines(spec: TrackSpec, matrix: MatrixFeature, scale: number, baseline: number, direction: number, depthPixels: number, width: number, palette: CanvasPalette): void {
-    const outlines = this.matrixOutlinesForTrack(spec, matrix, palette)
+  private drawTriangularMatrixOutlines(spec: TrackSpec, scale: number, baseline: number, direction: number, depthPixels: number, width: number, palette: CanvasPalette): void {
+    const outlines = this.matrixOutlinesForTrack(spec, this.region.chr, palette)
     if (!outlines.length) return
     const ctx = this.context
     ctx.save()
@@ -2385,13 +2419,35 @@ export class GenomeBrowser {
     ctx.restore()
   }
 
-  private drawRectangularMatrixOutlines(spec: TrackSpec, matrix: MatrixFeature, scaleX: number, scaleY: number, top: number, palette: CanvasPalette): void {
-    const outlines = this.matrixOutlinesForTrack(spec, matrix, palette)
-    if (!outlines.length || !matrix.axis2) return
+  private drawRectangularMatrixOutlines(spec: TrackSpec, axis: Region, scaleX: number, scaleY: number, top: number, palette: CanvasPalette): void {
+    const outlines = this.matrixOutlinesForTrack(spec, axis.chr, palette)
+    if (!outlines.length) return
     const ctx = this.context
     for (const outline of outlines) {
-      strokeClosedPolygon(ctx, rectangularMatrixOutlinePolygon(outline.axis1, outline.axis2, this.region, matrix.axis2, scaleX, scaleY, top), outline.color)
+      strokeClosedPolygon(ctx, rectangularMatrixOutlinePolygon(outline.axis1, outline.axis2, this.region, axis, scaleX, scaleY, top), outline.color)
     }
+  }
+
+  private drawMatrixOutlinesWithoutData(spec: TrackSpec, top: number, bottom: number, width: number, palette: CanvasPalette): void {
+    if (spec.matrixSecondaryRegion) {
+      const axis = spec.matrixSecondaryRegion
+      const scaleX = (width - PLOT_LEFT) / Math.max(1, this.region.end - this.region.start)
+      const scaleY = (bottom - top) / Math.max(1, axis.end - axis.start)
+      const ctx = this.context
+      ctx.save(); ctx.beginPath(); ctx.rect(PLOT_LEFT, top, width - PLOT_LEFT, bottom - top); ctx.clip()
+      this.drawRectangularMatrixOutlines(spec, axis, scaleX, scaleY, top, palette)
+      ctx.restore()
+      return
+    }
+    const scale = (width - PLOT_LEFT) / Math.max(1, this.region.end - this.region.start)
+    const geometry = matrixVerticalGeometry(top, bottom, spec.matrixDirection ?? 'up')
+    const direction = spec.matrixDirection === 'down' ? 1 : -1
+    const maximumDistance = matrixQueryMaximumDistance(this.region.end - this.region.start, spec.matrixDepthMode ?? 'full', spec.matrixMaxDistance)
+    const depthPixels = Math.min((width - PLOT_LEFT) / 2, maximumDistance * scale / 2)
+    const ctx = this.context
+    ctx.save(); ctx.beginPath(); ctx.rect(PLOT_LEFT, geometry.clipTop, width - PLOT_LEFT, geometry.clipBottom - geometry.clipTop); ctx.clip()
+    this.drawTriangularMatrixOutlines(spec, scale, geometry.baseline, direction, depthPixels, width, palette)
+    ctx.restore()
   }
 
   private matrixOverlaySelection(spec: TrackSpec, matrix: MatrixFeature): MatrixOverlaySelection | undefined {
@@ -2701,12 +2757,6 @@ export class GenomeBrowser {
     ctx.beginPath()
     ctx.roundRect(2.5, cardTop, 4, cardHeight, [5, 0, 0, 5])
     ctx.fill()
-    if (selected && cardHeight >= 18) {
-      ctx.fillStyle = palette.selection
-      ctx.beginPath()
-      ctx.arc(13, cardTop + 7, 2.5, 0, Math.PI * 2)
-      ctx.fill()
-    }
     ctx.restore()
     ctx.save()
     ctx.translate(13, top + (bottom - top) / 2)
@@ -4344,20 +4394,100 @@ function paintSignalDomain(
   ctx.restore()
 }
 
+function paintSmoothSignalDomain(
+  ctx: CanvasRenderingContext2D,
+  bins: readonly (Bin | undefined)[],
+  domain: ScaleDomain,
+  transform: 'linear' | 'log1p' | 'symlog',
+  chartTop: number,
+  chartBottom: number,
+  clipStart: number,
+  clipEnd: number,
+  color: string,
+  dash: readonly number[],
+): void {
+  if (clipEnd <= clipStart) return
+  const transformedMin = signalTransform(domain.min, transform)
+  const transformedMax = signalTransform(domain.max, transform)
+  const amplitude = Math.max(1e-9, transformedMax - transformedMin)
+  const valueToY = (value: number) => chartBottom - ((signalTransform(value, transform) - transformedMin) / amplitude) * (chartBottom - chartTop)
+  ctx.save()
+  ctx.beginPath(); ctx.rect(clipStart, chartTop, clipEnd - clipStart, chartBottom - chartTop); ctx.clip()
+  ctx.strokeStyle = color
+  ctx.globalAlpha = 1
+  ctx.lineWidth = 1.75
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  ctx.setLineDash([...dash])
+  for (let start = 0; start < bins.length;) {
+    while (start < bins.length && !bins[start]) start += 1
+    if (start >= bins.length) break
+    let end = start
+    while (end + 1 < bins.length && bins[end + 1]) end += 1
+    const points = Array.from({ length: end - start + 1 }, (_, offset) => {
+      const bin = bins[start + offset]!
+      const value = bin.min >= 0 ? bin.max : bin.max <= 0 ? bin.min : Math.abs(bin.max) >= Math.abs(bin.min) ? bin.max : bin.min
+      return { x: PLOT_LEFT + start + offset + 0.5, y: valueToY(value) }
+    })
+    ctx.beginPath(); ctx.moveTo(points[0]!.x, points[0]!.y)
+    if (points.length === 2) ctx.lineTo(points[1]!.x, points[1]!.y)
+    else for (let index = 1; index < points.length; index += 1) {
+      const point = points[index]!
+      const next = points[index + 1]
+      if (next) ctx.quadraticCurveTo(point.x, point.y, (point.x + next.x) / 2, (point.y + next.y) / 2)
+      else ctx.lineTo(point.x, point.y)
+    }
+    ctx.stroke()
+    start = end + 1
+  }
+  ctx.restore()
+}
+
 export function signalStackDash(index: number, differentiation: SignalStackDifferentiation): number[] {
   if (differentiation !== 'patterns' && differentiation !== 'shades-patterns') return []
   return [[], [7, 4], [2, 3], [10, 3, 2, 3]][index % 4]!.slice()
 }
 
+export function signalStackLegendEntries(
+  members: readonly Pick<TrackSpec, 'id' | 'label' | 'color' | 'enabled'>[],
+  visibleMembers: readonly Pick<TrackSpec, 'id'>[],
+  differentiation: SignalStackDifferentiation,
+  hiddenIds: readonly string[],
+): Array<{ id: string; label: string; color: string; dash: number[]; hidden: boolean }> {
+  const hiddenIdsSet = new Set(hiddenIds)
+  return members.map((member) => {
+    const visibleIndex = visibleMembers.findIndex((track) => track.id === member.id)
+    const hidden = !member.enabled || hiddenIdsSet.has(member.id) || visibleIndex < 0
+    return {
+      id: member.id, label: member.label,
+      color: hidden ? member.color : signalStackColor(member.color, visibleIndex, visibleMembers.length, differentiation),
+      dash: hidden ? [2, 3] : signalStackDash(visibleIndex, differentiation),
+      hidden,
+    }
+  })
+}
+
 export function signalStackColor(base: string, index: number, count: number, differentiation: SignalStackDifferentiation): string {
   if (differentiation === 'colors' || differentiation === 'patterns' || count <= 1 || !/^#[0-9a-f]{6}$/i.test(base)) return base
   const number = Number.parseInt(base.slice(1), 16)
-  const rgb = [(number >> 16) & 255, (number >> 8) & 255, number & 255]
+  const rgb = [((number >> 16) & 255) / 255, ((number >> 8) & 255) / 255, (number & 255) / 255]
+  const maximum = Math.max(...rgb)
+  const minimum = Math.min(...rgb)
+  const lightness = (maximum + minimum) / 2
+  const delta = maximum - minimum
+  const saturation = delta === 0 ? 0.58 : delta / (1 - Math.abs(2 * lightness - 1))
+  let hue = delta === 0 ? 252 : maximum === rgb[0] ? 60 * (((rgb[1]! - rgb[2]!) / delta) % 6)
+    : maximum === rgb[1] ? 60 * (((rgb[2]! - rgb[0]!) / delta) + 2) : 60 * (((rgb[0]! - rgb[1]!) / delta) + 4)
+  if (hue < 0) hue += 360
   const midpoint = (count - 1) / 2
-  const signed = midpoint ? (index - midpoint) / midpoint : 0
-  const target = signed < 0 ? 255 : 0
-  const amount = Math.abs(signed) * 0.42
-  return `#${rgb.map((channel) => Math.round(channel + (target - channel) * amount).toString(16).padStart(2, '0')).join('')}`
+  hue = (hue + (midpoint ? (index - midpoint) / midpoint : 0) * Math.min(64, 24 + count * 8) + 360) % 360
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation
+  const section = hue / 60
+  const x = chroma * (1 - Math.abs((section % 2) - 1))
+  const [red, green, blue] = section < 1 ? [chroma, x, 0] : section < 2 ? [x, chroma, 0] : section < 3 ? [0, chroma, x]
+    : section < 4 ? [0, x, chroma] : section < 5 ? [x, 0, chroma] : [chroma, 0, x]
+  const match = lightness - chroma / 2
+  return `#${[red, green, blue].map((channel) => Math.round((channel + match) * 255).toString(16).padStart(2, '0')).join('')}`
 }
 
 function binFeatures(features: SignalFeature[], region: Region, width: number): Array<Bin | undefined> {

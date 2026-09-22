@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionFeatures, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixOutlinePolygon, matrixOutlineTargetsTrack, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixRegionBoundarySegments, matrixRegionHighlightPolygon, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, pointToLineSegmentDistance, resizedTrackPixels, resizeMatrixOutlineCorner, resizeRegionBoundary, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalStackColor, signalStackDash, signalTransform, snapRegionToMatrixBins, trackPixelHeight, verticalRegionBoundaryLines, verticallyCenteredBaseline } from './browser.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionFeatures, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixOutlinePolygon, matrixOutlineTargetsTrack, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixRegionBoundarySegments, matrixRegionHighlightPolygon, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, pointToLineSegmentDistance, resizedTrackPixels, resizeMatrixOutlineCorner, resizeRegionBoundary, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalStackColor, signalStackDash, signalStackLegendEntries, signalTransform, snapRegionToMatrixBins, trackPixelHeight, verticalRegionBoundaryLines, verticallyCenteredBaseline } from './browser.ts'
 import type { AlignmentFeature, InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
@@ -20,11 +20,31 @@ describe('gene direction arrow geometry', () => {
 
 describe('track layout and ruler formatting', () => {
   it('creates distinguishable stack shades and repeatable line patterns', () => {
-    expect(signalStackColor('#6d55e0', 0, 3, 'shades')).not.toBe(signalStackColor('#6d55e0', 2, 3, 'shades'))
+    const first = signalStackColor('#6d55e0', 0, 3, 'shades')
+    const last = signalStackColor('#6d55e0', 2, 3, 'shades')
+    const lightness = (color: string) => {
+      const channels = [color.slice(1, 3), color.slice(3, 5), color.slice(5, 7)].map((value) => Number.parseInt(value, 16))
+      return (Math.max(...channels) + Math.min(...channels)) / 2
+    }
+    expect(first).not.toBe(last)
+    expect(Math.abs(lightness(first) - lightness(last))).toBeLessThanOrEqual(1)
     expect(signalStackColor('#6d55e0', 1, 3, 'colors')).toBe('#6d55e0')
     expect(signalStackDash(0, 'patterns')).toEqual([])
     expect(signalStackDash(1, 'patterns')).toEqual([7, 4])
     expect(signalStackDash(1, 'shades')).toEqual([])
+  })
+
+  it('keeps the stack legend synchronized with each visible curve', () => {
+    const members = [
+      { id: 'a', label: 'Control', color: '#6d55e0', enabled: true },
+      { id: 'b', label: 'Treatment', color: '#6d55e0', enabled: true },
+      { id: 'c', label: 'Hidden', color: '#6d55e0', enabled: true },
+    ]
+    expect(signalStackLegendEntries(members, members.slice(0, 2), 'shades-patterns', ['c'])).toEqual([
+      { id: 'a', label: 'Control', color: signalStackColor('#6d55e0', 0, 2, 'shades-patterns'), dash: [], hidden: false },
+      { id: 'b', label: 'Treatment', color: signalStackColor('#6d55e0', 1, 2, 'shades-patterns'), dash: [7, 4], hidden: false },
+      { id: 'c', label: 'Hidden', color: '#6d55e0', dash: [2, 3], hidden: true },
+    ])
   })
 
   it('gives each stranded channel the same height as a regular signal track', () => {
@@ -266,6 +286,17 @@ describe('contact-matrix rendering helpers', () => {
     expect(matrixRegionHighlightPolygon(200, 400, 100, 1, 40)).toEqual([
       { x: 200, y: 100 }, { x: 400, y: 100 }, { x: 360, y: 140 }, { x: 240, y: 140 },
     ])
+  })
+
+  it('keeps offscreen matrix annotations in world coordinates for viewport clipping', () => {
+    expect(matrixRegionHighlightPolygon(-100, 300, 500, -1, 500)).toEqual([
+      { x: -100, y: 500 }, { x: 300, y: 500 }, { x: 100, y: 300 }, { x: 100, y: 300 },
+    ])
+    const axis1 = { chr: 'chr1', start: 100, end: 200 }
+    const axis2 = { chr: 'chr1', start: 300, end: 400 }
+    const before = matrixOutlinePolygon(axis1, axis2, { chr: 'chr1', start: 0, end: 1_000 }, 1, 500, -1)
+    const after = matrixOutlinePolygon(axis1, axis2, { chr: 'chr1', start: 50, end: 1_050 }, 1, 500, -1)
+    expect(after).toEqual(before.map((point) => ({ ...point, x: point.x - 50 })))
   })
 
   it('exposes only the visible slanted cis-matrix region edges as resize targets', () => {
