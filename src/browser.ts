@@ -546,9 +546,10 @@ export class GenomeBrowser {
         const maximumDistance = matrixQueryMaximumDistance(this.region.end - this.region.start, track.spec.matrixDepthMode ?? 'full', track.spec.matrixMaxDistance)
         const depth = Math.min((width - PLOT_LEFT) / 2, maximumDistance * scaleX / 2)
         points = matrixOutlinePolygon(outline.axis1, outline.axis2, this.region, scaleX, geometry.baseline, direction)
-        const domain = matrixRegionHighlightPolygon(PLOT_LEFT, width, geometry.baseline, direction, depth)
-        visible = (point) => pointInConvexPolygon(point, domain)
-          && point.y >= geometry.clipTop && point.y <= geometry.clipBottom
+        const clip = matrixDepthClipBounds(PLOT_LEFT, width, geometry.baseline, direction, depth)
+        visible = (point) => point.x >= clip.left && point.x <= clip.right
+          && point.y >= Math.max(clip.top, geometry.clipTop)
+          && point.y <= Math.min(clip.bottom, geometry.clipBottom)
       }
       return points.flatMap((point, corner) => visible(point) ? [{
         outline, corner: corner as MatrixOutlineCorner, spec: track.spec, matrix,
@@ -2409,8 +2410,9 @@ export class GenomeBrowser {
     const outlines = this.matrixOutlinesForTrack(spec, this.region.chr, palette)
     if (!outlines.length) return
     const ctx = this.context
+    const clip = matrixDepthClipBounds(PLOT_LEFT, width, baseline, direction, depthPixels)
     ctx.save()
-    matrixDomainPath(ctx, PLOT_LEFT, width, baseline, direction, depthPixels)
+    ctx.beginPath(); ctx.rect(clip.left, clip.top, clip.right - clip.left, clip.bottom - clip.top)
     ctx.clip()
     for (const outline of outlines) {
       const points = matrixOutlinePolygon(outline.axis1, outline.axis2, this.region, scale, baseline, direction)
@@ -3781,6 +3783,16 @@ export function matrixOutlinePolygon(axis1: Region, axis2: Region, viewport: Reg
     point(axis1.end, axis2.end),
     point(axis1.start, axis2.end),
   ]
+}
+
+export function matrixDepthClipBounds(left: number, right: number, baseline: number, direction: number, depthPixels: number): {
+  left: number; right: number; top: number; bottom: number
+} {
+  const depthEdge = baseline + direction * Math.max(0, depthPixels)
+  return {
+    left: Math.min(left, right), right: Math.max(left, right),
+    top: Math.min(baseline, depthEdge), bottom: Math.max(baseline, depthEdge),
+  }
 }
 
 export function rectangularMatrixOutlinePolygon(axis1: Region, axis2: Region, horizontalViewport: Region, verticalViewport: Region,
