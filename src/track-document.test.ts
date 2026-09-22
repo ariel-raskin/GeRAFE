@@ -7,17 +7,22 @@ import {
   addMatrixTrack,
   applyAutomaticStrandedColors,
   assignDisplayGroup,
+  canSignalStack,
+  collapseSignalStack,
   computeScaleDomains,
   computeSegmentScaleDomains,
   computeSplitScaleDomains,
   createTrackDocument,
+  expandSignalStack,
   inferSignalStrand,
   intervalLabelHeightScore,
   linkScales,
+  moveSignalStackTrack,
   normalizeTrackDocument,
   removeTrack,
   reorderTracks,
   signalFeatureKey,
+  setSignalStackTrackVisible,
   TRACK_DOCUMENT_VERSION,
   TrackDocumentStore,
   unlinkScales,
@@ -491,6 +496,52 @@ describe('track document', () => {
     const members = document.tracks.filter((track) => track.displayGroupId === group.id)
     expect(members.map((track) => track.color)).toEqual(['#123456', '#123456', '#123456'])
     expect(new Set(members.map((track) => track.scaleBindingId)).size).toBe(1)
+  })
+
+  it('collapses compatible ordinary signals into a reversible shared-scale stack', () => {
+    const document = documentWithTwoTracks()
+    assignDisplayGroup(document, ['t1', 't2'], 'Replicates')
+    const group = document.groups[0]!
+    expect(canSignalStack(document.tracks.filter((track) => track.displayGroupId === group.id))).toBe(true)
+    expect(collapseSignalStack(document, group.id)).toBe(true)
+    expect(group).toMatchObject({
+      signalStackMode: 'collapsed', signalStackDifferentiation: 'shades-patterns',
+      signalStackRenderStyle: 'fill-line', signalStackOpacity: 38, scaleBehavior: 'linked',
+    })
+    expect(new Set(document.tracks.filter((track) => track.displayGroupId === group.id).map((track) => track.scaleBindingId)).size).toBe(1)
+    expandSignalStack(document, group.id)
+    expect(group.signalStackMode).toBeUndefined()
+    expect(document.tracks.map((track) => track.id)).toContain('t2')
+  })
+
+  it('persists stack settings, limits stack hiding, and preserves member order changes', () => {
+    const document = documentWithTwoTracks()
+    addSignalTrack(document, { id: 's3', name: 'third.bw', format: 'bigwig', files: [] }, { id: 't3' })
+    assignDisplayGroup(document, ['t1', 't2', 't3'], 'Replicates')
+    const group = document.groups[0]!
+    collapseSignalStack(document, group.id)
+    setSignalStackTrackVisible(document, group.id, 't2', false)
+    setSignalStackTrackVisible(document, group.id, 't3', false)
+    setSignalStackTrackVisible(document, group.id, 't1', false)
+    moveSignalStackTrack(document, group.id, 't3', -1)
+    expect(group.signalStackHiddenTrackIds).toEqual(['t2', 't3'])
+    expect(document.tracks.map((track) => track.id)).toEqual(['t1', 't3', 't2', 'reference-genes'])
+    Object.assign(group, { signalStackDifferentiation: 'patterns', signalStackRenderStyle: 'line', signalStackOpacity: 73 })
+    const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
+    expect(restored.groups[0]).toMatchObject({
+      signalStackMode: 'collapsed', signalStackDifferentiation: 'patterns', signalStackRenderStyle: 'line',
+      signalStackOpacity: 73, signalStackHiddenTrackIds: ['t2', 't3'],
+    })
+  })
+
+  it('migrates version 29 groups as expanded and prunes an incompatible collapsed stack', () => {
+    const legacy = documentWithTwoTracks() as any
+    assignDisplayGroup(legacy, ['t1', 't2'], 'Replicates')
+    legacy.schemaVersion = 29
+    expect(normalizeTrackDocument(legacy).groups[0].signalStackMode).toBeUndefined()
+    legacy.groups[0].signalStackMode = 'collapsed'
+    legacy.tracks[1].signalStrand = 'plus'
+    expect(normalizeTrackDocument(legacy).groups[0].signalStackMode).toBeUndefined()
   })
 
   it('detaches a single group member when it moves to another pane', () => {

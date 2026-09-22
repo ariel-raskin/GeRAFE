@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 29 as const
+export const TRACK_DOCUMENT_VERSION = 30 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -9,6 +9,8 @@ export type SourceFormat = 'bigwig' | 'bedgraph' | 'tdf' | 'bam' | 'bed' | 'bedp
 export type ScaleMode = 'auto-visible' | 'auto-percentile' | 'fixed'
 export type SignalTransform = 'linear' | 'log1p' | 'symlog'
 export type SignalRenderStyle = 'fill' | 'line' | 'bar'
+export type SignalStackDifferentiation = 'shades' | 'colors' | 'patterns' | 'shades-patterns'
+export type SignalStackRenderStyle = 'fill-line' | 'line'
 export type SignalStrand = 'plus' | 'minus'
 export type SignalScaleChannel = 'ordinary' | SignalStrand
 export type InteractionDirection = 'up' | 'down'
@@ -53,6 +55,13 @@ export interface DisplayGroup {
   positiveColor?: string
   negativeColor?: string
   scaleBehavior?: 'linked' | 'independent'
+  /** Present compatible ordinary signals together without merging their track definitions. */
+  signalStackMode?: 'collapsed'
+  signalStackDifferentiation?: SignalStackDifferentiation
+  signalStackRenderStyle?: SignalStackRenderStyle
+  signalStackOpacity?: number
+  /** Stack-only visibility; expanding the group reveals every enabled member again. */
+  signalStackHiddenTrackIds?: string[]
 }
 
 export interface SavedRegion {
@@ -684,6 +693,50 @@ export function assignDisplayGroup(draft: TrackDocument, trackIds: readonly stri
   pruneDocument(draft)
 }
 
+export function canSignalStack(tracks: readonly TrackSpec[]): boolean {
+  return tracks.length >= 2 && tracks.every((track) => track.kind === 'signal' && !track.signalStrand)
+}
+
+export function collapseSignalStack(draft: TrackDocument, groupId: string): boolean {
+  const group = draft.groups.find((item) => item.id === groupId)
+  const members = draft.tracks.filter((track) => track.displayGroupId === groupId)
+  if (!group || !canSignalStack(members)) return false
+  group.signalStackMode = 'collapsed'
+  group.signalStackDifferentiation ??= 'shades-patterns'
+  group.signalStackRenderStyle ??= 'fill-line'
+  group.signalStackOpacity ??= 38
+  group.signalStackHiddenTrackIds = (group.signalStackHiddenTrackIds ?? []).filter((id) => members.some((track) => track.id === id))
+  group.scaleBehavior = 'linked'
+  linkScales(draft, members.map((track) => track.id))
+  return true
+}
+
+export function expandSignalStack(draft: TrackDocument, groupId: string): void {
+  const group = draft.groups.find((item) => item.id === groupId)
+  if (!group) return
+  delete group.signalStackMode
+}
+
+export function setSignalStackTrackVisible(draft: TrackDocument, groupId: string, trackId: string, visible: boolean): void {
+  const group = draft.groups.find((item) => item.id === groupId)
+  const members = draft.tracks.filter((track) => track.displayGroupId === groupId && track.kind === 'signal' && !track.signalStrand)
+  if (!group || !members.some((track) => track.id === trackId)) return
+  const hidden = new Set(group.signalStackHiddenTrackIds ?? [])
+  if (visible) hidden.delete(trackId)
+  else if (members.filter((track) => track.enabled && !hidden.has(track.id)).length > 1) hidden.add(trackId)
+  group.signalStackHiddenTrackIds = [...hidden]
+}
+
+export function moveSignalStackTrack(draft: TrackDocument, groupId: string, trackId: string, delta: -1 | 1): void {
+  const members = draft.tracks.filter((track) => track.displayGroupId === groupId)
+  const memberIndex = members.findIndex((track) => track.id === trackId)
+  const swapMember = members[memberIndex + delta]
+  if (memberIndex < 0 || !swapMember) return
+  const from = draft.tracks.findIndex((track) => track.id === trackId)
+  const to = draft.tracks.findIndex((track) => track.id === swapMember.id)
+  ;[draft.tracks[from], draft.tracks[to]] = [draft.tracks[to], draft.tracks[from]]
+}
+
 export function linkScales(draft: TrackDocument, trackIds: readonly string[]): void {
   const targets = draft.tracks.filter((track) => (track.kind === 'signal' || track.kind === 'stranded') && trackIds.includes(track.id))
   for (const channel of ['ordinary', 'plus', 'minus'] as const) {
@@ -816,10 +869,20 @@ export function computeSegmentScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
-  const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({ ...group })) : []
+  const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({
+    ...group,
+    signalStackMode: group.signalStackMode === 'collapsed' ? 'collapsed' as const : undefined,
+    signalStackDifferentiation: ['shades', 'colors', 'patterns', 'shades-patterns'].includes(group.signalStackDifferentiation as string)
+      ? group.signalStackDifferentiation : undefined,
+    signalStackRenderStyle: group.signalStackRenderStyle === 'line' ? 'line' as const : group.signalStackRenderStyle === 'fill-line' ? 'fill-line' as const : undefined,
+    signalStackOpacity: typeof group.signalStackOpacity === 'number' && Number.isFinite(group.signalStackOpacity)
+      ? Math.max(10, Math.min(100, Math.round(group.signalStackOpacity))) : undefined,
+    signalStackHiddenTrackIds: Array.isArray(group.signalStackHiddenTrackIds)
+      ? [...new Set(group.signalStackHiddenTrackIds.filter((id): id is string => typeof id === 'string'))].slice(0, 500) : undefined,
+  })) : []
   const scales = Array.isArray(value.scales) ? value.scales.filter(isScale).map(cloneScale) : []
   const savedRegionIds = new Set<string>()
   const savedRegions: SavedRegion[] = Array.isArray(value.savedRegions) ? value.savedRegions.flatMap((saved): SavedRegion[] => {
@@ -1109,6 +1172,20 @@ function pruneDocument(document: TrackDocument): void {
     if (track.matrixOverlayFocusMode !== 'region') delete track.matrixOverlayFocusRegion
   }
   const usedSources = new Set(document.tracks.flatMap((track) => track.sourceIds))
+  for (const group of document.groups) {
+    const members = document.tracks.filter((track) => track.displayGroupId === group.id)
+    if (!canSignalStack(members)) {
+      delete group.signalStackMode
+      delete group.signalStackHiddenTrackIds
+    } else {
+      const memberIds = new Set(members.map((track) => track.id))
+      group.signalStackHiddenTrackIds = (group.signalStackHiddenTrackIds ?? []).filter((id) => memberIds.has(id))
+      const enabled = members.filter((track) => track.enabled)
+      if (enabled.length && enabled.every((track) => group.signalStackHiddenTrackIds!.includes(track.id))) {
+        group.signalStackHiddenTrackIds = group.signalStackHiddenTrackIds.filter((id) => id !== enabled.at(-1)!.id)
+      }
+    }
+  }
   const usedGroups = new Set(document.tracks.map((track) => track.displayGroupId).filter(Boolean))
   const usedScales = new Set(document.tracks.flatMap((track) => [track.scaleBindingId, track.negativeScaleBindingId]).filter(Boolean))
   document.sources = document.sources.filter((source) => usedSources.has(source.id))
@@ -1174,6 +1251,11 @@ function isGroup(value: unknown): value is DisplayGroup {
     && (value.positiveColor === undefined || typeof value.positiveColor === 'string')
     && (value.negativeColor === undefined || typeof value.negativeColor === 'string')
     && (value.scaleBehavior === undefined || ['linked', 'independent'].includes(value.scaleBehavior))
+    && (value.signalStackMode === undefined || value.signalStackMode === 'collapsed')
+    && (value.signalStackDifferentiation === undefined || ['shades', 'colors', 'patterns', 'shades-patterns'].includes(value.signalStackDifferentiation))
+    && (value.signalStackRenderStyle === undefined || ['fill-line', 'line'].includes(value.signalStackRenderStyle))
+    && (value.signalStackOpacity === undefined || (typeof value.signalStackOpacity === 'number' && Number.isFinite(value.signalStackOpacity)))
+    && (value.signalStackHiddenTrackIds === undefined || (Array.isArray(value.signalStackHiddenTrackIds) && value.signalStackHiddenTrackIds.every((id: unknown) => typeof id === 'string')))
 }
 
 function isScale(value: unknown): value is ScaleBinding {

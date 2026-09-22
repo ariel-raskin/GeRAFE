@@ -8,6 +8,12 @@ The chronology below was reconstructed from the local Codex session transcripts,
 
 The Git history beginning with the import pull request is authoritative and reproducible. This document is the provenance record for everything earlier.
 
+## September 22, 2026 — signal stack presentation
+
+- Added reversible collapsed presentation for ordinary signal-only groups, including automatic shared y-axis scales.
+- Added stack-wide shade/pattern differentiation, fills or line-only rendering, fill opacity, and stack-only member visibility and ordering.
+- Migrated workspaces to schema version 30; incompatible or incomplete stack state is expanded safely during normalization.
+
 ## September 13, 2026 — feasibility and first browser
 
 - Established the core goal: remake the useful genome-navigation parts of IGV with immediate-feeling pan and zoom, then connect browsing to a future figure-building workflow.
