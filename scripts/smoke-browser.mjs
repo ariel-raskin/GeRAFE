@@ -746,6 +746,37 @@ newWorkspaceConfirmationVisible = await page.locator('#action-dialog').isVisible
 await page.screenshot({ path: 'dist/smoke-new-workspace-dialog.png', fullPage: true })
 await page.locator('#action-dialog-cancel').click()
 await page.evaluate(() => {
+  const current = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+  const chr = current.region.chr
+  localStorage.setItem('gerafe-track-document', JSON.stringify({
+    schemaVersion: 31, referenceId: current.referenceId, region: { chr, start: 10_000, end: 30_000 },
+    sources: [
+      { id: 'stack-source-a', name: 'control.bw', format: 'bigwig', files: [{ name: 'control.bw', size: 1, lastModified: 1, role: 'signal' }] },
+      { id: 'stack-source-b', name: 'treatment.bw', format: 'bigwig', files: [{ name: 'treatment.bw', size: 1, lastModified: 1, role: 'signal' }] },
+    ],
+    tracks: [
+      { id: 'stack-a', kind: 'signal', sourceIds: ['stack-source-a'], label: 'Control replicate', color: '#6d55e0', enabled: true, height: 40, pane: 'main', displayGroupId: 'signal-stack', scaleBindingId: 'stack-scale' },
+      { id: 'stack-b', kind: 'signal', sourceIds: ['stack-source-b'], label: 'Treatment replicate', color: '#6d55e0', enabled: true, height: 40, pane: 'main', displayGroupId: 'signal-stack', scaleBindingId: 'stack-scale' },
+      { id: 'reference-genes', kind: 'genes', sourceIds: [], label: 'RefSeq genes', color: '#6652c9', enabled: true, height: 32, pane: 'bottom', geneDisplayMode: 'collapsed' },
+    ],
+    groups: [{ id: 'signal-stack', label: 'Signal stack', scaleBehavior: 'linked', signalStackMode: 'collapsed', signalStackDifferentiation: 'patterns', signalStackRenderStyle: 'line' }],
+    scales: [{ id: 'stack-scale', label: 'Stack scale', mode: 'auto-visible', includeZero: true }],
+  }))
+})
+await page.reload({ waitUntil: 'networkidle' })
+const signalStackCanvas = page.locator('#genome-canvas')
+const signalStackBox = await signalStackCanvas.boundingBox()
+if (!signalStackBox) throw new Error('Signal stack smoke canvas was not visible.')
+const signalStackBeforeStyle = await signalStackCanvas.evaluate((element) => element.toDataURL())
+await page.mouse.click(signalStackBox.x + 60, signalStackBox.y + 50, { button: 'right' })
+const signalStackMenuText = await page.locator('#track-context-menu').textContent()
+await page.locator('[data-context-submenu="signal-stack"]').hover()
+const signalStackFlyoutText = await page.locator('#track-context-flyout').textContent()
+await page.locator('[data-context-action="signal-stack-diff-shades"]').click()
+await page.waitForTimeout(300)
+const signalStackLegendChanged = signalStackBeforeStyle !== await signalStackCanvas.evaluate((element) => element.toDataURL())
+await page.screenshot({ path: 'dist/smoke-signal-stack.png', fullPage: true })
+await page.evaluate(() => {
   const existing = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
   localStorage.setItem('gerafe-track-document', JSON.stringify({
     schemaVersion: 15,
@@ -761,9 +792,11 @@ await page.evaluate(() => {
   }))
 })
 await page.reload({ waitUntil: 'networkidle' })
+await page.waitForTimeout(250)
 const bamCanvasBox = await page.locator('#genome-canvas').boundingBox()
 if (!bamCanvasBox) throw new Error('BAM smoke canvas was not visible.')
-await page.mouse.click(bamCanvasBox.x + 60, bamCanvasBox.y + 60, { button: 'right' })
+await page.mouse.click(bamCanvasBox.x + 60, bamCanvasBox.y + Math.min(60, bamCanvasBox.height / 2), { button: 'right' })
+await page.waitForSelector('#track-context-menu:not([hidden])')
 const bamMenuText = await page.locator('#track-context-menu').textContent()
 const bamSubmenuText = {}
 for (const submenu of ['bam-content', 'bam-layout', 'bam-color', 'bam-filters']) {
@@ -894,7 +927,7 @@ const matrixTilePerformance = await page.evaluate(async () => {
 })
 await browser.close()
 
-console.log(JSON.stringify({ ...result, matrixInspectorSizing, emptyWorkspaceVisible, emptyWorkspaceText: emptyWorkspaceText?.trim(), emptyWorkspaceBrand, emptyWorkspaceHiddenAfterLoad, cornerBrandCount, footerHeight, blankCanvasFillsPane, canvasWidthsAligned, regionMenuText, regionMenuOrder, savedRegionMenuText, ctrlRegionSelectionActivated, regionHighlightChanged, regionHeaderUnchanged, actionHistoryEmptyBeforeTyping, actionAutocompleteDisabled, actionHistoryMatches, regionAppearanceControlsVisible, regionShadePreviewChanged, regionSnapStatusText, regionColorIcon, dividerColorIcon, visualRegionColorPicker, visualDividerColorPicker, regionRoundTrip, regionStateAfterReload, regionBoundaryHoverCursor, regionBoundaryMoved, dividerHoverCursor, dividerMoved, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, trackOptionsStayedOpenForControls, trackOptionsBackdropDismissed, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixMetadataOptionCount, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, interactionGuideSectionCount, interactionGuideKeyCount, interactionGuideBackdropDismissed, interactionGuideEscapeDismissed, interactionGuideButtonDismissed, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixOutlineShortcutVisible, matrixOutlineDrawMode, matrixOutlineMenuText, matrixOutlineColorIcon, matrixOutlineTargetsBefore, matrixOutlineTargetRemoved, visualMatrixOutlineColorPicker, matrixImaginaryBoundaryCursor, matrixSlantedBoundaryCursor, matrixSlantedBoundaryMoved, matrixCornerResizeGeometry, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixOverlaySourceText, matrixOverlayFocusText, matrixOverlayGroupLinked, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, matrixDetailsMenuVisible, matrixDetailsText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log(JSON.stringify({ ...result, matrixInspectorSizing, emptyWorkspaceVisible, emptyWorkspaceText: emptyWorkspaceText?.trim(), emptyWorkspaceBrand, emptyWorkspaceHiddenAfterLoad, cornerBrandCount, footerHeight, blankCanvasFillsPane, canvasWidthsAligned, regionMenuText, regionMenuOrder, savedRegionMenuText, ctrlRegionSelectionActivated, regionHighlightChanged, regionHeaderUnchanged, actionHistoryEmptyBeforeTyping, actionAutocompleteDisabled, actionHistoryMatches, regionAppearanceControlsVisible, regionShadePreviewChanged, regionSnapStatusText, regionColorIcon, dividerColorIcon, visualRegionColorPicker, visualDividerColorPicker, regionRoundTrip, regionStateAfterReload, regionBoundaryHoverCursor, regionBoundaryMoved, dividerHoverCursor, dividerMoved, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, trackOptionsStayedOpenForControls, trackOptionsBackdropDismissed, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixMetadataOptionCount, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, interactionGuideSectionCount, interactionGuideKeyCount, interactionGuideBackdropDismissed, interactionGuideEscapeDismissed, interactionGuideButtonDismissed, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, signalStackMenuText, signalStackFlyoutText, signalStackLegendChanged, matrixGroupMenuText, matrixOutlineShortcutVisible, matrixOutlineDrawMode, matrixOutlineMenuText, matrixOutlineColorIcon, matrixOutlineTargetsBefore, matrixOutlineTargetRemoved, visualMatrixOutlineColorPicker, matrixImaginaryBoundaryCursor, matrixSlantedBoundaryCursor, matrixSlantedBoundaryMoved, matrixCornerResizeGeometry, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixOverlaySourceText, matrixOverlayFocusText, matrixOverlayGroupLinked, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, matrixDetailsMenuVisible, matrixDetailsText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 console.log('Matrix tile fidelity and synthetic 100k-cell pan benchmark:', matrixTileFidelity, matrixTilePerformance)
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!emptyWorkspaceVisible || !emptyWorkspaceText?.includes('Open or drop genomics files') || !emptyWorkspaceText.includes('GeRAFE') || Math.abs(emptyWorkspaceBrand.centerOffset) > 1 || emptyWorkspaceBrand.headingOffset > 30 || emptyWorkspaceBrand.headingFontSize < 18 || emptyWorkspaceBrand.imageGap > 16 || emptyWorkspaceBrand.imageHeight < 600 || emptyWorkspaceBrand.wordmarkHeight < 60 || cornerBrandCount !== 0 || footerHeight > 24 || emptyWorkspaceHiddenAfterLoad === false) process.exitCode = 1
@@ -908,7 +941,8 @@ if (!helpMenuVisible || !helpMenuText?.includes('Track interactions') || !helpMe
   || !interactionGuideEscapeDismissed || !interactionGuideButtonDismissed
   || !aboutDialogVisible || !aboutVersionText?.startsWith('Version ') || !browserUpdateDisabled) process.exitCode = 1
 if (!trackContextVisible) process.exitCode = 1
-if (!singleItemFlyoutFlattened || !flyoutClosesOnPlainAction || !redundantGroupingHidden || !crossGroupSelectionText?.includes('3 tracks selected') || !heightInputUsesPixels) process.exitCode = 1
+if (!singleItemFlyoutFlattened || !flyoutClosesOnPlainAction || !redundantGroupingHidden || !crossGroupSelectionText?.includes('2 tracks selected') || crossGroupSelectionText.includes('3 tracks selected') || !heightInputUsesPixels) process.exitCode = 1
+if (!signalStackMenuText?.includes('Signal stack') || !signalStackFlyoutText?.includes('Distinct colors') || !signalStackFlyoutText.includes('Line patterns') || signalStackFlyoutText.includes('fill') || !signalStackLegendChanged) process.exitCode = 1
 if (trackContextFocusedAction || groupContextFocusedAction) process.exitCode = 1
 if (initialTrackContextText?.toLocaleLowerCase().includes('current') || initialTrackContextText?.includes('Set visual group')) process.exitCode = 1
 if ((!firstTrackSpec || ['interval', 'interaction', 'alignment'].includes(firstTrackSpec.kind)) && currentIndicatorCount < 1) process.exitCode = 1

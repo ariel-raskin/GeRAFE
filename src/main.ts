@@ -57,6 +57,7 @@ import { AppUpdateController, createTauriUpdateBackend, updateProgressPercent } 
 import type { AppUpdateState } from './app-update.ts'
 import { installWindowsCursorScaleCorrection } from './platform-cursors.ts'
 import { addInputHistory, matchingInputHistory, parseInputHistory } from './input-history.ts'
+import { groupSelection } from './track-selection.ts'
 
 void installWindowsCursorScaleCorrection()
 
@@ -1698,11 +1699,9 @@ function selectTrack(trackId: string, additive: boolean, extend: boolean): void 
 function selectGroup(groupId: string, additive: boolean): void {
   const memberIds = store.current.tracks.filter((track) => track.enabled && track.displayGroupId === groupId).map((track) => track.id)
   if (!memberIds.length) return
-  const allSelected = memberIds.every((id) => selectedTrackIds.has(id))
-  for (const id of memberIds) {
-    if (additive && allSelected) selectedTrackIds.delete(id)
-    else selectedTrackIds.add(id)
-  }
+  const next = groupSelection(selectedTrackIds, memberIds, additive)
+  selectedTrackIds.clear()
+  for (const id of next) selectedTrackIds.add(id)
   lastSelectedTrackId = memberIds.at(-1)
   browser.setSelectedTracks(selectedTrackIds)
 }
@@ -2117,14 +2116,10 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
   const stackItems = group.signalStackMode === 'collapsed' ? [
     action('signal-stack-expand', 'Expand into separate tracks'),
     '<span class="context-separator"></span>',
-    action('signal-stack-diff-shades', 'Automatic shades', group.signalStackDifferentiation === 'shades' ? 'current' : ''),
+    action('signal-stack-diff-shades', 'Distinct colors', group.signalStackDifferentiation === 'shades' ? 'current' : ''),
     action('signal-stack-diff-colors', 'Original track colors', group.signalStackDifferentiation === 'colors' ? 'current' : ''),
     action('signal-stack-diff-patterns', 'Line patterns', group.signalStackDifferentiation === 'patterns' ? 'current' : ''),
-    action('signal-stack-diff-shades-patterns', 'Shades and patterns', !group.signalStackDifferentiation || group.signalStackDifferentiation === 'shades-patterns' ? 'current' : ''),
-    '<span class="context-separator"></span>',
-    action('signal-stack-style-fill-line', 'Translucent fills + outlines', !group.signalStackRenderStyle || group.signalStackRenderStyle === 'fill-line' ? 'current' : ''),
-    action('signal-stack-style-line', 'Lines only', group.signalStackRenderStyle === 'line' ? 'current' : ''),
-    action('signal-stack-opacity', 'Set fill opacity…', `${group.signalStackOpacity ?? 38}%`, group.signalStackRenderStyle === 'line'),
+    action('signal-stack-diff-shades-patterns', 'Distinct colors and patterns', group.signalStackDifferentiation === 'shades-patterns' ? 'current' : ''),
     '<span class="context-separator"></span>',
     ...members.flatMap((track, index) => {
       const hidden = (group.signalStackHiddenTrackIds ?? []).includes(track.id)
@@ -2799,18 +2794,6 @@ async function handleGroupContextAction(command: string | undefined, groupId: st
     const draftGroup = draft.groups.find((item) => item.id === groupId)
     if (draftGroup) draftGroup.signalStackDifferentiation = command.slice('signal-stack-diff-'.length) as typeof draftGroup.signalStackDifferentiation
   })
-  if (command?.startsWith('signal-stack-style-')) store.edit((draft) => {
-    const draftGroup = draft.groups.find((item) => item.id === groupId)
-    if (draftGroup) draftGroup.signalStackRenderStyle = command.slice('signal-stack-style-'.length) as typeof draftGroup.signalStackRenderStyle
-  })
-  if (command === 'signal-stack-opacity') {
-    const entered = await requestText({ title: 'Set signal stack fill opacity', label: 'Opacity (10–100%)', initial: String(group.signalStackOpacity ?? 38), submitLabel: 'Set opacity', validate: (value) => Number(value) >= 10 && Number(value) <= 100 ? undefined : 'Enter a value from 10 to 100.' })
-    const opacity = Number(entered)
-    if (Number.isFinite(opacity)) store.edit((draft) => {
-      const draftGroup = draft.groups.find((item) => item.id === groupId)
-      if (draftGroup) draftGroup.signalStackOpacity = Math.round(opacity)
-    })
-  }
   if (command?.startsWith('signal-stack-visible-')) {
     const trackId = decodeURIComponent(command.slice('signal-stack-visible-'.length))
     const hidden = (group.signalStackHiddenTrackIds ?? []).includes(trackId)

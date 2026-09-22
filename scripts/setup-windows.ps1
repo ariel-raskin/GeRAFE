@@ -65,8 +65,27 @@ if ([string]::IsNullOrWhiteSpace($visualStudioPath)) {
 }
 $visualStudioPath = $visualStudioPath.Trim()
 
-$rustupVersion = (& $rustupCommand.Source --version 2>&1 | Select-Object -First 1).ToString().Trim()
-$cargoVersion = (& $cargoCommand.Source --version 2>&1 | Select-Object -First 1).ToString().Trim()
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+  # rustup writes an informational compiler-version notice to stderr. Windows
+  # PowerShell turns that notice into an error record when the preference is
+  # Stop, even though rustup exits successfully.
+  $rustupVersionOutput = & $rustupCommand.Source --version 2>&1
+  $rustupExitCode = $LASTEXITCODE
+  $cargoVersionOutput = & $cargoCommand.Source --version 2>&1
+  $cargoExitCode = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = $previousErrorActionPreference
+}
+if ($rustupExitCode -ne 0) {
+  throw "Could not determine the installed rustup version (exit code $rustupExitCode)."
+}
+if ($cargoExitCode -ne 0) {
+  throw "Could not determine the installed Cargo version (exit code $cargoExitCode)."
+}
+$rustupVersion = ($rustupVersionOutput | Select-Object -First 1).ToString().Trim()
+$cargoVersion = ($cargoVersionOutput | Select-Object -First 1).ToString().Trim()
 
 Write-Host 'GeRAFE Windows prerequisites found:'
 Write-Host "  Node.js:       $nodeVersionText"

@@ -1,6 +1,6 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 30 as const
+export const TRACK_DOCUMENT_VERSION = 31 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -702,9 +702,8 @@ export function collapseSignalStack(draft: TrackDocument, groupId: string): bool
   const members = draft.tracks.filter((track) => track.displayGroupId === groupId)
   if (!group || !canSignalStack(members)) return false
   group.signalStackMode = 'collapsed'
-  group.signalStackDifferentiation ??= 'shades-patterns'
-  group.signalStackRenderStyle ??= 'fill-line'
-  group.signalStackOpacity ??= 38
+  group.signalStackDifferentiation ??= 'patterns'
+  group.signalStackRenderStyle = 'line'
   group.signalStackHiddenTrackIds = (group.signalStackHiddenTrackIds ?? []).filter((id) => members.some((track) => track.id === id))
   group.scaleBehavior = 'linked'
   linkScales(draft, members.map((track) => track.id))
@@ -869,7 +868,7 @@ export function computeSegmentScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({
@@ -1101,6 +1100,12 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     comparisonDividers,
     matrixOutlines,
     regionSnapToMatrixBins: value.regionSnapToMatrixBins === true,
+  }
+  if (value.schemaVersion === 30) for (const group of document.groups) {
+    if (group.signalStackMode !== 'collapsed') continue
+    if (group.signalStackDifferentiation === 'shades-patterns') group.signalStackDifferentiation = 'patterns'
+    group.signalStackRenderStyle = 'line'
+    delete group.signalStackOpacity
   }
   for (const track of document.tracks) {
     const sourceFormat = document.sources.find((source) => track.sourceIds.includes(source.id))?.format

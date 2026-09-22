@@ -505,8 +505,8 @@ describe('track document', () => {
     expect(canSignalStack(document.tracks.filter((track) => track.displayGroupId === group.id))).toBe(true)
     expect(collapseSignalStack(document, group.id)).toBe(true)
     expect(group).toMatchObject({
-      signalStackMode: 'collapsed', signalStackDifferentiation: 'shades-patterns',
-      signalStackRenderStyle: 'fill-line', signalStackOpacity: 38, scaleBehavior: 'linked',
+      signalStackMode: 'collapsed', signalStackDifferentiation: 'patterns',
+      signalStackRenderStyle: 'line', scaleBehavior: 'linked',
     })
     expect(new Set(document.tracks.filter((track) => track.displayGroupId === group.id).map((track) => track.scaleBindingId)).size).toBe(1)
     expandSignalStack(document, group.id)
@@ -526,11 +526,11 @@ describe('track document', () => {
     moveSignalStackTrack(document, group.id, 't3', -1)
     expect(group.signalStackHiddenTrackIds).toEqual(['t2', 't3'])
     expect(document.tracks.map((track) => track.id)).toEqual(['t1', 't3', 't2', 'reference-genes'])
-    Object.assign(group, { signalStackDifferentiation: 'patterns', signalStackRenderStyle: 'line', signalStackOpacity: 73 })
+    Object.assign(group, { signalStackDifferentiation: 'patterns', signalStackRenderStyle: 'line' })
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
     expect(restored.groups[0]).toMatchObject({
       signalStackMode: 'collapsed', signalStackDifferentiation: 'patterns', signalStackRenderStyle: 'line',
-      signalStackOpacity: 73, signalStackHiddenTrackIds: ['t2', 't3'],
+      signalStackHiddenTrackIds: ['t2', 't3'],
     })
   })
 
@@ -542,6 +542,21 @@ describe('track document', () => {
     legacy.groups[0].signalStackMode = 'collapsed'
     legacy.tracks[1].signalStrand = 'plus'
     expect(normalizeTrackDocument(legacy).groups[0].signalStackMode).toBeUndefined()
+  })
+
+  it('migrates untouched version 30 stack defaults to equal-weight patterned lines', () => {
+    const legacy = documentWithTwoTracks() as any
+    assignDisplayGroup(legacy, ['t1', 't2'], 'Replicates')
+    const group = legacy.groups[0]
+    Object.assign(group, {
+      signalStackMode: 'collapsed', signalStackDifferentiation: 'shades-patterns',
+      signalStackRenderStyle: 'fill-line', signalStackOpacity: 38,
+    })
+    legacy.schemaVersion = 30
+    expect(normalizeTrackDocument(legacy).groups[0]).toMatchObject({
+      signalStackMode: 'collapsed', signalStackDifferentiation: 'patterns', signalStackRenderStyle: 'line',
+    })
+    expect(normalizeTrackDocument(legacy).groups[0].signalStackOpacity).toBeUndefined()
   })
 
   it('detaches a single group member when it moves to another pane', () => {
