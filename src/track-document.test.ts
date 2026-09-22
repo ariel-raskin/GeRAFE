@@ -39,6 +39,28 @@ describe('track document', () => {
     expect(normalizeTrackDocument(JSON.parse(JSON.stringify(document))).regionSnapToMatrixBins).toBe(false)
   })
 
+  it('persists shared matrix outlines and prunes removed target tracks safely', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100_000 })
+    const matrixSource = (id: string) => ({ id: `source-${id}`, name: `${id}.cool`, format: 'cool' as const, files: [{ name: `${id}.cool`, size: 1, lastModified: 1, role: 'signal' as const }] })
+    addMatrixTrack(document, matrixSource('a'), { id: 'matrix-a' })
+    addMatrixTrack(document, matrixSource('b'), { id: 'matrix-b' })
+    document.matrixOutlines.push({
+      id: 'outline-a', label: 'Loop block',
+      axis1: { chr: 'chr1', start: 10_000, end: 20_000 }, axis2: { chr: 'chr1', start: 30_000, end: 40_000 },
+      color: '#AABBCC', visible: true, sourceTrackId: 'matrix-a', targetTrackIds: ['matrix-a', 'matrix-b'],
+    })
+    const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
+    expect(restored.matrixOutlines).toEqual([{
+      id: 'outline-a', label: 'Loop block',
+      axis1: { chr: 'chr1', start: 10_000, end: 20_000 }, axis2: { chr: 'chr1', start: 30_000, end: 40_000 },
+      color: '#aabbcc', visible: true, sourceTrackId: 'matrix-a', targetTrackIds: ['matrix-a', 'matrix-b'],
+    }])
+    removeTrack(restored, 'matrix-a')
+    expect(restored.matrixOutlines[0]).toMatchObject({ sourceTrackId: 'matrix-b', targetTrackIds: ['matrix-b'] })
+    removeTrack(restored, 'matrix-b')
+    expect(restored.matrixOutlines).toEqual([])
+  })
+
   it('migrates v21 workspaces and preserves a two-file matrix comparison', () => {
     const legacy = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 100 })
     expect(normalizeTrackDocument({ ...legacy, schemaVersion: 21 }).schemaVersion).toBe(TRACK_DOCUMENT_VERSION)
