@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionFeatures, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixOutlinePolygon, matrixOutlineTargetsTrack, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixRegionHighlightPolygon, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, resizedTrackPixels, resizeRegionBoundary, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, snapRegionToMatrixBins, trackPixelHeight, verticalRegionBoundaryLines, verticallyCenteredBaseline } from './browser.ts'
+import { bottomTrackResizeBoundaries, chevronExonOverlap, distributeFittedPixels, filterInteractionFeatures, filterInteractionsForGenes, formatCoordinate, formatScore, heightScoreForPixels, inspectMatrixCell, inspectMatrixPoint, inspectRectangularMatrixPoint, interactionArcHeight, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixInspectionHeading, matrixLegendValues, matrixOutlinePolygon, matrixOutlineTargetsTrack, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryChanged, matrixQueryMaximumDistance, matrixRegionBoundarySegments, matrixRegionHighlightPolygon, matrixSignedColor, matrixValueIntensity, matrixVerticalGeometry, matrixWarmPaletteColor, phasedArrowPositions, placeCollapsedGeneLabels, pointToLineSegmentDistance, resizedTrackPixels, resizeMatrixOutlineCorner, resizeRegionBoundary, resolveMatrixMaximums, selectBamAlignments, selectInteractionFeatures, selectNonOverlappingCollapsedGenes, signalChartBounds, signalTransform, snapRegionToMatrixBins, trackPixelHeight, verticalRegionBoundaryLines, verticallyCenteredBaseline } from './browser.ts'
 import type { AlignmentFeature, InteractionFeature, MatrixFeature } from './types.ts'
 import type { GeneFeature } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
@@ -260,6 +260,14 @@ describe('contact-matrix rendering helpers', () => {
     ])
   })
 
+  it('exposes only the visible slanted cis-matrix region edges as resize targets', () => {
+    const [left, right] = matrixRegionBoundarySegments(200, 400, 300, -1, 500)
+    expect(left).toEqual({ edge: 'start', start: { x: 200, y: 300 }, end: { x: 300, y: 200 } })
+    expect(right).toEqual({ edge: 'end', start: { x: 400, y: 300 }, end: { x: 300, y: 200 } })
+    expect(pointToLineSegmentDistance({ x: 250, y: 250 }, left.start, left.end)).toBe(0)
+    expect(pointToLineSegmentDistance({ x: 200, y: 250 }, left.start, left.end)).toBeGreaterThan(30)
+  })
+
   it('maps a two-axis outline to a matrix-grid parallelogram and filters target axes', () => {
     const axis1 = { chr: 'chr1', start: 100, end: 200 }
     const axis2 = { chr: 'chr1', start: 300, end: 400 }
@@ -270,6 +278,20 @@ describe('contact-matrix rendering helpers', () => {
     expect(matrixOutlineTargetsTrack(outline, 'matrix-a', 'chr1', 'chr1')).toBe(true)
     expect(matrixOutlineTargetsTrack(outline, 'matrix-b', 'chr1', 'chr1')).toBe(false)
     expect(matrixOutlineTargetsTrack(outline, 'matrix-a', 'chr1', 'chr2')).toBe(false)
+  })
+
+  it('resizes each matrix-outline corner on complete bins without crossing either axis', () => {
+    const axis1 = { chr: 'chr1', start: 100, end: 300 }
+    const axis2 = { chr: 'chr1', start: 400, end: 700 }
+    expect(resizeMatrixOutlineCorner(axis1, axis2, 0, 150, 450, 50)).toEqual({
+      axis1: { chr: 'chr1', start: 150, end: 300 }, axis2: { chr: 'chr1', start: 450, end: 700 },
+    })
+    expect(resizeMatrixOutlineCorner(axis1, axis2, 2, 350, 750, 50)).toEqual({
+      axis1: { chr: 'chr1', start: 100, end: 400 }, axis2: { chr: 'chr1', start: 400, end: 800 },
+    })
+    expect(resizeMatrixOutlineCorner(axis1, axis2, 0, 500, 900, 50)).toEqual({
+      axis1: { chr: 'chr1', start: 250, end: 300 }, axis2: { chr: 'chr1', start: 650, end: 700 },
+    })
   })
 
   it('snaps selected region boundaries to the nearest matrix-bin grid', () => {
