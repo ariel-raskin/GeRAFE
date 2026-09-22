@@ -512,6 +512,12 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
   onMatrixOutlineSelected(selection) {
     void saveMatrixOutline(selection)
   },
+  onMatrixOutlineResize(id, axis1, axis2) {
+    store.edit((draft) => {
+      const outline = draft.matrixOutlines.find((item) => item.id === id)
+      if (outline) { outline.axis1 = axis1; outline.axis2 = axis2 }
+    })
+  },
   onComparisonDividerCreate(position) {
     store.edit((draft) => {
       draft.comparisonDividers.push({
@@ -3091,7 +3097,7 @@ function renderInputHistory(list: HTMLDataListElement, key: string, rawQuery: st
 }
 
 function showInteractionGuide(): Promise<void> {
-  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click on track labels to select additional tracks and Shift+click to select a range; clicking or right-clicking a group card adds all of its tracks. Hold Ctrl and drag in the genomic plot to add a highlighted region. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for a quarter second before dragging its height. Drag horizontally anywhere in the track area, including blank space, to pan. The mouse wheel scrolls; Ctrl+wheel zooms. Use Regions to change highlight appearance, snap selections to matrix bins, draw shared matrix outlines, or add multiple colored, independently scaled comparison dividers. Hover a visible region boundary or divider for the horizontal-resize cursor, then drag it to move that line. Matrix highlights follow triangular cis geometry; manual matrix outlines follow both selected bin axes. Right-click a track or group card for options.')
+  return showNotice('Track interactions', 'Hold the left mouse button on a track to select it. Use Ctrl+click on track labels to select additional tracks and Shift+click to select a range; clicking or right-clicking a group card adds all of its tracks. Hold Ctrl and drag in the genomic plot to add a highlighted region. Drag selected tracks or use their context menu to move them between the upper and lower areas. Hover over a track’s bottom line for a quarter second before dragging its height. Drag horizontally anywhere in the track area, including blank space, to pan. The mouse wheel scrolls; Ctrl+wheel zooms. Use Regions to change highlight appearance, snap selections to matrix bins, draw shared matrix outlines, or add multiple colored, independently scaled comparison dividers. Hover a visible region boundary or divider for the horizontal-resize cursor, then drag it to move that line. On triangular matrices, region resizing is limited to the visible slanted edges. Hover and drag a manual matrix outline corner to resize both of its bin axes. Right-click a track or group card for options.')
 }
 
 function showFirstRunInteractionHint(): void {

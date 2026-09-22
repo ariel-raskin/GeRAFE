@@ -26,6 +26,7 @@ export interface BrowserCallbacks {
   onRegionSelected(region: Region): void
   onSavedRegionResize(id: string, region: Region): void
   onMatrixOutlineSelected(selection: { sourceTrackId: string; axis1: Region; axis2: Region; resolution: number }): void
+  onMatrixOutlineResize(id: string, axis1: Region, axis2: Region): void
   onComparisonDividerCreate(position: number): void
   onComparisonDividerMove(id: string, position: number): void
   onRegionToolModeChange(mode?: RegionToolMode): void
@@ -42,6 +43,7 @@ export interface BrowserCallbacks {
 }
 
 export type RegionToolMode = 'select' | 'divider' | 'matrix-outline'
+export type MatrixOutlineCorner = 0 | 1 | 2 | 3
 type ScaleDomain = { min: number; max: number }
 interface TrackScaleSegment { start: number; end: number; domain?: ScaleDomain }
 
@@ -127,7 +129,7 @@ export class GenomeBrowser {
   private dragging?: { x: number; region: Region; canvas: HTMLCanvasElement }
   private regionToolMode?: RegionToolMode
   private regionSelection?: { canvas: HTMLCanvasElement; startX: number; currentX: number }
-  private regionBoundaryDrag?: { canvas: HTMLCanvasElement; id: string; edge: 'start' | 'end'; region: Region }
+  private regionBoundaryDrag?: { canvas: HTMLCanvasElement; id: string; edge: 'start' | 'end'; region: Region; coordinateOffset: number }
   private dividerDrag?: { canvas: HTMLCanvasElement; id: string; position: number; color: string }
   private matrixOutlineSelection?: {
     canvas: HTMLCanvasElement
@@ -140,6 +142,16 @@ export class GenomeBrowser {
     startBin2: number
     currentBin1: number
     currentBin2: number
+  }
+  private matrixOutlineCornerDrag?: {
+    canvas: HTMLCanvasElement
+    pane: 'main' | 'bottom'
+    id: string
+    trackId: string
+    resolution: number
+    corner: MatrixOutlineCorner
+    axis1: Region
+    axis2: Region
   }
   private readonly regionShadePreviews = new Map<string, number>()
   private trackDrag?: {
@@ -333,6 +345,7 @@ export class GenomeBrowser {
       canvas.classList.toggle('is-divider-placing', mode === 'divider')
       canvas.classList.toggle('is-matrix-outline-selecting', mode === 'matrix-outline')
       canvas.classList.remove('is-region-line-hover')
+      canvas.classList.remove('is-matrix-outline-corner-hover')
     }
     this.callbacks.onRegionToolModeChange(mode)
     this.scheduleRender()
@@ -464,11 +477,42 @@ export class GenomeBrowser {
       .sort((a, b) => a.position - b.position)
   }
 
-  private savedRegionBoundaryAt(canvas: HTMLCanvasElement, offsetX: number): { saved: SavedRegion; edge: 'start' | 'end' } | undefined {
+  private trackGeometryAt(pane: 'main' | 'bottom', offsetY: number): { spec: TrackSpec; top: number; bottom: number } | undefined {
+    let top = 0
+    for (const spec of this.visibleSpecs(pane)) {
+      const bottom = top + this.trackHeight(spec)
+      if (offsetY >= top && offsetY < bottom) return { spec, top, bottom }
+      top = bottom
+    }
+    return undefined
+  }
+
+  private savedRegionBoundaryAt(canvas: HTMLCanvasElement, pane: 'main' | 'bottom' | undefined, offsetX: number, offsetY: number): { saved: SavedRegion; edge: 'start' | 'end' } | undefined {
     if (canvas === this.headerCanvas) return undefined
+    const track = pane ? this.trackGeometryAt(pane, offsetY) : undefined
+    const matrix = track?.spec.kind === 'matrix'
+      ? this.runtimes.get(track.spec.id)?.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
+      : undefined
+    const triangularMatrix = track?.spec.kind === 'matrix' && !track.spec.matrixSecondaryRegion && !matrix?.axis2
     return this.document.savedRegions
       .filter((saved) => saved.highlighted && saved.boundaryStyle !== 'none' && saved.region.chr === this.region.chr)
-      .flatMap((saved) => (['start', 'end'] as const).map((edge) => ({ saved, edge, distance: Math.abs(offsetX - this.plotX(canvas, saved.region[edge])) })))
+      .flatMap((saved) => {
+        if (!triangularMatrix || !track) return (['start', 'end'] as const).map((edge) => ({
+          saved, edge, distance: Math.abs(offsetX - this.plotX(canvas, saved.region[edge])),
+        }))
+        const width = this.cssWidth(canvas)
+        const left = Math.max(PLOT_LEFT, this.plotX(canvas, saved.region.start))
+        const right = Math.min(width, this.plotX(canvas, saved.region.end))
+        if (right <= left) return []
+        const geometry = matrixVerticalGeometry(track.top, track.bottom, track.spec.matrixDirection ?? 'up')
+        const direction = track.spec.matrixDirection === 'down' ? 1 : -1
+        const scale = (width - PLOT_LEFT) / Math.max(1, this.region.end - this.region.start)
+        const maximumDistance = matrixQueryMaximumDistance(this.region.end - this.region.start, track.spec.matrixDepthMode ?? 'full', track.spec.matrixMaxDistance)
+        const depth = Math.min((right - left) / 2, maximumDistance * scale / 2, Math.abs(geometry.clipBottom - geometry.clipTop))
+        return matrixRegionBoundarySegments(left, right, geometry.baseline, direction, depth).map((segment) => ({
+          saved, edge: segment.edge, distance: pointToLineSegmentDistance({ x: offsetX, y: offsetY }, segment.start, segment.end),
+        }))
+      })
       .filter(({ saved, edge, distance }) => saved.region[edge] >= this.region.start && saved.region[edge] <= this.region.end && distance <= 6)
       .sort((a, b) => a.distance - b.distance)[0]
   }
@@ -480,28 +524,61 @@ export class GenomeBrowser {
       .sort((a, b) => a.distance - b.distance)[0]?.candidate
   }
 
-  private updateRegionLineHover(canvas: HTMLCanvasElement, event: PointerEvent): boolean {
-    const hovered = !this.regionToolMode && event.offsetX >= PLOT_LEFT
-      && Boolean(this.dividerAt(canvas, event.offsetX) || this.savedRegionBoundaryAt(canvas, event.offsetX))
+  private matrixOutlineCornerAt(canvas: HTMLCanvasElement, pane: 'main' | 'bottom', offsetX: number, offsetY: number): { outline: MatrixOutline; corner: MatrixOutlineCorner; spec: TrackSpec; matrix: MatrixFeature } | undefined {
+    if (offsetX < PLOT_LEFT) return undefined
+    const track = this.trackGeometryAt(pane, offsetY)
+    if (!track || track.spec.kind !== 'matrix') return undefined
+    const matrix = this.runtimes.get(track.spec.id)?.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
+    if (!matrix) return undefined
+    const width = this.cssWidth(canvas)
+    const scaleX = (width - PLOT_LEFT) / Math.max(1, this.region.end - this.region.start)
+    const outlines = this.document.matrixOutlines.filter((outline) => matrixOutlineTargetsTrack(outline, track.spec.id, this.region.chr, matrix.axis2?.chr ?? this.region.chr))
+    const candidates = outlines.flatMap((outline) => {
+      let points: Array<{ x: number; y: number }>
+      let visible: (point: { x: number; y: number }) => boolean
+      if (matrix.axis2) {
+        const scaleY = (track.bottom - track.top) / Math.max(1, matrix.axis2.end - matrix.axis2.start)
+        points = rectangularMatrixOutlinePolygon(outline.axis1, outline.axis2, this.region, matrix.axis2, scaleX, scaleY, track.top)
+        visible = (point) => point.x >= PLOT_LEFT && point.x <= width && point.y >= track.top && point.y <= track.bottom
+      } else {
+        const geometry = matrixVerticalGeometry(track.top, track.bottom, track.spec.matrixDirection ?? 'up')
+        const direction = track.spec.matrixDirection === 'down' ? 1 : -1
+        const maximumDistance = matrixQueryMaximumDistance(this.region.end - this.region.start, track.spec.matrixDepthMode ?? 'full', track.spec.matrixMaxDistance)
+        const depth = Math.min((width - PLOT_LEFT) / 2, maximumDistance * scaleX / 2)
+        points = matrixOutlinePolygon(outline.axis1, outline.axis2, this.region, scaleX, geometry.baseline, direction)
+        const domain = matrixRegionHighlightPolygon(PLOT_LEFT, width, geometry.baseline, direction, depth)
+        visible = (point) => pointInConvexPolygon(point, domain)
+          && point.y >= geometry.clipTop && point.y <= geometry.clipBottom
+      }
+      return points.flatMap((point, corner) => visible(point) ? [{
+        outline, corner: corner as MatrixOutlineCorner, spec: track.spec, matrix,
+        distance: Math.hypot(offsetX - point.x, offsetY - point.y),
+      }] : [])
+    })
+    const hit = candidates.filter((candidate) => candidate.distance <= 7).sort((a, b) => a.distance - b.distance)[0]
+    return hit && { outline: hit.outline, corner: hit.corner, spec: hit.spec, matrix: hit.matrix }
+  }
+
+  private updateRegionLineHover(canvas: HTMLCanvasElement, pane: 'main' | 'bottom' | undefined, event: PointerEvent): boolean {
+    const corner = !this.regionToolMode && pane ? this.matrixOutlineCornerAt(canvas, pane, event.offsetX, event.offsetY) : undefined
+    const hovered = !corner && !this.regionToolMode && event.offsetX >= PLOT_LEFT
+      && Boolean(this.dividerAt(canvas, event.offsetX) || this.savedRegionBoundaryAt(canvas, pane, event.offsetX, event.offsetY))
+    canvas.classList.toggle('is-matrix-outline-corner-hover', Boolean(corner))
     canvas.classList.toggle('is-region-line-hover', hovered)
-    return hovered
+    return Boolean(corner) || hovered
   }
 
   private matrixInspectionAt(canvas: HTMLCanvasElement, pane: 'main' | 'bottom', event: PointerEvent, trackId?: string): { spec: TrackSpec; matrix: MatrixFeature; inspection: MatrixCellInspection } | undefined {
     if (event.offsetX < PLOT_LEFT) return undefined
-    const hit = this.itemAt(canvas, pane, event.offsetX, event.offsetY)
-    const spec = hit?.kind === 'track' ? this.document.tracks.find((track) => track.id === hit.id && track.kind === 'matrix') : undefined
-    if (!spec || (trackId && spec.id !== trackId)) return undefined
+    const track = this.trackGeometryAt(pane, event.offsetY)
+    const spec = track?.spec.kind === 'matrix' ? track.spec : undefined
+    if (!spec || !track || (trackId && spec.id !== trackId)) return undefined
     const matrix = this.runtimes.get(spec.id)?.features.find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
     if (!matrix) return undefined
-    const specs = this.visibleSpecs(pane)
-    const index = specs.findIndex((track) => track.id === spec.id)
-    const top = specs.slice(0, index).reduce((sum, track) => sum + this.trackHeight(track), 0)
-    const bottom = top + this.trackHeight(spec)
     const maximumDistance = matrixQueryMaximumDistance(this.region.end - this.region.start, spec.matrixDepthMode ?? 'full', spec.matrixMaxDistance)
     const inspection = matrix.axis2
-      ? inspectRectangularMatrixPoint(matrix, this.region, event.offsetX, event.offsetY, PLOT_LEFT, this.cssWidth(canvas), top, bottom)
-      : inspectMatrixPoint(matrix, this.region, event.offsetX, event.offsetY, PLOT_LEFT, this.cssWidth(canvas), top, bottom, spec.matrixDirection ?? 'up', maximumDistance)
+      ? inspectRectangularMatrixPoint(matrix, this.region, event.offsetX, event.offsetY, PLOT_LEFT, this.cssWidth(canvas), track.top, track.bottom)
+      : inspectMatrixPoint(matrix, this.region, event.offsetX, event.offsetY, PLOT_LEFT, this.cssWidth(canvas), track.top, track.bottom, spec.matrixDirection ?? 'up', maximumDistance)
     return inspection ? { spec, matrix, inspection } : undefined
   }
 
@@ -524,6 +601,20 @@ export class GenomeBrowser {
       this.scheduleRender()
       return true
     }
+    const outlineCorner = !this.regionToolMode && pane ? this.matrixOutlineCornerAt(canvas, pane, event.offsetX, event.offsetY) : undefined
+    if (outlineCorner) {
+      canvas.setPointerCapture(event.pointerId)
+      this.matrixOutlineCornerDrag = {
+        canvas, pane: pane!, id: outlineCorner.outline.id, trackId: outlineCorner.spec.id,
+        resolution: outlineCorner.matrix.resolution, corner: outlineCorner.corner,
+        axis1: { ...outlineCorner.outline.axis1 }, axis2: { ...outlineCorner.outline.axis2 },
+      }
+      canvas.classList.remove('is-matrix-outline-corner-hover')
+      canvas.classList.add('is-matrix-outline-corner-dragging')
+      this.clearMatrixHover()
+      this.clearBamHover()
+      return true
+    }
     const divider = this.dividerAt(canvas, event.offsetX)
     if (!this.regionToolMode && divider) {
       canvas.setPointerCapture(event.pointerId)
@@ -533,10 +624,13 @@ export class GenomeBrowser {
       this.clearBamHover()
       return true
     }
-    const boundary = this.savedRegionBoundaryAt(canvas, event.offsetX)
+    const boundary = this.savedRegionBoundaryAt(canvas, pane, event.offsetX, event.offsetY)
     if (!this.regionToolMode && boundary) {
       canvas.setPointerCapture(event.pointerId)
-      this.regionBoundaryDrag = { canvas, id: boundary.saved.id, edge: boundary.edge, region: { ...boundary.saved.region } }
+      this.regionBoundaryDrag = {
+        canvas, id: boundary.saved.id, edge: boundary.edge, region: { ...boundary.saved.region },
+        coordinateOffset: boundary.saved.region[boundary.edge] - this.plotCoordinate(canvas, event.offsetX),
+      }
       canvas.classList.add('is-region-boundary-dragging')
       this.clearMatrixHover()
       this.clearBamHover()
@@ -570,6 +664,17 @@ export class GenomeBrowser {
       }
       return true
     }
+    if (this.matrixOutlineCornerDrag?.canvas === canvas) {
+      const drag = this.matrixOutlineCornerDrag
+      const hit = this.matrixInspectionAt(canvas, drag.pane, event, drag.trackId)
+      if (hit) {
+        const resized = resizeMatrixOutlineCorner(drag.axis1, drag.axis2, drag.corner, hit.inspection.bin1, hit.inspection.bin2, drag.resolution)
+        drag.axis1 = resized.axis1
+        drag.axis2 = resized.axis2
+        this.scheduleRender()
+      }
+      return true
+    }
     if (this.regionSelection?.canvas === canvas) {
       this.regionSelection.currentX = Math.max(PLOT_LEFT, Math.min(this.cssWidth(canvas), event.offsetX))
       this.scheduleRender()
@@ -586,7 +691,7 @@ export class GenomeBrowser {
       this.regionBoundaryDrag.region = resizeRegionBoundary(
         this.regionBoundaryDrag.region,
         this.regionBoundaryDrag.edge,
-        this.plotCoordinate(canvas, event.offsetX),
+        this.plotCoordinate(canvas, event.offsetX) + this.regionBoundaryDrag.coordinateOffset,
         snapResolution,
         chromosomeLength,
       )
@@ -608,6 +713,14 @@ export class GenomeBrowser {
         resolution: selection.resolution,
       })
       this.setRegionToolMode(undefined)
+      this.scheduleRender()
+      return true
+    }
+    if (this.matrixOutlineCornerDrag?.canvas === canvas) {
+      const drag = this.matrixOutlineCornerDrag
+      this.matrixOutlineCornerDrag = undefined
+      canvas.classList.remove('is-matrix-outline-corner-dragging')
+      if (event.type === 'pointerup') this.callbacks.onMatrixOutlineResize(drag.id, drag.axis1, drag.axis2)
       this.scheduleRender()
       return true
     }
@@ -749,7 +862,7 @@ export class GenomeBrowser {
       }
       if (this.trackBodyHold?.canvas === canvas && Math.hypot(event.clientX - this.trackBodyHold.startX, event.clientY - this.trackBodyHold.startY) >= 5) this.cancelTrackBodyHold()
       if (!this.dragging || this.dragging.canvas !== canvas) {
-        if (this.updateRegionLineHover(canvas, event)) {
+        if (this.updateRegionLineHover(canvas, pane, event)) {
           this.clearTrackResizeHover(canvas)
           this.clearMatrixHover()
           this.clearBamHover()
@@ -815,6 +928,7 @@ export class GenomeBrowser {
     canvas.addEventListener('pointerleave', () => {
       if (this.trackResize?.canvas === canvas) return
       canvas.classList.remove('is-region-line-hover')
+      canvas.classList.remove('is-matrix-outline-corner-hover')
       this.clearTrackResizeHover(canvas)
       this.clearMatrixHover()
     })
@@ -861,7 +975,7 @@ export class GenomeBrowser {
     })
     canvas.addEventListener('pointermove', (event) => {
       if (this.updateRegionInteraction(canvas, event)) return
-      if (!this.dragging || this.dragging.canvas !== canvas) this.updateRegionLineHover(canvas, event)
+      if (!this.dragging || this.dragging.canvas !== canvas) this.updateRegionLineHover(canvas, undefined, event)
       if (!this.dragging || this.dragging.canvas !== canvas) return
       const plotWidth = Math.max(1, this.cssWidth(canvas) - PLOT_LEFT)
       const shift = (this.dragging.x - event.clientX) * ((this.dragging.region.end - this.dragging.region.start) / plotWidth)
@@ -881,7 +995,10 @@ export class GenomeBrowser {
     }
     canvas.addEventListener('pointerup', finish)
     canvas.addEventListener('pointercancel', finish)
-    canvas.addEventListener('pointerleave', () => { if (!this.dragging) canvas.classList.remove('is-region-line-hover') })
+    canvas.addEventListener('pointerleave', () => {
+      if (!this.dragging) canvas.classList.remove('is-region-line-hover')
+      canvas.classList.remove('is-matrix-outline-corner-hover')
+    })
     canvas.addEventListener('wheel', (event) => {
       if (!event.ctrlKey && !event.metaKey) {
         if (event.deltaX !== 0) {
@@ -2164,6 +2281,9 @@ export class GenomeBrowser {
     const verticalChr = matrix.axis2?.chr ?? this.region.chr
     const outlines: Array<Pick<MatrixOutline, 'axis1' | 'axis2' | 'color'>> = this.document.matrixOutlines
       .filter((outline) => matrixOutlineTargetsTrack(outline, spec.id, this.region.chr, verticalChr))
+      .map((outline) => this.matrixOutlineCornerDrag?.id === outline.id
+        ? { ...outline, axis1: this.matrixOutlineCornerDrag.axis1, axis2: this.matrixOutlineCornerDrag.axis2 }
+        : outline)
     const selection = this.matrixOutlineSelection
     if (selection?.trackId === spec.id) outlines.push({
       axis1: { chr: selection.axis1Chr, start: Math.min(selection.startBin1, selection.currentBin1), end: Math.max(selection.startBin1, selection.currentBin1) + selection.resolution },
@@ -2192,11 +2312,7 @@ export class GenomeBrowser {
     if (!outlines.length || !matrix.axis2) return
     const ctx = this.context
     for (const outline of outlines) {
-      const left = PLOT_LEFT + (outline.axis1.start - this.region.start) * scaleX
-      const right = PLOT_LEFT + (outline.axis1.end - this.region.start) * scaleX
-      const y1 = top + (outline.axis2.start - matrix.axis2.start) * scaleY
-      const y2 = top + (outline.axis2.end - matrix.axis2.start) * scaleY
-      strokeClosedPolygon(ctx, [{ x: left, y: y1 }, { x: right, y: y1 }, { x: right, y: y2 }, { x: left, y: y2 }], outline.color)
+      strokeClosedPolygon(ctx, rectangularMatrixOutlinePolygon(outline.axis1, outline.axis2, this.region, matrix.axis2, scaleX, scaleY, top), outline.color)
     }
   }
 
@@ -3449,6 +3565,41 @@ export function matrixRegionHighlightPolygon(left: number, right: number, baseli
   ]
 }
 
+export function matrixRegionBoundarySegments(left: number, right: number, baseline: number, direction: number, maximumDepth: number): Array<{
+  edge: 'start' | 'end'
+  start: { x: number; y: number }
+  end: { x: number; y: number }
+}> {
+  const points = matrixRegionHighlightPolygon(left, right, baseline, direction, maximumDepth)
+  return [
+    { edge: 'start', start: points[0]!, end: points[3]! },
+    { edge: 'end', start: points[1]!, end: points[2]! },
+  ]
+}
+
+export function pointToLineSegmentDistance(point: { x: number; y: number }, start: { x: number; y: number }, end: { x: number; y: number }): number {
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  const lengthSquared = dx * dx + dy * dy
+  if (lengthSquared === 0) return Math.hypot(point.x - start.x, point.y - start.y)
+  const amount = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared))
+  return Math.hypot(point.x - (start.x + amount * dx), point.y - (start.y + amount * dy))
+}
+
+export function pointInConvexPolygon(point: { x: number; y: number }, polygon: readonly { x: number; y: number }[]): boolean {
+  let direction = 0
+  for (let index = 0; index < polygon.length; index++) {
+    const first = polygon[index]!
+    const second = polygon[(index + 1) % polygon.length]!
+    const cross = (second.x - first.x) * (point.y - first.y) - (second.y - first.y) * (point.x - first.x)
+    if (Math.abs(cross) < 1e-7) continue
+    const nextDirection = Math.sign(cross)
+    if (direction && nextDirection !== direction) return false
+    direction = nextDirection
+  }
+  return true
+}
+
 export function snapRegionToMatrixBins(region: Region, resolution: number | undefined, chromosomeLength: number): Region {
   let start = region.start
   let end = region.end
@@ -3485,6 +3636,26 @@ export function matrixOutlinePolygon(axis1: Region, axis2: Region, viewport: Reg
     point(axis1.end, axis2.end),
     point(axis1.start, axis2.end),
   ]
+}
+
+export function rectangularMatrixOutlinePolygon(axis1: Region, axis2: Region, horizontalViewport: Region, verticalViewport: Region,
+  scaleX: number, scaleY: number, top: number): Array<{ x: number; y: number }> {
+  const left = PLOT_LEFT + (axis1.start - horizontalViewport.start) * scaleX
+  const right = PLOT_LEFT + (axis1.end - horizontalViewport.start) * scaleX
+  const y1 = top + (axis2.start - verticalViewport.start) * scaleY
+  const y2 = top + (axis2.end - verticalViewport.start) * scaleY
+  return [{ x: left, y: y1 }, { x: right, y: y1 }, { x: right, y: y2 }, { x: left, y: y2 }]
+}
+
+export function resizeMatrixOutlineCorner(axis1: Region, axis2: Region, corner: MatrixOutlineCorner, bin1: number, bin2: number, resolution: number): { axis1: Region; axis2: Region } {
+  const size = Math.max(1, Math.round(resolution))
+  const nextAxis1 = { ...axis1 }
+  const nextAxis2 = { ...axis2 }
+  if (corner === 0 || corner === 3) nextAxis1.start = Math.max(0, Math.min(bin1, nextAxis1.end - size))
+  else nextAxis1.end = Math.max(nextAxis1.start + size, bin1 + size)
+  if (corner === 0 || corner === 1) nextAxis2.start = Math.max(0, Math.min(bin2, nextAxis2.end - size))
+  else nextAxis2.end = Math.max(nextAxis2.start + size, bin2 + size)
+  return { axis1: nextAxis1, axis2: nextAxis2 }
 }
 
 export function verticalRegionBoundaryLines(x1: number, x2: number, ranges: readonly { top: number; bottom: number }[]): Array<{ x1: number; y1: number; x2: number; y2: number }> {

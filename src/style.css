@@ -402,7 +402,9 @@ body.is-track-resizing, body.is-track-resizing * { cursor: var(--cursor-resize-y
 #genome-header.is-region-selecting, #genome-canvas.is-region-selecting, #bottom-canvas.is-region-selecting,
 #genome-header.is-region-dragging, #genome-canvas.is-region-dragging, #bottom-canvas.is-region-dragging,
 #genome-canvas.is-matrix-outline-selecting, #bottom-canvas.is-matrix-outline-selecting,
-#genome-canvas.is-matrix-outline-dragging, #bottom-canvas.is-matrix-outline-dragging { cursor: crosshair; }
+#genome-canvas.is-matrix-outline-dragging, #bottom-canvas.is-matrix-outline-dragging,
+#genome-canvas.is-matrix-outline-corner-hover, #bottom-canvas.is-matrix-outline-corner-hover,
+#genome-canvas.is-matrix-outline-corner-dragging, #bottom-canvas.is-matrix-outline-corner-dragging { cursor: crosshair; }
 #genome-header.is-divider-placing, #genome-canvas.is-divider-placing, #bottom-canvas.is-divider-placing { cursor: cell; }
 #genome-header.is-region-line-hover, #genome-canvas.is-region-line-hover, #bottom-canvas.is-region-line-hover,
 #genome-header.is-divider-dragging, #genome-canvas.is-divider-dragging, #bottom-canvas.is-divider-dragging,

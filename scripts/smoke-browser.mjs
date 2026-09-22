@@ -552,6 +552,9 @@ await page.evaluate(() => {
   ],
   groups: [{ id: 'matrix-group', label: 'Matrix group', scaleBehavior: 'linked' }],
   scales: [],
+  savedRegions: [{ id: 'matrix-region-smoke', label: 'Matrix region',
+    region: { chr: existing.region?.chr ?? 'contigA', start: 12_000, end: 16_000 }, color: '#d95d74',
+    highlighted: true, boundaryStyle: 'solid', fill: true, shadeOpacity: 0.09 }],
   matrixOutlines: [{ id: 'outline-smoke', label: 'Shared matrix block',
     axis1: { chr: existing.region?.chr ?? 'contigA', start: 12_000, end: 16_000 },
     axis2: { chr: existing.region?.chr ?? 'contigA', start: 18_000, end: 22_000 },
@@ -565,6 +568,36 @@ if (!matrixCanvasBox) throw new Error('Matrix smoke canvas was not visible.')
 await page.mouse.click(500, (await page.viewportSize()).height - 8)
 const matrixResizeBefore = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').tracks)
 const firstMatrixPixels = matrixResizeBefore[0]?.fittedHeight ?? matrixResizeBefore[0]?.manualPixelHeight ?? 16 + matrixResizeBefore[0]?.height * 3.6
+const matrixRegionHandle = await page.evaluate(({ canvasWidth, trackHeight }) => {
+  const state = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+  const saved = state.savedRegions?.[0]?.region
+  const view = state.region
+  if (!saved || !view) return undefined
+  const plotWidth = canvasWidth - 176
+  const x1 = 176 + (saved.start - view.start) / (view.end - view.start) * plotWidth
+  const x2 = 176 + (saved.end - view.start) / (view.end - view.start) * plotWidth
+  const depth = Math.min((x2 - x1) / 2, trackHeight - 1)
+  return { x1, slantedX: x1 + depth / 2, y: trackHeight - 0.5 - depth / 2, start: saved.start }
+}, { canvasWidth: matrixCanvasBox.width, trackHeight: firstMatrixPixels })
+let matrixImaginaryBoundaryCursor = ''
+let matrixSlantedBoundaryCursor = ''
+let matrixSlantedBoundaryMoved = false
+if (matrixRegionHandle) {
+  await page.mouse.move(matrixCanvasBox.x + matrixRegionHandle.x1, matrixCanvasBox.y + matrixRegionHandle.y)
+  matrixImaginaryBoundaryCursor = await page.locator('#genome-canvas').evaluate((element) => getComputedStyle(element).cursor)
+  await page.mouse.move(matrixCanvasBox.x + matrixRegionHandle.slantedX, matrixCanvasBox.y + matrixRegionHandle.y)
+  matrixSlantedBoundaryCursor = await page.locator('#genome-canvas').evaluate((element) => getComputedStyle(element).cursor)
+  await page.mouse.down()
+  await page.mouse.move(matrixCanvasBox.x + matrixRegionHandle.slantedX + 12, matrixCanvasBox.y + matrixRegionHandle.y, { steps: 3 })
+  await page.mouse.up()
+  matrixSlantedBoundaryMoved = await page.waitForFunction((start) => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').savedRegions?.[0]?.region?.start !== start, matrixRegionHandle.start).then(() => true).catch(() => false)
+}
+const matrixCornerResizeGeometry = await page.evaluate(async () => {
+  const { resizeMatrixOutlineCorner } = await import('/src/browser.ts')
+  return resizeMatrixOutlineCorner(
+    { chr: 'chr1', start: 100, end: 300 }, { chr: 'chr1', start: 400, end: 700 }, 2, 350, 750, 50,
+  )
+})
 await page.mouse.move(matrixCanvasBox.x + 300, matrixCanvasBox.y + firstMatrixPixels)
 await page.mouse.down()
 await page.mouse.move(matrixCanvasBox.x + 300, matrixCanvasBox.y + firstMatrixPixels + 8)
@@ -847,7 +880,7 @@ const matrixTilePerformance = await page.evaluate(async () => {
 })
 await browser.close()
 
-console.log(JSON.stringify({ ...result, matrixInspectorSizing, emptyWorkspaceVisible, emptyWorkspaceText: emptyWorkspaceText?.trim(), emptyWorkspaceBrand, emptyWorkspaceHiddenAfterLoad, cornerBrandCount, footerHeight, blankCanvasFillsPane, canvasWidthsAligned, regionMenuText, regionMenuOrder, savedRegionMenuText, ctrlRegionSelectionActivated, regionHighlightChanged, regionHeaderUnchanged, actionHistoryEmptyBeforeTyping, actionAutocompleteDisabled, actionHistoryMatches, regionAppearanceControlsVisible, regionShadePreviewChanged, regionSnapStatusText, regionColorIcon, dividerColorIcon, visualRegionColorPicker, visualDividerColorPicker, regionRoundTrip, regionStateAfterReload, regionBoundaryHoverCursor, regionBoundaryMoved, dividerHoverCursor, dividerMoved, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixMetadataOptionCount, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixOutlineShortcutVisible, matrixOutlineDrawMode, matrixOutlineMenuText, matrixOutlineColorIcon, matrixOutlineTargetsBefore, matrixOutlineTargetRemoved, visualMatrixOutlineColorPicker, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixOverlaySourceText, matrixOverlayFocusText, matrixOverlayGroupLinked, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, matrixDetailsMenuVisible, matrixDetailsText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
+console.log(JSON.stringify({ ...result, matrixInspectorSizing, emptyWorkspaceVisible, emptyWorkspaceText: emptyWorkspaceText?.trim(), emptyWorkspaceBrand, emptyWorkspaceHiddenAfterLoad, cornerBrandCount, footerHeight, blankCanvasFillsPane, canvasWidthsAligned, regionMenuText, regionMenuOrder, savedRegionMenuText, ctrlRegionSelectionActivated, regionHighlightChanged, regionHeaderUnchanged, actionHistoryEmptyBeforeTyping, actionAutocompleteDisabled, actionHistoryMatches, regionAppearanceControlsVisible, regionShadePreviewChanged, regionSnapStatusText, regionColorIcon, dividerColorIcon, visualRegionColorPicker, visualDividerColorPicker, regionRoundTrip, regionStateAfterReload, regionBoundaryHoverCursor, regionBoundaryMoved, dividerHoverCursor, dividerMoved, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixMetadataOptionCount, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, matrixGroupMenuText, matrixOutlineShortcutVisible, matrixOutlineDrawMode, matrixOutlineMenuText, matrixOutlineColorIcon, matrixOutlineTargetsBefore, matrixOutlineTargetRemoved, visualMatrixOutlineColorPicker, matrixImaginaryBoundaryCursor, matrixSlantedBoundaryCursor, matrixSlantedBoundaryMoved, matrixCornerResizeGeometry, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixOverlaySourceText, matrixOverlayFocusText, matrixOverlayGroupLinked, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, matrixDetailsMenuVisible, matrixDetailsText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 console.log('Matrix tile fidelity and synthetic 100k-cell pan benchmark:', matrixTileFidelity, matrixTilePerformance)
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!emptyWorkspaceVisible || !emptyWorkspaceText?.includes('Open or drop genomics files') || !emptyWorkspaceText.includes('GeRAFE') || Math.abs(emptyWorkspaceBrand.centerOffset) > 1 || emptyWorkspaceBrand.headingOffset > 30 || emptyWorkspaceBrand.headingFontSize < 18 || emptyWorkspaceBrand.imageGap > 16 || emptyWorkspaceBrand.imageHeight < 600 || emptyWorkspaceBrand.wordmarkHeight < 60 || cornerBrandCount !== 0 || footerHeight > 24 || emptyWorkspaceHiddenAfterLoad === false) process.exitCode = 1
@@ -893,6 +926,8 @@ if (customReferenceBeforeReload !== customReferenceAfterReload) process.exitCode
 if (!referenceMenuText?.includes('Add reference')) process.exitCode = 1
 if (!matrixGroupRightClickHighlightChanged || !matrixGroupMenuText?.includes('Matrix settings') || !matrixGroupMenuText.includes('Toggle matrix orientation') || matrixGroupMenuText.includes('Draw matrix downward') || !matrixGroupAppearanceText?.includes('Set group track color') || !matrixGroupAppearanceText?.includes('Set group track height')) process.exitCode = 1
 if (!matrixOutlineShortcutVisible || !matrixOutlineDrawMode || !matrixOutlineMenuText?.includes('Shared matrix block') || matrixOutlineColorIcon !== 'rgb(52, 120, 201)' || matrixOutlineTargetsBefore !== 2 || !matrixOutlineTargetRemoved || !visualMatrixOutlineColorPicker) process.exitCode = 1
+if (matrixImaginaryBoundaryCursor.includes('ew-resize') || !matrixSlantedBoundaryCursor.includes('ew-resize') || !matrixSlantedBoundaryMoved
+  || matrixCornerResizeGeometry.axis1.end !== 400 || matrixCornerResizeGeometry.axis2.end !== 800) process.exitCode = 1
 if (!matrixOverlaySourceText?.includes('Called loops') || !matrixOverlayFocusText?.includes('Matching gene symbols') || !matrixOverlayFocusText.includes('Interactions involving region') || !matrixOverlayGroupLinked) process.exitCode = 1
 if (!matrixSettingsVisible || !matrixGroupSettingsApplied || !matrixSettingsReopenedAtTop || !resizeRequiresHoverDelay || !unselectedBottomBoundaryResize || !selectedMatrixMenuText?.includes('2 tracks selected') || !selectedMatrixMenuText?.includes('Matrix settings') || !newWorkspaceConfirmationVisible) process.exitCode = 1
 if (!mixedSelectionMenuText?.includes('3 tracks selected') || mixedSelectionMenuText.includes('Matrix settings') || mixedSelectionMenuText.includes('Remove 3 selected tracks')) process.exitCode = 1
