@@ -51,6 +51,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { cloudLocalBytes, describeNativeFile, hydrateNativeFile, isDesktopApp, NativeFileHandle, prepareBedGraphCache, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
 import { cloudProgressPercent } from './cloud-file-progress.ts'
 import { pickNativeTrackPaths } from './desktop-track-picker.ts'
+import { openNativeFiles } from './open-track-files.ts'
 import { startIndependentSourceRestores } from './independent-source-restores.ts'
 import { LAST_TRACK_FOLDER_KEY, parentFolderOfFile } from './track-picker-state.ts'
 import type { LocalFileDescriptor } from './native-file.ts'
@@ -1152,7 +1153,7 @@ async function openTrackPicker(): Promise<void> {
     return
   }
   try {
-    const paths = await pickNativeTrackPaths() ?? []
+    const paths = await pickNativeTrackPaths(undefined, () => openNativeFiles(store.current)) ?? []
     if (paths.length) await loadNativePaths(paths)
     else pendingOpenGroupId = undefined
   } catch (error) {
@@ -3562,7 +3563,7 @@ async function relinkTrackNative(id: string): Promise<void> {
   pendingRelinkTrackId = undefined
   pendingRelinkChannel = undefined
   try {
-    const paths = await pickNativeTrackPaths() ?? []
+    const paths = await pickNativeTrackPaths(undefined, () => openNativeFiles(store.current)) ?? []
     if (!paths.length) return
     const selected = await Promise.all(paths.map(describeNativeFile))
     const primary = selected.find((file) => !/\.(bai|csi)$/i.test(file.name))

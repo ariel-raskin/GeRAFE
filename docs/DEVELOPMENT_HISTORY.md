@@ -17,6 +17,7 @@ The Git history beginning with the import pull request is authoritative and repr
 - Follow-up: explicitly request full-file hydration for Cloud Files placeholders, surface provider errors and a stalled-provider hint, and restore saved native sources independently so a blocked cloud source does not starve other tracks after refresh.
 - A controlled probe of the reported 289 MB Dropbox `.bw` showed a third-party reparse tag and an ordinary Windows `File::open` blocking before it returned a handle for 45 seconds. The standard Cloud Files API therefore does not address that particular placeholder; the in-row hint directs users to Dropbox's **Make available offline** action when its provider does not return bytes.
 - The in-app desktop track picker now shows metadata-only Online-only/On this device badges for Windows files and can refresh the folder after a cloud sync-state change. This makes candidate files identifiable before selecting them without hydrating their contents.
+- The picker also marks native files already referenced by tracks in the current workspace, including pending sources and supporting BAM indexes. Full-path matching avoids confusing same-named files in different folders; the indicator refreshes from current document state and is not persisted separately.
 
 ## September 23, 2026 — upper track fitting
 
