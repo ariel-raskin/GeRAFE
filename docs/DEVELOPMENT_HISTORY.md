@@ -8,6 +8,10 @@ The chronology below was reconstructed from the local Codex session transcripts,
 
 The Git history beginning with the import pull request is authoritative and reproducible. This document is the provenance record for everything earlier.
 
+## September 23, 2026 — upper track fitting
+
+- Removed the lower pane's padding spacer from the upper track scroller, so fitted tracks meet the lower pane without a scrollable blank gap; genuine track overflow remains scrollable.
+
 ## September 22, 2026 — signal stack presentation
 
 - Added reversible collapsed presentation for ordinary signal-only groups, including automatic shared y-axis scales.

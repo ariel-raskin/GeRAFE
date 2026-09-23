@@ -343,8 +343,8 @@ button, label { -webkit-tap-highlight-color: transparent; }
 }
 
 .canvas-wrap {
-  position: relative;
-  flex: 1 1 auto;
+  position: absolute;
+  inset: 0 0 44px;
   width: 100%;
   min-height: 0;
   min-width: 0;
