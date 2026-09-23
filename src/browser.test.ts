@@ -41,10 +41,28 @@ describe('track layout and ruler formatting', () => {
       { id: 'c', label: 'Hidden', color: '#6d55e0', enabled: true },
     ]
     expect(signalStackLegendEntries(members, members.slice(0, 2), 'shades-patterns', ['c'])).toEqual([
-      { id: 'a', label: 'Control', color: signalStackColor('#6d55e0', 0, 2, 'shades-patterns'), dash: [], hidden: false },
-      { id: 'b', label: 'Treatment', color: signalStackColor('#6d55e0', 1, 2, 'shades-patterns'), dash: [7, 4], hidden: false },
-      { id: 'c', label: 'Hidden', color: '#6d55e0', dash: [2, 3], hidden: true },
+      { id: 'a', label: 'Control', color: signalStackColor('#6d55e0', 0, 3, 'shades-patterns'), dash: [], hidden: false },
+      { id: 'b', label: 'Treatment', color: signalStackColor('#6d55e0', 1, 3, 'shades-patterns'), dash: [7, 4], hidden: false },
+      { id: 'c', label: 'Hidden', color: signalStackColor('#6d55e0', 2, 3, 'shades-patterns'), dash: [2, 3], hidden: true },
     ])
+  })
+
+  it('keeps each stack member color and pattern when draw order or visibility changes', () => {
+    const members = [
+      { id: 'a', label: 'First', color: '#6d55e0', enabled: true },
+      { id: 'b', label: 'Second', color: '#6d55e0', enabled: true },
+      { id: 'c', label: 'Third', color: '#6d55e0', enabled: true },
+    ]
+    const styleIds = members.map((member) => member.id)
+    const original = signalStackLegendEntries(members, members, 'shades-patterns', [], styleIds)
+    const reordered = [members[2]!, members[0]!, members[1]!]
+    const moved = signalStackLegendEntries(reordered, reordered, 'shades-patterns', [], styleIds)
+    for (const entry of original) {
+      expect(moved.find((candidate) => candidate.id === entry.id)).toMatchObject({ color: entry.color, dash: entry.dash })
+    }
+    const hidden = signalStackLegendEntries(reordered, reordered.filter((member) => member.id !== 'a'), 'shades-patterns', ['a'], styleIds)
+    expect(hidden.find((entry) => entry.id === 'b')).toMatchObject({ color: original[1]!.color, dash: original[1]!.dash })
+    expect(hidden.find((entry) => entry.id === 'a')).toMatchObject({ color: original[0]!.color, dash: original[0]!.dash, hidden: true })
   })
 
   it('gives each stranded channel the same height as a regular signal track', () => {

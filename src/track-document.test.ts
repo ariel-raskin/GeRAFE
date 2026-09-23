@@ -507,6 +507,7 @@ describe('track document', () => {
     expect(group).toMatchObject({
       signalStackMode: 'collapsed', signalStackDifferentiation: 'patterns',
       signalStackRenderStyle: 'line', scaleBehavior: 'linked',
+      signalStackStyleTrackIds: ['t1', 't2'],
     })
     expect(new Set(document.tracks.filter((track) => track.displayGroupId === group.id).map((track) => track.scaleBindingId)).size).toBe(1)
     expandSignalStack(document, group.id)
@@ -526,12 +527,29 @@ describe('track document', () => {
     moveSignalStackTrack(document, group.id, 't3', -1)
     expect(group.signalStackHiddenTrackIds).toEqual(['t2', 't3'])
     expect(document.tracks.map((track) => track.id)).toEqual(['t1', 't3', 't2', 'reference-genes'])
+    expect(group.signalStackStyleTrackIds).toEqual(['t1', 't2', 't3'])
     Object.assign(group, { signalStackDifferentiation: 'patterns', signalStackRenderStyle: 'line' })
     const restored = normalizeTrackDocument(JSON.parse(JSON.stringify(document)))
     expect(restored.groups[0]).toMatchObject({
       signalStackMode: 'collapsed', signalStackDifferentiation: 'patterns', signalStackRenderStyle: 'line',
       signalStackHiddenTrackIds: ['t2', 't3'],
+      signalStackStyleTrackIds: ['t1', 't2', 't3'],
     })
+  })
+
+  it('assigns stable style slots to pre-v32 stacks and appends new members', () => {
+    const legacy = documentWithTwoTracks() as any
+    assignDisplayGroup(legacy, ['t1', 't2'], 'Replicates')
+    collapseSignalStack(legacy, legacy.groups[0].id)
+    delete legacy.groups[0].signalStackStyleTrackIds
+    legacy.schemaVersion = 31
+    const restored = normalizeTrackDocument(legacy)
+    expect(restored.groups[0].signalStackStyleTrackIds).toEqual(['t1', 't2'])
+    moveSignalStackTrack(restored, restored.groups[0]!.id, 't2', -1)
+    expect(restored.groups[0].signalStackStyleTrackIds).toEqual(['t1', 't2'])
+    addSignalTrack(restored, { id: 's3', name: 'third', format: 'bigwig', files: [] }, { id: 't3' })
+    assignDisplayGroup(restored, ['t3'], 'Replicates')
+    expect(restored.groups[0].signalStackStyleTrackIds).toEqual(['t1', 't2', 't3'])
   })
 
   it('migrates version 29 groups as expanded and prunes an incompatible collapsed stack', () => {
