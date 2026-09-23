@@ -18,19 +18,39 @@ export function clampRegion(region: Region, chromosomeLength: number): Region {
   return { chr: region.chr, start, end: start + span }
 }
 
-export function parseLocus(input: string, chromosomes: ReadonlyMap<string, number>): Region | undefined {
-  const normalized = input.trim().replaceAll(',', '')
-  const match = /^([^:\s]+)(?::(\d+)(?:-(\d+))?)?$/.exec(normalized)
-  if (!match) return
+export interface LocusInputParts {
+  chromosome: string
+  first?: number
+  last?: number
+}
 
-  const chr = resolveChromosome(match[1], chromosomes)
+/** Recognize common pasted coordinates without changing their 1-based meaning. */
+export function parseLocusInputParts(input: string): LocusInputParts | undefined {
+  const normalized = input.trim().replaceAll(',', '').replace(/[\u2012-\u2015\u2212]/g, '-')
+  const locus = /^([^:\s]+)(?:(?:\s*:\s*|\s+)(.+))?$/.exec(normalized)
+  if (!locus) return
+  if (locus[2] === undefined) return { chromosome: locus[1] }
+  const coordinates = /^(\d+)(?:(?:\s*-\s*|\s*\.\.\s*|\s+to\s+|\s+)(\d+))?$/i.exec(locus[2].trim())
+  if (!coordinates) return
+  return {
+    chromosome: locus[1],
+    first: Number(coordinates[1]),
+    last: coordinates[2] === undefined ? undefined : Number(coordinates[2]),
+  }
+}
+
+export function parseLocus(input: string, chromosomes: ReadonlyMap<string, number>): Region | undefined {
+  const parts = parseLocusInputParts(input)
+  if (!parts) return
+
+  const chr = resolveChromosome(parts.chromosome, chromosomes)
   if (!chr) return
   const chrLength = chromosomes.get(chr)!
-  if (!match[2]) return { chr, start: 0, end: chrLength }
+  if (parts.first === undefined) return { chr, start: 0, end: chrLength }
 
   // UI coordinates are conventional 1-based inclusive; internal coordinates are 0-based half-open.
-  const first = Number(match[2])
-  const last = match[3] ? Number(match[3]) : first + Math.max(100, Math.round(chrLength / 10_000))
+  const first = parts.first
+  const last = parts.last ?? first + Math.max(100, Math.round(chrLength / 10_000))
   if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || first < 1 || last < first) return
   return clampRegion({ chr, start: first - 1, end: last }, chrLength)
 }

@@ -56,6 +56,9 @@ describe('vertical matrix locus input', () => {
     expect(resolveMatrixAxisInput('chr8:50,000,001-52,000,000', options)).toEqual({
       kind: 'interval', region: { chr: 'chr8', start: 50_000_000, end: 52_000_000 },
     })
+    expect(resolveMatrixAxisInput('CHR8   50,000,001   52,000,000', options)).toEqual({
+      kind: 'interval', region: { chr: 'chr8', start: 50_000_000, end: 52_000_000 },
+    })
   })
 
   it('explains an interval that exceeds the Cooler bin limit at a selected resolution', () => {
@@ -74,6 +77,7 @@ describe('vertical matrix locus input', () => {
     const result = resolveMatrixAxisInput('chr8:145,138,630-145,138,999', options)
     expect(result).toHaveProperty('error')
     if ('error' in result) expect(result.error).toMatch(/beyond the end/)
+    expect(resolveMatrixAxisInput('chr8 145138630 145138999', options)).toHaveProperty('error', expect.stringMatching(/beyond the end/))
   })
 
   it('explains when a gene index is unavailable or the gene is absent from the matrix', () => {
