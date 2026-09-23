@@ -30,7 +30,7 @@ it to a release, or send it through an issue or pull request.
 2. Choose the next semantic version and synchronize every version-bearing file:
 
    ```powershell
-   npm run version:set -- 0.1.3
+   npm run version:set -- 0.2.0
    npm run version:check
    ```
 
@@ -48,8 +48,8 @@ it to a release, or send it through an issue or pull request.
 5. From updated `main`, create and push the matching tag:
 
    ```powershell
-   git tag v0.1.3
-   git push origin v0.1.3
+   git tag v0.2.0
+   git push origin v0.2.0
    ```
 
 6. The **Release Windows beta** workflow verifies that the tag matches the
