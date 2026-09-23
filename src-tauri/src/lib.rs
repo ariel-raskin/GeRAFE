@@ -29,6 +29,15 @@ struct DirectoryEntrySummary {
     name: String,
     path: String,
     is_directory: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    availability: Option<FileAvailability>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum FileAvailability {
+    OnlineOnly,
+    OnDevice,
 }
 
 #[derive(Serialize)]
@@ -54,6 +63,49 @@ fn logical_drives() -> Vec<String> {
     vec!["/".to_string()]
 }
 
+#[cfg(windows)]
+fn availability_from_attributes(attributes: u32) -> FileAvailability {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_OFFLINE, FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS, FILE_ATTRIBUTE_RECALL_ON_OPEN,
+    };
+    if attributes
+        & (FILE_ATTRIBUTE_OFFLINE
+            | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+            | FILE_ATTRIBUTE_RECALL_ON_OPEN)
+        != 0
+    {
+        FileAvailability::OnlineOnly
+    } else {
+        FileAvailability::OnDevice
+    }
+}
+
+#[cfg(windows)]
+fn file_availability(path: &Path) -> Option<FileAvailability> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::{
+        Foundation::INVALID_HANDLE_VALUE,
+        Storage::FileSystem::{FindClose, FindFirstFileW, WIN32_FIND_DATAW},
+    };
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
+    let handle = unsafe { FindFirstFileW(wide.as_ptr(), &mut data) };
+    if handle == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    unsafe { FindClose(handle) };
+    Some(availability_from_attributes(data.dwFileAttributes))
+}
+
+#[cfg(not(windows))]
+fn file_availability(_path: &Path) -> Option<FileAvailability> {
+    None
+}
+
 fn directory_listing(path: Option<String>) -> Result<DirectoryListing, String> {
     let folder = path
         .map(std::path::PathBuf::from)
@@ -77,10 +129,16 @@ fn directory_listing(path: Option<String>) -> Result<DirectoryListing, String> {
         let file_type = entry
             .file_type()
             .map_err(|error| format!("Could not inspect {path_string}: {error}"))?;
+        let is_directory = file_type.is_dir();
         entries.push(DirectoryEntrySummary {
             name: entry.file_name().to_string_lossy().to_string(),
             path: entry.path().to_string_lossy().to_string(),
-            is_directory: file_type.is_dir(),
+            is_directory,
+            availability: if is_directory {
+                None
+            } else {
+                file_availability(&entry.path())
+            },
         });
     }
     entries.sort_by(|a, b| {
@@ -750,7 +808,50 @@ mod tests {
         assert!(listing.entries[0].is_directory);
         assert_eq!(listing.entries[1].name, "signal.bw");
         assert!(!listing.entries[1].is_directory);
+        #[cfg(windows)]
+        assert_eq!(
+            listing.entries[1].availability,
+            Some(FileAvailability::OnDevice)
+        );
         assert!(listing.parent.is_some());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn picker_classifies_offline_and_recall_attributes() {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_OFFLINE, FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS,
+            FILE_ATTRIBUTE_RECALL_ON_OPEN,
+        };
+        assert_eq!(availability_from_attributes(0), FileAvailability::OnDevice);
+        for attribute in [
+            FILE_ATTRIBUTE_OFFLINE,
+            FILE_ATTRIBUTE_RECALL_ON_OPEN,
+            FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS,
+        ] {
+            assert_eq!(
+                availability_from_attributes(attribute),
+                FileAvailability::OnlineOnly
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn configured_online_only_file_is_listed_without_reading_contents() {
+        let Ok(path) = std::env::var("GERAFE_ONLINE_ONLY_PICKER_SMOKE_PATH") else {
+            return;
+        };
+        let path = Path::new(&path);
+        assert_eq!(file_availability(path), Some(FileAvailability::OnlineOnly));
+        let listing =
+            directory_listing(Some(path.parent().unwrap().to_string_lossy().to_string())).unwrap();
+        let entry = listing
+            .entries
+            .iter()
+            .find(|entry| Path::new(&entry.path) == path)
+            .unwrap();
+        assert_eq!(entry.availability, Some(FileAvailability::OnlineOnly));
     }
 }

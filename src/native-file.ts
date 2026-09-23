@@ -24,6 +24,7 @@ export interface NativeDirectoryEntry {
   name: string
   path: string
   isDirectory: boolean
+  availability?: 'online-only' | 'on-device'
 }
 
 export interface NativeDirectoryListing {
