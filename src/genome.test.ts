@@ -13,9 +13,30 @@ describe('genomic coordinates', () => {
     expect(resolveChromosome('X', hg38)).toBe('chrX')
   })
 
+  it('accepts pasted whitespace-delimited coordinates and case variants', () => {
+    const expected = { chr: 'chr1', start: 109_681_276, end: 110_058_784 }
+    for (const input of [
+      'chr1 109681277 110058784',
+      ' CHR1   109,681,277     110,058,784 ',
+      '1\t109681277\t110058784',
+      'chr1: 109,681,277 - 110,058,784',
+      'chr1 109681277–110058784',
+      'chr1:109681277..110058784',
+      'chr1 109681277 to 110058784',
+    ]) expect(parseLocus(input, hg38)).toEqual(expected)
+  })
+
+  it('retains chromosome-only and single-position searches', () => {
+    expect(parseLocus('CHR1', hg38)).toEqual({ chr: 'chr1', start: 0, end: hg38.get('chr1') })
+    expect(parseLocus('chr1 100', hg38)).toEqual(parseLocus('chr1:100', hg38))
+  })
+
   it('rejects inverted or malformed loci', () => {
     expect(parseLocus('chr1:200-100', hg38)).toBeUndefined()
     expect(parseLocus('made-up:1-10', hg38)).toBeUndefined()
+    for (const input of ['chr1 200 100', 'chr1 0 100', 'chr1 100 200 300', 'chr1:100-', 'chr1:100:200', 'RUNX1 100 200']) {
+      expect(parseLocus(input, hg38)).toBeUndefined()
+    }
   })
 
   it('keeps a panned region within chromosome boundaries', () => {

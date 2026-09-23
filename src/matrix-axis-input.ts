@@ -1,4 +1,4 @@
-import { clampRegion, formatBases, parseLocus, resolveChromosome } from './genome.ts'
+import { clampRegion, formatBases, parseLocus, parseLocusInputParts, resolveChromosome } from './genome.ts'
 import type { Region } from './types.ts'
 
 const MAX_RECTANGULAR_BINS = 1_200
@@ -23,14 +23,14 @@ export function resolveMatrixAxisInput(input: string, options: {
   if (!Number.isSafeInteger(resolution) || resolution <= 0) return { error: 'This matrix has no usable resolution.' }
   const maximumSpan = options.enforceBinLimit === false ? Number.POSITIVE_INFINITY : (MAX_RECTANGULAR_BINS - 2) * resolution
 
-  if (value.includes(':')) {
+  const locusParts = parseLocusInputParts(value)
+  if (value.includes(':') || locusParts?.first !== undefined) {
     const region = parseLocus(value, options.chromosomes)
     if (!region) return { error: 'Enter a valid locus on a chromosome present in this matrix.' }
-    const coordinates = /^([^:\s]+):(\d[\d,]*)(?:-(\d[\d,]*))?$/.exec(value)
-    if (coordinates && Number(coordinates[2].replaceAll(',', '')) > options.chromosomes.get(region.chr)!) {
+    if (locusParts?.first !== undefined && locusParts.first > options.chromosomes.get(region.chr)!) {
       return { error: `This locus starts beyond the end of ${region.chr}.` }
     }
-    if (coordinates?.[3] && Number(coordinates[3].replaceAll(',', '')) > options.chromosomes.get(region.chr)!) {
+    if (locusParts?.last !== undefined && locusParts.last > options.chromosomes.get(region.chr)!) {
       return { error: `This locus ends beyond the end of ${region.chr}.` }
     }
     const bins = Math.ceil(region.end / resolution) - Math.floor(region.start / resolution)

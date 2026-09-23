@@ -19,6 +19,10 @@ The Git history beginning with the import pull request is authoritative and repr
 - The in-app desktop track picker now shows metadata-only Online-only/On this device badges for Windows files and can refresh the folder after a cloud sync-state change. This makes candidate files identifiable before selecting them without hydrating their contents.
 - The picker also marks native files already referenced by tracks in the current workspace, including pending sources and supporting BAM indexes. Full-path matching avoids confusing same-named files in different folders; the indicator refreshes from current document state and is not persisted separately.
 
+## September 23, 2026 — pasted locus formats
+
+- The locus search accepts flexible chromosome-coordinate separators, extra whitespace, optional thousands commas, and case-insensitive chromosome aliases. All forms retain the existing 1-based inclusive interpretation, while gene-name fallback is unchanged.
+
 ## September 23, 2026 — upper track fitting
 
 - Removed the lower pane's padding spacer from the upper track scroller, so fitted tracks meet the lower pane without a scrollable blank gap; genuine track overflow remains scrollable.
