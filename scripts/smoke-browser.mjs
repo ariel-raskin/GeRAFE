@@ -793,6 +793,34 @@ const signalStackFlyoutText = await page.locator('#track-context-flyout').textCo
 await page.locator('[data-context-action="signal-stack-diff-shades"]').click()
 await page.waitForTimeout(300)
 const signalStackLegendChanged = signalStackBeforeStyle !== await signalStackCanvas.evaluate((element) => element.toDataURL())
+const signalStackBeforeMove = await page.evaluate(async () => {
+  const { signalStackLegendEntries } = await import('/src/browser.ts')
+  const state = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+  const members = state.tracks.filter((track) => track.displayGroupId === 'signal-stack')
+  const group = state.groups.find((item) => item.id === 'signal-stack')
+  return { order: members.map((track) => track.id), styleIds: group.signalStackStyleTrackIds,
+    styles: signalStackLegendEntries(members, members, group.signalStackDifferentiation, [], group.signalStackStyleTrackIds) }
+})
+await page.mouse.click(signalStackBox.x + 60, signalStackBox.y + 50, { button: 'right' })
+await page.locator('[data-context-submenu="signal-stack"]').hover()
+await page.locator('[data-context-action="signal-stack-up-stack-b"]').click()
+await page.waitForTimeout(300)
+const signalStackAfterMove = await page.evaluate(async () => {
+  const { signalStackLegendEntries } = await import('/src/browser.ts')
+  const state = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+  const members = state.tracks.filter((track) => track.displayGroupId === 'signal-stack')
+  const group = state.groups.find((item) => item.id === 'signal-stack')
+  return { order: members.map((track) => track.id), styleIds: group.signalStackStyleTrackIds,
+    styles: signalStackLegendEntries(members, members, group.signalStackDifferentiation, [], group.signalStackStyleTrackIds) }
+})
+const signalStackStylesFollowTracks = signalStackBeforeMove.order.join(',') === 'stack-a,stack-b'
+  && signalStackAfterMove.order.join(',') === 'stack-b,stack-a'
+  && signalStackBeforeMove.styleIds.join(',') === 'stack-a,stack-b'
+  && signalStackAfterMove.styleIds.join(',') === 'stack-a,stack-b'
+  && signalStackBeforeMove.styles.every((entry) => {
+    const moved = signalStackAfterMove.styles.find((item) => item.id === entry.id)
+    return moved?.color === entry.color && JSON.stringify(moved.dash) === JSON.stringify(entry.dash)
+  })
 await page.screenshot({ path: 'dist/smoke-signal-stack.png', fullPage: true })
 await page.evaluate(() => {
   const existing = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
@@ -947,6 +975,7 @@ await browser.close()
 
 console.log(JSON.stringify({ ...result, matrixInspectorSizing, emptyWorkspaceVisible, emptyWorkspaceText: emptyWorkspaceText?.trim(), emptyWorkspaceBrand, emptyWorkspaceHiddenAfterLoad, cornerBrandCount, footerHeight, blankCanvasFillsPane, canvasWidthsAligned, regionMenuText, regionMenuOrder, savedRegionMenuText, ctrlRegionSelectionActivated, regionHighlightChanged, regionHeaderUnchanged, actionHistoryEmptyBeforeTyping, actionAutocompleteDisabled, actionHistoryMatches, regionAppearanceControlsVisible, regionShadePreviewChanged, regionSnapStatusText, regionColorIcon, dividerColorIcon, visualRegionColorPicker, visualDividerColorPicker, regionRoundTrip, regionStateAfterReload, regionBoundaryHoverCursor, regionBoundaryMoved, dividerHoverCursor, dividerMoved, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, trackOptionsStayedOpenForControls, trackOptionsBackdropDismissed, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixMetadataOptionCount, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, interactionGuideSectionCount, interactionGuideKeyCount, interactionGuideBackdropDismissed, interactionGuideEscapeDismissed, interactionGuideButtonDismissed, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, signalStackMenuText, signalStackFlyoutText, signalStackLegendChanged, matrixGroupMenuText, matrixOutlineShortcutVisible, matrixOutlineDrawMode, matrixOutlineMenuText, matrixOutlineColorIcon, matrixOutlineTargetsBefore, matrixOutlineTargetRemoved, visualMatrixOutlineColorPicker, matrixOutlineVisibleAfterBasePan, matrixImaginaryBoundaryCursor, matrixSlantedBoundaryCursor, matrixSlantedBoundaryMoved, matrixCornerResizeGeometry, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixOverlaySourceText, matrixOverlayFocusText, matrixOverlayGroupLinked, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, matrixDetailsMenuVisible, matrixDetailsText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 console.log('Matrix tile fidelity and synthetic 100k-cell pan benchmark:', matrixTileFidelity, matrixTilePerformance)
+console.log('Signal stack member styles after reordering:', { signalStackStylesFollowTracks, signalStackBeforeMove, signalStackAfterMove })
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!emptyWorkspaceVisible || !emptyWorkspaceText?.includes('Open or drop genomics files') || !emptyWorkspaceText.includes('GeRAFE') || Math.abs(emptyWorkspaceBrand.centerOffset) > 1 || emptyWorkspaceBrand.headingOffset > 30 || emptyWorkspaceBrand.headingFontSize < 18 || emptyWorkspaceBrand.imageGap > 16 || emptyWorkspaceBrand.imageHeight < 600 || emptyWorkspaceBrand.wordmarkHeight < 60 || cornerBrandCount !== 0 || footerHeight > 24 || emptyWorkspaceHiddenAfterLoad === false) process.exitCode = 1
 if (!blankCanvasFillsPane || !canvasWidthsAligned || !regionMenuOrder || !regionMenuText?.includes('Add region') || !regionMenuText.includes('Add comparison divider') || !regionMenuText.includes('Add current view as region') || !savedRegionMenuText?.includes('Smoke region') || !ctrlRegionSelectionActivated || !regionHighlightChanged || !regionHeaderUnchanged || !actionHistoryEmptyBeforeTyping || !actionAutocompleteDisabled || !actionHistoryMatches.includes('Smoke region') || !regionAppearanceControlsVisible || !regionShadePreviewChanged || !regionSnapStatusText?.startsWith('On') || regionColorIcon !== 'rgb(17, 136, 204)' || dividerColorIcon !== 'rgb(34, 170, 68)' || !visualRegionColorPicker || !visualDividerColorPicker || !regionRoundTrip || !regionBoundaryHoverCursor.includes('ew-resize') || !regionBoundaryMoved || !dividerHoverCursor.includes('ew-resize') || !dividerMoved || regionStateAfterReload.snap !== true || regionStateAfterReload.saved?.highlighted !== true || regionStateAfterReload.saved?.color !== '#1188cc' || regionStateAfterReload.saved?.boundaryStyle !== 'solid' || regionStateAfterReload.saved?.fill !== true || regionStateAfterReload.saved?.shadeOpacity !== 0.25 || regionStateAfterReload.dividers?.length !== 2 || regionStateAfterReload.dividers[0]?.color !== '#22aa44' || regionStateAfterReload.dividers[0]?.lineStyle !== 'solid' || !regionStateAfterReload.dividers.every((divider) => Number.isFinite(divider.position) && /^#[0-9a-f]{6}$/i.test(divider.color))) process.exitCode = 1
@@ -960,7 +989,7 @@ if (!helpMenuVisible || !helpMenuText?.includes('Track interactions') || !helpMe
   || !aboutDialogVisible || !aboutVersionText?.startsWith('Version ') || !browserUpdateDisabled) process.exitCode = 1
 if (!trackContextVisible) process.exitCode = 1
 if (!singleItemFlyoutFlattened || !flyoutClosesOnPlainAction || !redundantGroupingHidden || !crossGroupSelectionText?.includes('2 tracks selected') || crossGroupSelectionText.includes('3 tracks selected') || !heightInputUsesPixels) process.exitCode = 1
-if (!signalStackMenuText?.includes('Signal stack') || !signalStackFlyoutText?.includes('Distinct colors') || !signalStackFlyoutText.includes('Line patterns') || signalStackFlyoutText.includes('fill') || !signalStackLegendChanged) process.exitCode = 1
+if (!signalStackMenuText?.includes('Signal stack') || !signalStackFlyoutText?.includes('Distinct colors') || !signalStackFlyoutText.includes('Line patterns') || signalStackFlyoutText.includes('fill') || !signalStackLegendChanged || !signalStackStylesFollowTracks) process.exitCode = 1
 if (trackContextFocusedAction || groupContextFocusedAction) process.exitCode = 1
 if (initialTrackContextText?.toLocaleLowerCase().includes('current') || initialTrackContextText?.includes('Set visual group')) process.exitCode = 1
 if ((!firstTrackSpec || ['interval', 'interaction', 'alignment'].includes(firstTrackSpec.kind)) && currentIndicatorCount < 1) process.exitCode = 1

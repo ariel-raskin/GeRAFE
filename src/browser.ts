@@ -1759,41 +1759,41 @@ export class GenomeBrowser {
     const visibleMembers = members.filter((track) => track.enabled && !(group.signalStackHiddenTrackIds ?? []).includes(track.id))
     const first = visibleMembers[0]
     if (!first) return 0
-    const differentiation = group.signalStackDifferentiation ?? 'shades-patterns'
-    const firstColor = signalStackColor(first.color, 0, visibleMembers.length, differentiation)
+    const differentiation = group.signalStackDifferentiation ?? 'patterns'
+    const legendEntries = signalStackLegendEntries(members, visibleMembers, differentiation, group.signalStackHiddenTrackIds ?? [], group.signalStackStyleTrackIds)
+    const styles = new Map(legendEntries.map((entry) => [entry.id, entry]))
+    const firstStyle = styles.get(first.id)!
     const firstSpec: TrackSpec = {
       ...first,
       label: '',
-      color: firstColor,
+      color: firstStyle.color,
       signalRenderStyle: 'line',
       signalOpacity: 0,
     }
     const domain = first.scaleBindingId ? domains.get(first.scaleBindingId) : undefined
     const segments = first.scaleBindingId && segmentDomains ? segmentDomains.map((segment) => ({ start: segment.start, end: segment.end, domain: segment.domains.get(first.scaleBindingId!) })) : undefined
     let count = this.drawTrack(firstSpec, this.runtimes.get(signalFeatureKey(first.id, first.signalStrand))!, index, top, height, width, palette, domain, segments)
-    this.drawSignalStackMember(first, firstColor, signalStackDash(0, differentiation), top, height, width, domain, segments)
+    this.drawSignalStackMember(first, firstStyle.color, firstStyle.dash, top, height, width, domain, segments)
     for (let memberIndex = 1; memberIndex < visibleMembers.length; memberIndex += 1) {
       const member = visibleMembers[memberIndex]!
       const memberDomain = member.scaleBindingId ? domains.get(member.scaleBindingId) : domain
       const memberSegments = member.scaleBindingId && segmentDomains ? segmentDomains.map((segment) => ({ start: segment.start, end: segment.end, domain: segment.domains.get(member.scaleBindingId!) })) : segments
-      const color = signalStackColor(member.color, memberIndex, visibleMembers.length, differentiation)
-      count += this.drawSignalStackMember(member, color, signalStackDash(memberIndex, differentiation), top, height, width, memberDomain, memberSegments)
+      const style = styles.get(member.id)!
+      count += this.drawSignalStackMember(member, style.color, style.dash, top, height, width, memberDomain, memberSegments)
     }
-    this.drawSignalStackLegend(group, members, visibleMembers, top, height, palette)
+    this.drawSignalStackLegend(legendEntries, top, height, palette)
     return count
   }
 
-  private drawSignalStackLegend(group: DisplayGroup, members: readonly TrackSpec[], visibleMembers: readonly TrackSpec[], top: number, height: number, palette: CanvasPalette): void {
+  private drawSignalStackLegend(entries: ReturnType<typeof signalStackLegendEntries>, top: number, height: number, palette: CanvasPalette): void {
     const ctx = this.context
-    const differentiation = group.signalStackDifferentiation ?? 'patterns'
-    const entries = signalStackLegendEntries(members, visibleMembers, differentiation, group.signalStackHiddenTrackIds ?? [])
-    const lineHeight = Math.max(7, Math.min(14, (height - 10) / Math.max(1, members.length)))
+    const lineHeight = Math.max(7, Math.min(14, (height - 10) / Math.max(1, entries.length)))
     let fontSize = Math.max(5, Math.min(10, lineHeight - 3))
     const sampleLeft = GROUP_RAIL_WIDTH + 6
     const sampleRight = sampleLeft + 16
     const labelLeft = sampleRight + 4
     const labelWidth = Math.max(18, LABEL_WIDTH - SCALE_LANE_MIN_WIDTH - labelLeft - 3)
-    const startY = top + (height - lineHeight * members.length) / 2 + lineHeight / 2
+    const startY = top + (height - lineHeight * entries.length) / 2 + lineHeight / 2
     ctx.save()
     ctx.beginPath(); ctx.rect(GROUP_RAIL_WIDTH, top, LABEL_WIDTH - GROUP_RAIL_WIDTH, height); ctx.clip()
     ctx.font = `500 ${fontSize}px Inter, system-ui, sans-serif`
@@ -4465,15 +4465,18 @@ export function signalStackLegendEntries(
   visibleMembers: readonly Pick<TrackSpec, 'id'>[],
   differentiation: SignalStackDifferentiation,
   hiddenIds: readonly string[],
+  styleTrackIds: readonly string[] = members.map((member) => member.id),
 ): Array<{ id: string; label: string; color: string; dash: number[]; hidden: boolean }> {
   const hiddenIdsSet = new Set(hiddenIds)
+  const styleIds = [...new Set([...styleTrackIds, ...members.map((member) => member.id)])]
   return members.map((member) => {
     const visibleIndex = visibleMembers.findIndex((track) => track.id === member.id)
     const hidden = !member.enabled || hiddenIdsSet.has(member.id) || visibleIndex < 0
+    const styleIndex = styleIds.indexOf(member.id)
     return {
       id: member.id, label: member.label,
-      color: hidden ? member.color : signalStackColor(member.color, visibleIndex, visibleMembers.length, differentiation),
-      dash: hidden ? [2, 3] : signalStackDash(visibleIndex, differentiation),
+      color: signalStackColor(member.color, styleIndex, styleIds.length, differentiation),
+      dash: signalStackDash(styleIndex, differentiation),
       hidden,
     }
   })

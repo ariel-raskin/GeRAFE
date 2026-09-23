@@ -12,9 +12,10 @@ The Git history beginning with the import pull request is authoritative and repr
 
 - Added reversible collapsed presentation for ordinary signal-only groups, including automatic shared y-axis scales.
 - Added stack-wide color/pattern differentiation, a synchronized compact legend, smooth equal-opacity curves, and stack-only member visibility and ordering.
-- Migrated workspaces to schema version 31; v30 fill stacks become equal-weight patterned lines, while incompatible or incomplete stack state is expanded safely during normalization.
+- Migrated workspaces to schema version 32; v30 fill stacks become equal-weight patterned lines and v31 stacks gain stable per-member style assignments, while incompatible or incomplete stack state is expanded safely during normalization.
 - Fixed plain group clicks so they replace unrelated selections, removed the redundant selected-group dot, and kept saved-region/matrix annotation geometry fixed in genomic coordinates while the viewport pans.
 - Corrected cis-matrix outline clipping so upper edges remain visible and editable after an anchor interval pans beyond the base axis.
+- Kept each signal stack member's color and line pattern when changing draw order or hiding other members.
 
 ## September 13, 2026 — feasibility and first browser
 
