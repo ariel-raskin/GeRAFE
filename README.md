@@ -267,7 +267,7 @@ Useful commands:
 | `npm run desktop:check-setup` | Check Windows desktop build prerequisites without installing |
 | `npm run desktop:install-local` | Build and install the Windows app at its stable local path and create its Start Menu shortcut |
 | `npm run version:check` | Verify package, Tauri, Cargo, and lockfile versions match |
-| `npm run version:set -- 0.1.3` | Set all application version fields together |
+| `npm run version:set -- 0.2.0` | Set all application version fields together |
 | `npm test` | Run the Vitest unit suite |
 | `npm run build` | Type-check and build the production frontend |
 | `npm run smoke` | Start an isolated temporary development server, run the general browser smoke test, then stop it |

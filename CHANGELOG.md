@@ -1,5 +1,54 @@
 # GeRAFE release notes
 
+## 0.2.0 beta — 2026-09-23
+
+This release expands the Genome Renderer substantially beyond the v0.1.3
+contact-matrix beta. It is the GeR milestone before work begins on the
+Figure Editor; figure composition and high-resolution figure export are
+**planned, not included** in this release.
+
+### Genomic tracks and analysis
+
+- Added BAM inspection, read sorting/grouping, read-detail and mate navigation,
+  filtering, mismatch controls, downsampling feedback, and a minimum
+  coverage alternate-allele-frequency threshold.
+- Added signal drawing and scale controls, including linked and fixed domains,
+  and reversible signal-track stacks with shared scaling, member legends,
+  per-track colors/patterns, visibility, and order.
+- Added gene, BED, and BEDPE presentation and filtering controls.
+- Expanded contact maps with observed/expected and log2 O/E views, native
+  matrix difference/ratio comparisons, independent vertical-locus navigation
+  for rectangular and trans views, and bounded tiled rendering for dense maps.
+- Added BEDPE-on-matrix contact outlines and focus filtering, plus manually
+  drawn matrix outlines that can be shared across compatible tracks.
+
+### Browser and workspace workflow
+
+- Added saved, editable region highlights and comparison dividers with
+  configurable colors, line styles, fill, snap-to-bin selection, and
+  independent signal scaling across divider sections.
+- Added explicit workspace Save As, flexible pasted genomic-coordinate input,
+  improved track fitting, and more compact browser layout and help controls.
+- Added an in-app Windows track picker with folder shortcuts, cloud
+  availability and in-workspace badges. Cloud-backed tracks reserve their
+  normal row and show loading state while files are prepared; saved sources
+  restore independently.
+- Added IGV Desktop XML session import with a preview of supported formats,
+  installed references, available paths and BAM indexes, individual relinking,
+  and a clear report of unsupported or IGV-only items.
+
+### Current limitations
+
+- The Figure Editor is not yet implemented. See
+  [the Figure Editor plan](docs/FIGURE_EDITOR_PLAN.md).
+- Cloud-provider network download percentages are not available to GeRAFE;
+  online-only files may show an indeterminate wait until the provider supplies
+  the data.
+- IGV import is desktop-only and does not recreate remote resources or
+  IGV-specific panel and subtrack presentation.
+- The installer is Windows x64 only and is signed for GeRAFE's updater but
+  is not Windows Authenticode-signed; SmartScreen may warn on installation.
+
 ## 0.1.3 beta — 2026-09-17
 
 This is the contact-matrix update. It adds local `.hic`, `.cool`, and `.mcool`
