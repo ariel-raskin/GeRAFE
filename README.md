@@ -223,6 +223,12 @@ In the desktop app, **File → Save workspace** writes back to the opened worksp
 
 GeRAFE also opens legacy `.locus.json` workspaces. Workspace files contain layout, settings, paths, and provenance—not copies of genomic data. A workspace moved to another computer therefore requires access to, or relinking of, its source files.
 
+### IGV session import
+
+In the Windows desktop app, choose **File → Import IGV session…** and select an IGV Desktop XML session. GeRAFE previews every file resource before changing the workspace. The preview checks the installed reference, supported file format, local path, and BAM index; missing sources can be relinked individually. Use **Refresh checks** after making a file available. To add a reference, close the preview, add it from the reference picker, and reopen the session. A session's reference is selected automatically when installed; choosing another reference is an explicit coordinate-compatibility override. The preview uses GeRAFE's current reference catalog and file-opening capabilities, so newly supported references and formats become eligible in later releases.
+
+Importing replaces the current workspace with the ready tracks and compatible saved regions. It restores the IGV locus when valid, plus matched track order, labels, colors, visibility, heights, supported display modes, signal rendering/fixed ranges, and signal autoscale groups. Unsupported formats, remote URLs, absent paths/indexes, and IGV-only settings are listed in the preview and skipped rather than silently opened. IGV's coverage/splice-junction subtracks, panel arrangement, and other IGV-specific presentation are not reproduced. A missing assembly cannot be imported until a reference is added or another is explicitly selected. After import, use **Save workspace as…** to keep an editable GeRAFE workspace; the IGV XML is never changed. This is a desktop-only import because browser sessions cannot inspect the local paths recorded in IGV XML.
+
 ## Current limitations
 
 - The desktop application and release installer are currently built and tested on Windows x64 only.

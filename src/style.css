@@ -630,6 +630,25 @@ html[data-theme='dark'] .track-file-picker-availability.is-online-only { color: 
 .dialog-button.primary { border: 1px solid var(--accent); color: white; background: var(--accent); }
 .dialog-button:disabled { opacity: .5; cursor: default; }
 
+.igv-import-dialog { width: min(900px, calc(100vw - 32px)); max-height: min(82vh, 900px); padding: 0; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 20px 70px #0008; }
+.igv-import-dialog::backdrop { background: #0009; }
+.igv-import-head, .igv-import-controls, .igv-import-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.igv-import-head strong { font-size: 15px; }
+.igv-import-head p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+.igv-import-controls label { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.igv-import-controls select { min-width: 180px; max-width: 300px; padding: 5px; color: var(--ink); background: var(--button-muted); border: 1px solid var(--line); border-radius: 4px; }
+.igv-import-summary { padding: 10px 16px; color: var(--muted); font-size: 11px; }
+.igv-import-list { max-height: min(48vh, 530px); overflow: auto; border-block: 1px solid var(--line); }
+.igv-import-row { display: flex; align-items: center; gap: 7px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.igv-import-row > div { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.igv-import-row strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; }
+.igv-import-row span, .igv-import-row small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 10px; }
+.igv-import-row[data-status='ready'] small { color: #4caf81; }
+.igv-import-row[data-status='missing'] small, .igv-import-row[data-status='missing-index'] small, .igv-import-row[data-status='unsupported'] small { color: #d69a56; }
+.igv-import-notes { max-height: 130px; overflow: auto; padding: 10px 16px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.igv-import-notes p { margin: 0 0 5px; }
+.igv-import-dialog footer { justify-content: flex-end; border-top: 1px solid var(--line); border-bottom: 0; }
+
 .update-dialog {
   position: fixed;
   z-index: 95;
