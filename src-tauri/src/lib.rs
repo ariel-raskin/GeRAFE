@@ -228,6 +228,14 @@ fn read_file_for_hydration(
         bytes_read,
         total_bytes,
     });
+    #[cfg(windows)]
+    if hydrate_cloud_placeholder(&file, path)? {
+        progress(FileHydrationProgress {
+            bytes_read: total_bytes,
+            total_bytes,
+        });
+        return Ok(());
+    }
     loop {
         let count = file
             .read(&mut buffer)
@@ -247,6 +255,38 @@ fn read_file_for_hydration(
         ));
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn hydrate_cloud_placeholder(file: &File, path: &str) -> Result<bool, String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::CloudFilters::{
+        CfGetPlaceholderInfo, CfHydratePlaceholder, CF_HYDRATE_FLAG_NONE,
+        CF_PLACEHOLDER_INFO_STANDARD,
+    };
+    let handle = file.as_raw_handle();
+    let mut info = [0u64; 512];
+    let placeholder = unsafe {
+        CfGetPlaceholderInfo(
+            handle,
+            CF_PLACEHOLDER_INFO_STANDARD,
+            info.as_mut_ptr().cast(),
+            std::mem::size_of_val(&info) as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    if placeholder != 0 {
+        return Ok(false);
+    }
+    // CF_EOF (-1) asks the provider to make the entire file available locally.
+    let status =
+        unsafe { CfHydratePlaceholder(handle, 0, -1, CF_HYDRATE_FLAG_NONE, std::ptr::null_mut()) };
+    if status != 0 {
+        return Err(format!(
+            "Cloud provider could not download {path} (Windows error 0x{status:08X}). Check the provider's sync status and Windows Automatic file downloads permission."
+        ));
+    }
+    Ok(true)
 }
 
 #[tauri::command]
@@ -668,6 +708,11 @@ mod tests {
             std::env::temp_dir().join(format!("gerafe-hydration-{}-{unique}", std::process::id()));
         fs::write(&path, vec![7u8; 2 * 1024 * 1024 + 17]).unwrap();
         assert_eq!(cloud_local_bytes_at(&path), None);
+        #[cfg(windows)]
+        assert!(
+            !hydrate_cloud_placeholder(&File::open(&path).unwrap(), path.to_str().unwrap())
+                .unwrap()
+        );
         assert!(
             !stat_file(path.to_str().unwrap().to_string())
                 .unwrap()

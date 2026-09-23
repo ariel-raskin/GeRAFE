@@ -51,6 +51,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { cloudLocalBytes, describeNativeFile, hydrateNativeFile, isDesktopApp, NativeFileHandle, prepareBedGraphCache, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
 import { cloudProgressPercent } from './cloud-file-progress.ts'
 import { pickNativeTrackPaths } from './desktop-track-picker.ts'
+import { startIndependentSourceRestores } from './independent-source-restores.ts'
 import { LAST_TRACK_FOLDER_KEY, parentFolderOfFile } from './track-picker-state.ts'
 import type { LocalFileDescriptor } from './native-file.ts'
 import { SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
@@ -652,6 +653,7 @@ updateZoomLevel(initialRegion)
 window.setTimeout(showFirstRunInteractionHint, 450)
 
 let persistTimer: number | undefined
+let sourceRestoreGeneration = 0
 store.subscribe((document, reason) => {
   window.clearTimeout(persistTimer)
   persistTimer = window.setTimeout(() => localStorage.setItem(WORKSPACE_KEY, JSON.stringify(document)), 180)
@@ -740,6 +742,7 @@ document.querySelector<HTMLButtonElement>('#new-workspace-menu-item')!.addEventL
     danger: true,
   })) return
   bottomPaneAutoFit = true
+  ++sourceRestoreGeneration
   runtimeSources.clear()
   selectedTrackIds.clear()
   store.replace(createTrackDocument(activeReference.id, browser.getRegion(), { geneShowTssIndicators: savedTssIndicators() }))
@@ -1240,9 +1243,25 @@ async function prepareCloudFile(file: LocalFileDescriptor, onProgress: (progress
   let localMeasurementAvailable = false
   let pollInFlight = false
   let active = true
+  let lastAdvanceAt = Date.now()
+  let lastMeasuredBytes = -1
+  let lastProgress: TrackOpeningProgress = { message: 'Requesting cloud file…' }
+  let stallReported = false
   const report = (progress: TrackOpeningProgress): void => {
     if (!active) return
+    lastProgress = progress
     onProgress(progress)
+  }
+  const reportBytes = (bytes: number, progress: TrackOpeningProgress): void => {
+    const advanced = bytes > lastMeasuredBytes
+    if (advanced) {
+      lastMeasuredBytes = bytes
+      lastAdvanceAt = Date.now()
+      stallReported = false
+    }
+    if (stallReported && !advanced) return
+    if (!advanced && lastProgress.message === progress.message && lastProgress.percent === progress.percent && lastProgress.basis === progress.basis) return
+    report(progress)
   }
   const pollLocalBytes = async (): Promise<void> => {
     if (pollInFlight || !file.size) return
@@ -1252,18 +1271,24 @@ async function prepareCloudFile(file: LocalFileDescriptor, onProgress: (progress
       if (bytes !== undefined) {
         localMeasurementAvailable = true
         const percent = Math.min(100, Math.max(0, Math.round(bytes / file.size * 100)))
-        report({ message: `${formatByteCount(bytes)} of ${formatByteCount(file.size)} available locally`, percent, basis: 'local' })
+        reportBytes(bytes, { message: `${formatByteCount(bytes)} of ${formatByteCount(file.size)} available locally`, percent, basis: 'local' })
       }
     } catch { /* provider does not expose Cloud Files progress; retain the read-progress fallback */ }
     finally { pollInFlight = false }
   }
   void pollLocalBytes()
-  const pollTimer = window.setInterval(() => void pollLocalBytes(), 350)
+  const pollTimer = window.setInterval(() => {
+    void pollLocalBytes()
+    if (!stallReported && Date.now() - lastAdvanceAt > 20_000) {
+      stallReported = true
+      report({ ...lastProgress, message: 'Still waiting for cloud provider — check its sync status' })
+    }
+  }, 350)
   try {
     await hydrateNativeFile(file.path, ({ bytesRead, totalBytes }) => {
       if (localMeasurementAvailable) return
       const percent = cloudProgressPercent(bytesRead, totalBytes)
-      if (percent !== undefined) report({ message: `${formatByteCount(bytesRead)} of ${formatByteCount(totalBytes)} prepared`, percent, basis: 'read' })
+      if (percent !== undefined) reportBytes(bytesRead, { message: `${formatByteCount(bytesRead)} of ${formatByteCount(totalBytes)} prepared`, percent, basis: 'read' })
     })
     report({ message: 'Opening track data…' })
   } finally { active = false; window.clearInterval(pollTimer) }
@@ -1366,22 +1391,28 @@ async function findAdjacentNativeBamIndex(bam: LocalFileDescriptor): Promise<Loc
   return undefined
 }
 
-async function restorePersistedSources(): Promise<void> {
-  let restored = 0
+function restorePersistedSources(): void {
+  const generation = ++sourceRestoreGeneration
   const usedSourceIds = new Set(store.current.tracks.flatMap((track) => track.sourceIds))
-  for (const sourceSpec of store.current.sources) {
-    if (!usedSourceIds.has(sourceSpec.id)) continue
-    if (!sourceSpec?.files.length || sourceSpec.files.some((file) => !file.path)) continue
+  const savedSources = store.current.sources.filter((sourceSpec) =>
+    usedSourceIds.has(sourceSpec.id) && sourceSpec.files.length > 0 && sourceSpec.files.every((file) => Boolean(file.path)))
+  startIndependentSourceRestores(savedSources, async (sourceSpec) => {
+    if (generation !== sourceRestoreGeneration) return
     const trackIds = store.current.tracks.filter((track) => track.sourceIds.includes(sourceSpec.id)).map((track) => track.id)
-    const report = (progress: TrackOpeningProgress): void => { for (const id of trackIds) browser.setOpeningProgress(id, progress) }
+    const report = (progress: TrackOpeningProgress): void => {
+      if (generation !== sourceRestoreGeneration) return
+      for (const id of trackIds) browser.setOpeningProgress(id, progress)
+    }
     try {
       const descriptors = await Promise.all(sourceSpec.files.map(async (saved) => {
         const current = await describeNativeFile(saved.path!)
         if (current.size !== saved.size) throw new Error(`${saved.name} has changed size since it was opened.`)
         return current
       }))
+      if (generation !== sourceRestoreGeneration) return
       if (descriptors.some((descriptor) => descriptor.needsHydration)) report({ message: 'Waiting for cloud file…' })
       for (const descriptor of descriptors) await prepareCloudFile(descriptor, report)
+      if (generation !== sourceRestoreGeneration) return
       const primary = descriptors.find((_, index) => sourceSpec.files[index].role === 'signal')!
       const source = sourceSpec.format === 'matrix-comparison'
         ? new MatrixComparisonSource(sourceSpec.name,
@@ -1392,18 +1423,23 @@ async function restorePersistedSources(): Promise<void> {
             await NativeMatrixSource.open(primary.name, primary.path, matrixFormatForName(primary.name)!),
             sourceSpec.matrixDerivedMode!, sourceSpec.matrixDerivedNormalization!, sourceSpec.matrixDerivedResolution)
         : (await sourceFromNativeFile(primary, descriptors, report)).source
+      if (generation !== sourceRestoreGeneration) return
       runtimeSources.set(sourceSpec.id, source)
-      restored += 1
+      browser.syncDocument(store.current, runtimeSources)
+      await browser.attachSource(sourceSpec.id, source)
     } catch (error) {
-      console.warn(`Could not restore ${sourceSpec.name}`, error)
+      if (generation === sourceRestoreGeneration) {
+        console.warn(`Could not restore ${sourceSpec.name}`, error)
+        showToast(`Could not reopen ${sourceSpec.name}: ${error instanceof Error ? error.message : String(error)}`, true)
+      }
     } finally {
-      for (const id of trackIds) browser.setOpeningProgress(id)
+      if (generation === sourceRestoreGeneration) for (const id of trackIds) browser.setOpeningProgress(id)
     }
-  }
-  if (!restored) return
-  browser.syncDocument(store.current, runtimeSources)
-  await Promise.all([...runtimeSources].map(([sourceId, source]) => browser.attachSource(sourceId, source)))
-  showToast(`Reopened ${restored} saved track${restored === 1 ? '' : 's'}`)
+  }, (sourceSpec, error) => {
+    if (generation !== sourceRestoreGeneration) return
+    console.warn(`Could not start restore for ${sourceSpec.name}`, error)
+    showToast(`Could not reopen ${sourceSpec.name}`, true)
+  })
 }
 
 function populateChromosomes(chromosomes: ReadonlyMap<string, number>): void {
@@ -3654,11 +3690,12 @@ async function openWorkspaceContents(contents: string, name: string, path?: stri
     if (!references.has(next.referenceId)) throw new Error(`The workspace uses unavailable reference “${next.referenceId}”.`)
     bottomPaneAutoFit = true
     selectedTrackIds.clear()
+    ++sourceRestoreGeneration
     runtimeSources.clear()
     store.replace(next)
     await switchReference(next.referenceId)
     browser.setRegion(next.region)
-    if (isDesktopApp()) await restorePersistedSources()
+    if (isDesktopApp()) restorePersistedSources()
     if (path) rememberWorkspacePath(path)
     else clearWorkspacePath()
     showToast(`Opened ${name}${isDesktopApp() ? '' : '; relink local data files to draw them.'}`)
