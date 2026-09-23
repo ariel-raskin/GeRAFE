@@ -20,6 +20,7 @@ export async function pickNativeTrackPaths(browse: (path?: string) => Promise<Na
           <button class="picker-button" type="button" data-action="up" title="Parent folder">↑ <span>Up</span></button>
           <input data-role="path" aria-label="Folder path" spellcheck="false" autocomplete="off" />
           <button class="picker-button" type="button" data-action="go">Go</button>
+          <button class="picker-button" type="button" data-action="refresh" title="Refresh file availability">↻ Refresh</button>
         </div>
       </div>
       <div class="track-file-picker-shortcuts">
@@ -127,13 +128,20 @@ export async function pickNativeTrackPaths(browse: (path?: string) => Promise<Na
       row.className = `track-file-picker-entry${entry.isDirectory ? ' is-folder' : ''}`
       row.setAttribute('role', 'option')
       row.setAttribute('aria-selected', String(!entry.isDirectory && selected.has(entry.path)))
-      row.title = entry.path
+      row.title = entry.availability ? `${entry.path}\n${entry.availability === 'online-only' ? 'Online-only: opening may download this file' : 'On this device now'}` : entry.path
       const icon = document.createElement('span')
       icon.className = 'track-file-picker-entry-icon'
       icon.textContent = entry.isDirectory ? '▸' : selected.has(entry.path) ? '✓' : '□'
       const name = document.createElement('span')
       name.textContent = entry.name
       row.append(icon, name)
+      if (!entry.isDirectory && entry.availability) {
+        const badge = document.createElement('span')
+        badge.className = `track-file-picker-availability is-${entry.availability}`
+        badge.textContent = entry.availability === 'online-only' ? '☁ Online-only' : '✓ On this device'
+        row.append(badge)
+        row.setAttribute('aria-label', `${entry.name}, ${entry.availability === 'online-only' ? 'online-only' : 'on this device'}`)
+      }
       row.addEventListener('click', () => {
         if (entry.isDirectory) { void navigate(entry.path); return }
         if (selected.has(entry.path)) selected.delete(entry.path)
@@ -212,6 +220,7 @@ export async function pickNativeTrackPaths(browse: (path?: string) => Promise<Na
   dialog.querySelector('[data-action="cancel"]')!.addEventListener('click', () => finish(null))
   dialog.querySelector('[data-action="up"]')!.addEventListener('click', () => { if (listing?.parent) void navigate(listing.parent) })
   dialog.querySelector('[data-action="go"]')!.addEventListener('click', () => void navigate(pathInput.value.trim()))
+  dialog.querySelector('[data-action="refresh"]')!.addEventListener('click', () => void navigate(listing?.path ?? pathInput.value.trim()))
   pathInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') void navigate(pathInput.value.trim()) })
   searchInput.addEventListener('input', render)
   saveFolderButton.addEventListener('click', () => {
