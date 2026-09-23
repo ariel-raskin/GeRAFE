@@ -98,6 +98,12 @@ export interface MatrixRuntimeDiagnostics {
   queryMs?: number
 }
 
+export interface TrackOpeningProgress {
+  message: string
+  percent?: number
+  basis?: 'local' | 'read'
+}
+
 interface MatrixHover extends MatrixCellInspection {
   trackId: string
   pane: 'main' | 'bottom'
@@ -122,6 +128,7 @@ export class GenomeBrowser {
   private chromosomes: ReadonlyMap<string, number>
   private document: TrackDocument
   private runtimes = new Map<string, TrackRuntime>()
+  private readonly openingProgress = new Map<string, TrackOpeningProgress>()
   private geneSource?: GeneSource
   private cytobands?: ReadonlyMap<string, readonly Cytoband[]>
   private geneAssembly = ''
@@ -352,6 +359,7 @@ export class GenomeBrowser {
   }
 
   syncDocument(document: TrackDocument, sources: ReadonlyMap<string, TrackSource>): void {
+    for (const id of this.openingProgress.keys()) if (!document.tracks.some((track) => track.id === id)) this.openingProgress.delete(id)
     for (const spec of document.tracks) {
       const previous = this.document.tracks.find((track) => track.id === spec.id)
       if (spec.kind === 'genes' && previous?.geneDisplayMode !== spec.geneDisplayMode) this.geneScrollOffsets.delete(spec.id)
@@ -406,6 +414,12 @@ export class GenomeBrowser {
     }
     this.resize()
     this.emitTracks()
+  }
+
+  setOpeningProgress(trackId: string, progress?: TrackOpeningProgress): void {
+    if (progress) this.openingProgress.set(trackId, progress)
+    else this.openingProgress.delete(trackId)
+    this.scheduleRender()
   }
 
   async attachSource(sourceId: string, source: TrackSource): Promise<void> {
@@ -1295,7 +1309,9 @@ export class GenomeBrowser {
         groupRun = undefined
       }
       const rowHeight = this.trackHeight(spec)
-      if (spec.kind === 'signal') {
+      const opening = this.openingProgress.get(spec.id)
+      if (opening) this.drawOpeningTrack(spec, opening, index, top, rowHeight, width, palette)
+      else if (spec.kind === 'signal') {
         const stack = this.signalStackForRepresentative(spec)
         if (stack) visibleFeatures += this.drawSignalStack(stack.group, stack.members, index, top, rowHeight, width, palette, domains, segmentDomains)
         else {
@@ -1629,6 +1645,39 @@ export class GenomeBrowser {
     ctx.lineWidth = 2
     ctx.strokeRect(Math.max(x, Math.min(x + width - viewportWidth, viewportX)), top - 2, viewportWidth, height + 4)
     ctx.lineWidth = 1
+  }
+
+  private drawOpeningTrack(spec: TrackSpec, progress: TrackOpeningProgress, index: number, top: number, height: number, width: number, palette: CanvasPalette): void {
+    const ctx = this.context
+    ctx.fillStyle = index % 2 === 0 ? palette.track : palette.trackAlternate
+    ctx.fillRect(LABEL_WIDTH, top, width - LABEL_WIDTH, height)
+    ctx.fillStyle = palette.gutter
+    ctx.fillRect(0, top, LABEL_WIDTH, height)
+    if (this.selectedTrackIds.has(spec.id)) {
+      ctx.fillStyle = palette.selectionFill
+      ctx.fillRect(0, top, LABEL_WIDTH, height)
+    }
+    ctx.strokeStyle = palette.line
+    ctx.beginPath()
+    ctx.moveTo(0, top + height - 0.5)
+    ctx.lineTo(width, top + height - 0.5)
+    ctx.stroke()
+    ctx.fillStyle = palette.ink
+    ctx.font = '600 12px Inter, system-ui, sans-serif'
+    const lines = wrappedLines(ctx, spec.label, trackLabelBounds().width, Math.max(1, Math.floor((height - 8) / 15)))
+    drawCenteredTextLines(ctx, lines, trackLabelBounds().center, verticallyCenteredBaseline(top, height, lines.length, 15), 15)
+    const x = PLOT_LEFT + 18
+    const barWidth = Math.max(40, Math.min(360, width - x - 18))
+    const barY = top + Math.min(24, Math.max(19, height - 9))
+    ctx.fillStyle = palette.muted
+    ctx.font = '11px Inter, system-ui, sans-serif'
+    const percentLabel = progress.percent === undefined ? '' : ` · ${Math.round(progress.percent)}%${progress.basis === 'local' ? ' local' : progress.basis === 'read' ? ' prepared' : ''}`
+    ctx.fillText(`${progress.message}${percentLabel}`, x, Math.min(top + 14, barY - 6), Math.max(40, width - x - 18))
+    ctx.fillStyle = palette.line
+    ctx.fillRect(x, barY, barWidth, 5)
+    ctx.fillStyle = palette.selection
+    if (progress.percent !== undefined) ctx.fillRect(x, barY, barWidth * Math.max(0, Math.min(100, progress.percent)) / 100, 5)
+    else ctx.fillRect(x, barY, Math.min(52, barWidth / 4), 5)
   }
 
   private drawTrack(

@@ -35,24 +35,66 @@ await page.goto(appUrl, { waitUntil: 'networkidle' })
 await page.waitForSelector('#track-status')
 await page.waitForTimeout(500)
 await page.evaluate(async () => {
+  localStorage.setItem('gerafe:last-track-folder', 'C:\\Smoke')
+  localStorage.setItem('gerafe-workspace-directory', 'D:\\Workspaces')
+  window.__pickerVisited = []
   const { pickNativeTrackPaths } = await import('/src/desktop-track-picker.ts')
-  window.__trackPickerSmoke = pickNativeTrackPaths(async (path) => path === 'C:\\Smoke\\folder'
+  window.__trackPickerSmoke = pickNativeTrackPaths(async (path) => {
+    window.__pickerVisited.push(path)
+    return path === 'C:\\Smoke\\folder'
     ? { path, parent: 'C:\\Smoke', drives: ['C:\\'], entries: [{ name: 'signal.bw', path: `${path}\\signal.bw`, isDirectory: false }] }
     : { path: 'C:\\Smoke', parent: 'C:\\', drives: ['C:\\'], entries: [
       { name: 'folder', path: 'C:\\Smoke\\folder', isDirectory: true },
       { name: 'sample.bam.bai', path: 'C:\\Smoke\\sample.bam.bai', isDirectory: false },
       { name: 'notes.txt', path: 'C:\\Smoke\\notes.txt', isDirectory: false },
-    ] })
+    ] }
+  })
 })
 await page.locator('.track-file-picker-entry.is-folder').click()
 await page.locator('.track-file-picker-entry').filter({ hasText: 'signal.bw' }).click()
 await page.locator('.track-file-picker [data-action="up"]').click()
+await page.locator('.track-file-picker [data-action="save-folder"]').click()
+const pickerSavedShortcut = await page.locator('.track-file-picker-favorites .picker-chip').filter({ hasText: 'Smoke' }).count() === 1
+await page.locator('.track-file-picker-breadcrumbs .picker-crumb').first().click()
+await page.locator('.track-file-picker-favorites .picker-chip').filter({ hasText: 'Smoke' }).click()
 const pickerHidesUnsupported = await page.locator('.track-file-picker-entry').filter({ hasText: 'notes.txt' }).count() === 0
 await page.locator('.track-file-picker-entry').filter({ hasText: 'sample.bam.bai' }).click()
 const pickerSelectionText = await page.locator('.track-file-picker-summary').textContent()
 await page.locator('.track-file-picker [data-action="open"]').click()
 const pickerPaths = await page.evaluate(() => window.__trackPickerSmoke)
 const pickerClosed = await page.locator('.track-file-picker').count() === 0
+const pickerState = await page.evaluate(() => ({ visited: window.__pickerVisited, lastTrack: localStorage.getItem('gerafe:last-track-folder'), lastWorkspace: localStorage.getItem('gerafe-workspace-directory'), saved: localStorage.getItem('gerafe:saved-track-folders') }))
+const openingTrackCanvas = await page.evaluate(async () => {
+  const { GenomeBrowser } = await import('/src/browser.ts')
+  const { createTrackDocument, addSignalTrack, removeTrack } = await import('/src/track-document.ts')
+  const host = document.createElement('div')
+  Object.assign(host.style, { width: '760px', height: '210px', position: 'fixed', left: '-1000px', top: '0' })
+  const header = document.createElement('canvas')
+  const main = document.createElement('canvas')
+  const bottom = document.createElement('canvas')
+  host.append(header, main, bottom)
+  document.body.append(host)
+  const callbacks = new Proxy({}, { get: () => () => {} })
+  const genome = new GenomeBrowser(header, main, bottom, new Map([['chr1', 100000]]), { chr: 'chr1', start: 0, end: 10000 }, callbacks)
+  const documentState = createTrackDocument('test', { chr: 'chr1', start: 0, end: 10000 })
+  addSignalTrack(documentState, { id: 'pending-source', name: 'cloud-signal.bw', format: 'bigwig', files: [{ name: 'cloud-signal.bw', size: 100, lastModified: 1, role: 'signal', path: 'C:\\Cloud\\cloud-signal.bw' }] }, { id: 'pending-track', autoPair: false })
+  genome.syncDocument(documentState, new Map())
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  genome.setOpeningProgress('pending-track', { message: 'Available locally', percent: 42, basis: 'local' })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  genome.render()
+  const ctx = main.getContext('2d')
+  const filled = [...ctx.getImageData(220, 24, 1, 1).data]
+  const empty = [...ctx.getImageData(500, 24, 1, 1).data]
+  const order = documentState.tracks.map((track) => track.id)
+  removeTrack(documentState, 'pending-track')
+  genome.syncDocument(documentState, new Map())
+  genome.render()
+  const afterRemoval = [...ctx.getImageData(220, 24, 1, 1).data]
+  genome.destroy()
+  host.remove()
+  return { filled, empty, afterRemoval, order }
+})
 const matrixInspectorSizing = await page.evaluate(() => {
   const inspector = document.createElement('div')
   inspector.className = 'matrix-inspector'
@@ -90,7 +132,8 @@ const emptyWorkspaceBrand = await page.locator('.empty-workspace-brand').evaluat
 })
 const cornerBrandCount = await page.locator('.corner-brand').count()
 const footerHeight = await page.locator('.browser-footer').evaluate((element) => element.getBoundingClientRect().height)
-if (!pickerHidesUnsupported || !pickerSelectionText?.includes('2 selected') || pickerPaths.length !== 2 || !pickerPaths.some((path) => path.endsWith('signal.bw')) || !pickerPaths.some((path) => path.endsWith('sample.bam.bai')) || !pickerClosed) throw new Error('In-app track picker smoke failed')
+if (!pickerHidesUnsupported || !pickerSavedShortcut || !pickerSelectionText?.includes('2 selected') || pickerPaths.length !== 2 || !pickerPaths.some((path) => path.endsWith('signal.bw')) || !pickerPaths.some((path) => path.endsWith('sample.bam.bai')) || !pickerClosed || pickerState.visited[0] !== 'C:\\Smoke' || !pickerState.visited.includes('C:\\') || pickerState.lastTrack !== 'C:\\Smoke' || pickerState.lastWorkspace !== 'D:\\Workspaces' || !pickerState.saved?.includes('C:\\\\Smoke')) throw new Error('In-app track picker smoke failed')
+if (openingTrackCanvas.order[0] !== 'pending-track' || openingTrackCanvas.filled.slice(0, 3).join(',') === openingTrackCanvas.empty.slice(0, 3).join(',') || openingTrackCanvas.filled.slice(0, 3).join(',') === openingTrackCanvas.afterRemoval.slice(0, 3).join(',')) throw new Error(`In-row cloud progress smoke failed: ${JSON.stringify(openingTrackCanvas)}; ${consoleErrors.join('; ')}`)
 if (!initialTrackStatus?.includes('0 tracks loaded')) throw new Error(`Unexpected initial status: ${initialTrackStatus}; ${consoleErrors.join('; ')}`)
 await page.locator('#locus-input').fill(testGene)
 await page.locator('#locus-form').press('Enter')

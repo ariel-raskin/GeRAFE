@@ -52,6 +52,11 @@ export async function hydrateNativeFile(path: string, onProgress: (progress: Nat
   await invoke('hydrate_file', { path, onProgress: channel })
 }
 
+/** Best-effort Cloud Files API measurement; unavailable for providers outside that API. */
+export async function cloudLocalBytes(path: string): Promise<number | undefined> {
+  return (await invoke<number | null>('cloud_local_bytes', { path })) ?? undefined
+}
+
 export async function listNativeDirectory(path?: string): Promise<NativeDirectoryListing> {
   return invoke<NativeDirectoryListing>('list_directory', { path })
 }

@@ -1,6 +1,5 @@
 import { listNativeDirectory, type NativeDirectoryListing } from './native-file.ts'
-
-const LAST_TRACK_FOLDER_KEY = 'gerafe:last-track-folder'
+import { folderCrumbs, folderShortcutLabel, LAST_TRACK_FOLDER_KEY, parseSavedTrackFolders, SAVED_TRACK_FOLDERS_KEY } from './track-picker-state.ts'
 
 export function isSupportedPickerFile(name: string): boolean {
   return /\.(?:bw|bigwig|bedgraph|bedgraph\.gz|tdf|bam|bai|csi|bed|bedpe|hic|cool|mcool)$/i.test(name)
@@ -14,28 +13,40 @@ export async function pickNativeTrackPaths(browse: (path?: string) => Promise<Na
   dialog.setAttribute('aria-label', 'Open genomics tracks')
   dialog.innerHTML = `
     <div class="track-file-picker-card">
-      <header><strong>Open genomics tracks</strong><button type="button" data-action="close" aria-label="Close file browser">×</button></header>
-      <div class="track-file-picker-location">
-        <button type="button" data-action="up" title="Parent folder">↑ Up</button>
-        <input data-role="path" aria-label="Folder path" spellcheck="false" autocomplete="off" />
-        <button type="button" data-action="go">Go</button>
+      <header><div><small>TRACK FILES</small><strong>Open genomics tracks</strong></div><button class="picker-icon-button" type="button" data-action="close" aria-label="Close file browser">×</button></header>
+      <div class="track-file-picker-navigation">
+        <div class="track-file-picker-breadcrumbs" data-role="breadcrumbs" aria-label="Current folder path"></div>
+        <div class="track-file-picker-location">
+          <button class="picker-button" type="button" data-action="up" title="Parent folder">↑ <span>Up</span></button>
+          <input data-role="path" aria-label="Folder path" spellcheck="false" autocomplete="off" />
+          <button class="picker-button" type="button" data-action="go">Go</button>
+        </div>
       </div>
-      <div class="track-file-picker-drives" data-role="drives" aria-label="Drives"></div>
-      <input class="track-file-picker-search" data-role="search" aria-label="Filter files and folders" placeholder="Filter this folder…" spellcheck="false" autocomplete="off" />
+      <div class="track-file-picker-shortcuts">
+        <span>Quick folders</span>
+        <div class="track-file-picker-drives" data-role="drives" aria-label="Drives"></div>
+        <div class="track-file-picker-favorites" data-role="favorites" aria-label="Saved folders"></div>
+        <button class="picker-button picker-save-folder" type="button" data-action="save-folder" title="Save this folder as a quick button">☆ Save folder</button>
+      </div>
+      <div class="track-file-picker-search-row"><input class="track-file-picker-search" data-role="search" aria-label="Filter files and folders" placeholder="Filter files and folders in this location…" spellcheck="false" autocomplete="off" /><small>Choose multiple files before opening</small></div>
       <div class="track-file-picker-list" data-role="list" role="listbox" aria-label="Files and folders" aria-multiselectable="true"></div>
       <div class="track-file-picker-summary" data-role="summary"></div>
-      <footer><button type="button" data-action="cancel">Cancel</button><button type="button" data-action="open" disabled>Open selected</button></footer>
+      <footer><button class="picker-button" type="button" data-action="cancel">Cancel</button><button class="picker-button picker-button-primary" type="button" data-action="open" disabled>Open selected</button></footer>
     </div>`
   document.body.append(dialog)
   const pathInput = dialog.querySelector<HTMLInputElement>('[data-role="path"]')!
   const searchInput = dialog.querySelector<HTMLInputElement>('[data-role="search"]')!
   const list = dialog.querySelector<HTMLElement>('[data-role="list"]')!
   const drives = dialog.querySelector<HTMLElement>('[data-role="drives"]')!
+  const favorites = dialog.querySelector<HTMLElement>('[data-role="favorites"]')!
+  const breadcrumbs = dialog.querySelector<HTMLElement>('[data-role="breadcrumbs"]')!
+  const saveFolderButton = dialog.querySelector<HTMLButtonElement>('[data-action="save-folder"]')!
   const summary = dialog.querySelector<HTMLElement>('[data-role="summary"]')!
   const openButton = dialog.querySelector<HTMLButtonElement>('[data-action="open"]')!
   const upButton = dialog.querySelector<HTMLButtonElement>('[data-action="up"]')!
   const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
   const selected = new Map<string, string>()
+  let savedFolders = parseSavedTrackFolders(localStorage.getItem(SAVED_TRACK_FOLDERS_KEY))
   let listing: NativeDirectoryListing | undefined
   let requestNumber = 0
   let closed = false
@@ -53,6 +64,57 @@ export async function pickNativeTrackPaths(browse: (path?: string) => Promise<Na
   const updateSelection = (): void => {
     openButton.disabled = selected.size === 0
     summary.textContent = selected.size ? `${selected.size} selected: ${[...selected.values()].slice(0, 3).join(', ')}${selected.size > 3 ? ', …' : ''}` : 'Select one or more files; include a BAM index if it is not beside the BAM.'
+  }
+  const renderFavorites = (): void => {
+    favorites.replaceChildren()
+    for (const path of savedFolders) {
+      const chip = document.createElement('div')
+      chip.className = 'track-file-picker-favorite'
+      const jump = document.createElement('button')
+      jump.type = 'button'
+      jump.className = 'picker-chip'
+      jump.textContent = folderShortcutLabel(path)
+      jump.title = path
+      jump.addEventListener('click', () => void navigate(path))
+      const remove = document.createElement('button')
+      remove.type = 'button'
+      remove.className = 'picker-chip-remove'
+      remove.textContent = '×'
+      remove.title = `Remove saved folder ${path}`
+      remove.setAttribute('aria-label', `Remove saved folder ${path}`)
+      remove.addEventListener('click', () => {
+        savedFolders = savedFolders.filter((saved) => saved !== path)
+        localStorage.setItem(SAVED_TRACK_FOLDERS_KEY, JSON.stringify(savedFolders))
+        renderFavorites()
+      })
+      chip.append(jump, remove)
+      favorites.append(chip)
+    }
+    const currentSaved = Boolean(listing && savedFolders.some((path) => path.toLowerCase() === listing!.path.toLowerCase()))
+    saveFolderButton.textContent = currentSaved ? '★ Saved' : '☆ Save folder'
+    saveFolderButton.disabled = !listing || currentSaved || savedFolders.length >= 16
+  }
+  const renderBreadcrumbs = (): void => {
+    breadcrumbs.replaceChildren()
+    if (!listing) return
+    const crumbs = folderCrumbs(listing.path)
+    for (const [index, crumb] of crumbs.entries()) {
+      if (index) {
+        const separator = document.createElement('span')
+        separator.className = 'track-file-picker-separator'
+        separator.textContent = '›'
+        breadcrumbs.append(separator)
+      }
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'picker-crumb'
+      button.textContent = crumb.label
+      button.title = crumb.path
+      button.disabled = index === crumbs.length - 1
+      button.addEventListener('click', () => void navigate(crumb.path))
+      breadcrumbs.append(button)
+    }
+    breadcrumbs.scrollLeft = breadcrumbs.scrollWidth
   }
   const render = (): void => {
     if (!listing) return
@@ -105,14 +167,17 @@ export async function pickNativeTrackPaths(browse: (path?: string) => Promise<Na
       pathInput.value = next.path
       upButton.disabled = !next.parent
       searchInput.value = ''
+      renderBreadcrumbs()
       drives.replaceChildren()
       for (const drive of next.drives) {
         const button = document.createElement('button')
         button.type = 'button'
+        button.className = 'picker-chip'
         button.textContent = drive
         button.addEventListener('click', () => void navigate(drive))
         drives.append(button)
       }
+      renderFavorites()
       render()
       updateSelection()
       pathInput.focus()
@@ -149,9 +214,14 @@ export async function pickNativeTrackPaths(browse: (path?: string) => Promise<Na
   dialog.querySelector('[data-action="go"]')!.addEventListener('click', () => void navigate(pathInput.value.trim()))
   pathInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') void navigate(pathInput.value.trim()) })
   searchInput.addEventListener('input', render)
+  saveFolderButton.addEventListener('click', () => {
+    if (!listing || savedFolders.some((path) => path.toLowerCase() === listing!.path.toLowerCase()) || savedFolders.length >= 16) return
+    savedFolders.push(listing.path)
+    localStorage.setItem(SAVED_TRACK_FOLDERS_KEY, JSON.stringify(savedFolders))
+    renderFavorites()
+  })
   openButton.addEventListener('click', () => {
     if (!selected.size) return
-    if (listing) localStorage.setItem(LAST_TRACK_FOLDER_KEY, listing.path)
     finish([...selected.keys()])
   })
   void navigate(localStorage.getItem(LAST_TRACK_FOLDER_KEY) || undefined, true)
