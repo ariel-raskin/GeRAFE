@@ -8,6 +8,11 @@ The chronology below was reconstructed from the local Codex session transcripts,
 
 The Git history beginning with the import pull request is authoritative and reproducible. This document is the provenance record for everything earlier.
 
+## September 23, 2026 — online-only file opening
+
+- Detect Windows offline/recall attributes before opening desktop-native tracks and saved sources. A temporary named row reports indeterminate activity or prepared-byte percentage while a cloud provider supplies the file, including BAM indexes; it disappears on completion or error.
+- Local files and browser sessions keep their existing open path. The percentage represents bytes GeRAFE has read, not a provider-reported network percentage.
+
 ## September 23, 2026 — upper track fitting
 
 - Removed the lower pane's padding spacer from the upper track scroller, so fitted tracks meet the lower pane without a scrollable blank gap; genuine track overflow remains scrollable.

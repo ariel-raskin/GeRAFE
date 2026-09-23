@@ -1,4 +1,4 @@
-import { invoke, isTauri } from '@tauri-apps/api/core'
+import { Channel, invoke, isTauri } from '@tauri-apps/api/core'
 import type { BufferEncoding, FilehandleOptions, GenericFilehandle, ReadFileOptions, ReadFileTextOptions } from 'generic-filehandle2'
 
 export interface LocalFileDescriptor {
@@ -6,11 +6,18 @@ export interface LocalFileDescriptor {
   path: string
   size: number
   lastModified: number
+  needsHydration: boolean
 }
 
 interface NativeFileStat {
   size: number
   lastModified: number
+  needsHydration: boolean
+}
+
+export interface NativeFileHydrationProgress {
+  bytesRead: number
+  totalBytes: number
 }
 
 export interface PreparedBedGraphCache extends LocalFileDescriptor {
@@ -23,7 +30,13 @@ export function isDesktopApp(): boolean {
 
 export async function describeNativeFile(path: string): Promise<LocalFileDescriptor> {
   const stat = await invoke<NativeFileStat>('stat_file', { path })
-  return { name: fileNameFromPath(path), path, size: stat.size, lastModified: stat.lastModified }
+  return { name: fileNameFromPath(path), path, size: stat.size, lastModified: stat.lastModified, needsHydration: stat.needsHydration }
+}
+
+export async function hydrateNativeFile(path: string, onProgress: (progress: NativeFileHydrationProgress) => void): Promise<void> {
+  const channel = new Channel<NativeFileHydrationProgress>()
+  channel.onmessage = onProgress
+  await invoke('hydrate_file', { path, onProgress: channel })
 }
 
 export async function readNativeTextFile(path: string): Promise<string> {
@@ -37,7 +50,7 @@ export async function writeNativeTextFile(path: string, contents: string): Promi
 export async function prepareBedGraphCache(path: string, chromosomes: ReadonlyMap<string, number>): Promise<PreparedBedGraphCache> {
   const chromosomeSizes = cacheChromosomeSizes(chromosomes)
   const cache = await invoke<Omit<PreparedBedGraphCache, 'name'>>('prepare_bedgraph_cache', { path, chromosomeSizes })
-  return { ...cache, name: fileNameFromPath(cache.path) }
+  return { ...cache, name: fileNameFromPath(cache.path), needsHydration: false }
 }
 
 function cacheChromosomeSizes(chromosomes: ReadonlyMap<string, number>): Record<string, number> {
