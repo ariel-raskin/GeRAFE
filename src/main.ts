@@ -2899,7 +2899,7 @@ function fitUpperTracks(announce = true): void {
     if (announce) showToast('There are no upper tracks to fit.')
     return
   }
-  const visibleHeight = Math.max(40, mainTrackScroll.clientHeight - bottomPane.getBoundingClientRect().height - headerCanvas.getBoundingClientRect().height)
+  const visibleHeight = Math.max(40, mainTrackScroll.clientHeight - headerCanvas.getBoundingClientRect().height)
   // BED tracks keep their compact label-fitting height. Locked tracks retain
   // their exact current height while the remaining flexible tracks share what is left.
   const lockedTracks = upperTracks.filter((track) => track.heightLocked)
@@ -3873,7 +3873,7 @@ function setBottomPaneHeight(requested: number): void {
   const bodyHeight = measuredHeight > 0 ? measuredHeight : window.innerHeight
   const height = Math.max(44, Math.min(requested, bodyHeight * 0.78))
   bottomPane.style.height = `${height}px`
-  mainTrackScroll.style.paddingBottom = `${height}px`
+  mainTrackScroll.style.bottom = `${height}px`
 }
 
 function bindColorPicker(): void {

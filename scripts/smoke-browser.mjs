@@ -971,11 +971,76 @@ const matrixTilePerformance = await page.evaluate(async () => {
   return { cells: cells.length, buildMs, directSixPansMs, tiledSixPansMs: performance.now() - started,
     tileMiB: renderer.memoryBytes / 1_048_576 }
 })
+await page.evaluate(() => {
+  const existing = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+  const chr = existing.region?.chr ?? 'contigA'
+  localStorage.setItem('gerafe-track-document', JSON.stringify({
+    schemaVersion: 32, referenceId: existing.referenceId, region: { chr, start: 10_000, end: 30_000 },
+    sources: [
+      { id: 'fit-source-a', name: 'first.bw', format: 'bigwig', files: [{ name: 'first.bw', size: 1, lastModified: 1, role: 'signal' }] },
+      { id: 'fit-source-b', name: 'second.bw', format: 'bigwig', files: [{ name: 'second.bw', size: 1, lastModified: 1, role: 'signal' }] },
+    ],
+    tracks: [
+      { id: 'fit-a', kind: 'signal', sourceIds: ['fit-source-a'], label: 'First signal', color: '#6d55e0', enabled: true, height: 40, pane: 'main' },
+      { id: 'fit-b', kind: 'signal', sourceIds: ['fit-source-b'], label: 'Second signal', color: '#d95d74', enabled: true, height: 40, pane: 'main' },
+      { id: 'reference-genes', kind: 'genes', sourceIds: [], label: 'RefSeq genes', color: '#6652c9', enabled: true, height: 32, pane: 'bottom', geneDisplayMode: 'collapsed' },
+    ],
+    groups: [], scales: [],
+  }))
+})
+await page.reload({ waitUntil: 'networkidle' })
+if (await page.locator('#fit-tracks-auto').getAttribute('aria-pressed') === 'true') await page.locator('#fit-tracks-auto').click()
+const fitGapMetrics = async (clickFit = true) => {
+  if (clickFit) await page.locator('#fit-tracks').click()
+  await page.waitForTimeout(300)
+  await page.locator('#main-track-scroll').evaluate((element) => { element.scrollTop = element.scrollHeight })
+  await page.waitForTimeout(60)
+  return page.evaluate(() => {
+    const scroll = document.querySelector('#main-track-scroll')
+    const canvas = document.querySelector('#genome-canvas')
+    const lower = document.querySelector('#bottom-pane')
+    const state = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+    const trackHeight = state.tracks.filter((track) => track.enabled && track.pane === 'main')
+      .reduce((sum, track) => sum + (track.fittedHeight ?? track.manualPixelHeight ?? Math.round(16 + track.height * 3.6)), 0)
+    return { range: scroll.scrollHeight - scroll.clientHeight, scrollTop: scroll.scrollTop,
+      gap: lower.getBoundingClientRect().top - (canvas.getBoundingClientRect().top + trackHeight),
+      paneAlignment: lower.getBoundingClientRect().top - scroll.getBoundingClientRect().bottom }
+  })
+}
+const fitGapBeforeResize = await fitGapMetrics()
+const fitResizer = await page.locator('#pane-resizer').boundingBox()
+if (!fitResizer) throw new Error('Fit regression pane resizer was not visible.')
+await page.mouse.move(fitResizer.x + fitResizer.width / 2, fitResizer.y + fitResizer.height / 2)
+await page.mouse.down()
+await page.mouse.move(fitResizer.x + fitResizer.width / 2, fitResizer.y - 90, { steps: 5 })
+await page.mouse.up()
+const fitGapAfterResize = await fitGapMetrics()
+await page.locator('#fit-tracks-auto').click()
+const autoFitResizer = await page.locator('#pane-resizer').boundingBox()
+if (!autoFitResizer) throw new Error('Auto-fit regression pane resizer was not visible.')
+await page.mouse.move(autoFitResizer.x + autoFitResizer.width / 2, autoFitResizer.y + autoFitResizer.height / 2)
+await page.mouse.down()
+await page.mouse.move(autoFitResizer.x + autoFitResizer.width / 2, autoFitResizer.y + 60, { steps: 5 })
+await page.mouse.up()
+const fitGapAfterAutoResize = await fitGapMetrics(false)
+await page.evaluate(() => {
+  const state = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+  const locked = state.tracks.find((track) => track.id === 'fit-a')
+  locked.heightLocked = true
+  locked.manualPixelHeight = 1_200
+  delete locked.fittedHeight
+  localStorage.setItem('gerafe-track-document', JSON.stringify(state))
+})
+await page.reload({ waitUntil: 'networkidle' })
+const fitLockedOverflow = await fitGapMetrics()
 await browser.close()
 
 console.log(JSON.stringify({ ...result, matrixInspectorSizing, emptyWorkspaceVisible, emptyWorkspaceText: emptyWorkspaceText?.trim(), emptyWorkspaceBrand, emptyWorkspaceHiddenAfterLoad, cornerBrandCount, footerHeight, blankCanvasFillsPane, canvasWidthsAligned, regionMenuText, regionMenuOrder, savedRegionMenuText, ctrlRegionSelectionActivated, regionHighlightChanged, regionHeaderUnchanged, actionHistoryEmptyBeforeTyping, actionAutocompleteDisabled, actionHistoryMatches, regionAppearanceControlsVisible, regionShadePreviewChanged, regionSnapStatusText, regionColorIcon, dividerColorIcon, visualRegionColorPicker, visualDividerColorPicker, regionRoundTrip, regionStateAfterReload, regionBoundaryHoverCursor, regionBoundaryMoved, dividerHoverCursor, dividerMoved, zoomBeforeWheel, zoomAfterWheel, zoomTitle, spanBeforeSlider, spanAfterSlider, chromosomeMenuVisible, chromosomeMenuOpenClass, selectedChromosomeText, autoFitBeforeToggle, autoFitAfterToggle, autoFitAfterReload, visualDataTrackCount, hasStrandedTrack, strandedRoundTrip, initialTrackContextText, initialAppearanceText, singleItemFlyoutFlattened, currentIndicatorCount, arcFlipOptionCount, geneDetailProbe, geneMenuText, initialBottomPaneHeight, initialBottomCanvasHeight, expandedBottomPaneHeight, expandedBottomCanvasHeight, searchSelectAll, settingsMenuText: settingsMenuText?.trim(), settingsMenuActiveElement, trackOptionsStayedOpenForControls, trackOptionsBackdropDismissed, tssBeforeToggle, tssAfterToggle, tssAfterReload, matrixDisplayDefaults, matrixMetadataOptionCount, matrixDisplayAfterReload, colorDialogVisible, dragGhostVisible, dragCursor, fitScrollRange, fitPaneGap, fittedTrackHeights, headerTopBeforeScroll, headerTopAfterScroll, fileMenuVisible, fileMenuText: fileMenuText?.trim(), fileMenuActiveElement, helpMenuVisible, helpMenuText: helpMenuText?.trim(), helpMenuActiveElement, interactionGuideVisible, interactionGuideText, interactionGuideSectionCount, interactionGuideKeyCount, interactionGuideBackdropDismissed, interactionGuideEscapeDismissed, interactionGuideButtonDismissed, aboutDialogVisible, aboutVersionText, browserUpdateDisabled, trackContextVisible, trackContextFocusedAction, linkedScaleText, groupMenuText, groupAppearanceText, groupContextFocusedAction, groupClickSelectionText, groupHighlightChanged, groupRightClickHighlightChanged, groupMenuAfterPaneMove, selectAllText, clickAwaySelectionText, newWorkspaceConfirmationVisible, flyoutClosesOnPlainAction, redundantGroupingHidden, crossGroupSelectionText, heightInputUsesPixels, offlineTrackStatus, offlineLeftPixel, themeBefore, themeAfterToggle, themeAfterReload, referenceMenuText, customReferenceBeforeReload, customReferenceAfterReload, signalStackMenuText, signalStackFlyoutText, signalStackLegendChanged, matrixGroupMenuText, matrixOutlineShortcutVisible, matrixOutlineDrawMode, matrixOutlineMenuText, matrixOutlineColorIcon, matrixOutlineTargetsBefore, matrixOutlineTargetRemoved, visualMatrixOutlineColorPicker, matrixOutlineVisibleAfterBasePan, matrixImaginaryBoundaryCursor, matrixSlantedBoundaryCursor, matrixSlantedBoundaryMoved, matrixCornerResizeGeometry, matrixGroupRightClickHighlightChanged, matrixGroupAppearanceText, matrixOverlaySourceText, matrixOverlayFocusText, matrixOverlayGroupLinked, matrixSettingsVisible, matrixGroupSettingsApplied, matrixSettingsReopenedAtTop, resizeRequiresHoverDelay, unselectedBottomBoundaryResize, selectedMatrixMenuText, mixedSelectionMenuText, bamMenuText, bamSubmenuText, matrixDetailsMenuVisible, matrixDetailsText, consoleErrors, screenshot: 'dist/smoke.png' }, null, 2))
 console.log('Matrix tile fidelity and synthetic 100k-cell pan benchmark:', matrixTileFidelity, matrixTilePerformance)
 console.log('Signal stack member styles after reordering:', { signalStackStylesFollowTracks, signalStackBeforeMove, signalStackAfterMove })
+console.log('Fitted upper-pane scroll geometry:', { fitGapBeforeResize, fitGapAfterResize, fitGapAfterAutoResize, fitLockedOverflow })
+if ([fitGapBeforeResize, fitGapAfterResize, fitGapAfterAutoResize].some((metrics) => metrics.range > 2 || metrics.scrollTop > 2 || Math.abs(metrics.gap) > 2 || Math.abs(metrics.paneAlignment) > 2)) process.exitCode = 1
+if (fitLockedOverflow.range < 100 || Math.abs(fitLockedOverflow.scrollTop - fitLockedOverflow.range) > 2 || Math.abs(fitLockedOverflow.gap) > 2 || Math.abs(fitLockedOverflow.paneAlignment) > 2) process.exitCode = 1
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!emptyWorkspaceVisible || !emptyWorkspaceText?.includes('Open or drop genomics files') || !emptyWorkspaceText.includes('GeRAFE') || Math.abs(emptyWorkspaceBrand.centerOffset) > 1 || emptyWorkspaceBrand.headingOffset > 30 || emptyWorkspaceBrand.headingFontSize < 18 || emptyWorkspaceBrand.imageGap > 16 || emptyWorkspaceBrand.imageHeight < 600 || emptyWorkspaceBrand.wordmarkHeight < 60 || cornerBrandCount !== 0 || footerHeight > 24 || emptyWorkspaceHiddenAfterLoad === false) process.exitCode = 1
 if (!blankCanvasFillsPane || !canvasWidthsAligned || !regionMenuOrder || !regionMenuText?.includes('Add region') || !regionMenuText.includes('Add comparison divider') || !regionMenuText.includes('Add current view as region') || !savedRegionMenuText?.includes('Smoke region') || !ctrlRegionSelectionActivated || !regionHighlightChanged || !regionHeaderUnchanged || !actionHistoryEmptyBeforeTyping || !actionAutocompleteDisabled || !actionHistoryMatches.includes('Smoke region') || !regionAppearanceControlsVisible || !regionShadePreviewChanged || !regionSnapStatusText?.startsWith('On') || regionColorIcon !== 'rgb(17, 136, 204)' || dividerColorIcon !== 'rgb(34, 170, 68)' || !visualRegionColorPicker || !visualDividerColorPicker || !regionRoundTrip || !regionBoundaryHoverCursor.includes('ew-resize') || !regionBoundaryMoved || !dividerHoverCursor.includes('ew-resize') || !dividerMoved || regionStateAfterReload.snap !== true || regionStateAfterReload.saved?.highlighted !== true || regionStateAfterReload.saved?.color !== '#1188cc' || regionStateAfterReload.saved?.boundaryStyle !== 'solid' || regionStateAfterReload.saved?.fill !== true || regionStateAfterReload.saved?.shadeOpacity !== 0.25 || regionStateAfterReload.dividers?.length !== 2 || regionStateAfterReload.dividers[0]?.color !== '#22aa44' || regionStateAfterReload.dividers[0]?.lineStyle !== 'solid' || !regionStateAfterReload.dividers.every((divider) => Number.isFinite(divider.position) && /^#[0-9a-f]{6}$/i.test(divider.color))) process.exitCode = 1
