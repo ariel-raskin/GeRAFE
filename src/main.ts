@@ -50,8 +50,9 @@ import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialo
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { describeNativeFile, hydrateNativeFile, isDesktopApp, NativeFileHandle, prepareBedGraphCache, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
 import { cloudProgressPercent } from './cloud-file-progress.ts'
+import { pickNativeTrackPaths } from './desktop-track-picker.ts'
 import type { LocalFileDescriptor } from './native-file.ts'
-import { SUPPORTED_TRACK_DIALOG_EXTENSIONS, SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
+import { SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
 import { migrateLegacyStorage, STORAGE_KEYS } from './storage.ts'
 import { workspaceDirectory, workspaceFileName, workspaceSaveDefaultPath } from './workspace-save.ts'
 import { AppUpdateController, createTauriUpdateBackend, updateProgressPercent } from './app-update.ts'
@@ -1148,12 +1149,7 @@ async function openTrackPicker(): Promise<void> {
     return
   }
   try {
-    const picked = await openDialog({
-      title: 'Open genomics tracks',
-      multiple: true,
-      filters: [{ name: 'Genomics tracks', extensions: [...SUPPORTED_TRACK_DIALOG_EXTENSIONS] }],
-    })
-    const paths = Array.isArray(picked) ? picked : picked ? [picked] : []
+    const paths = await pickNativeTrackPaths() ?? []
     if (paths.length) await loadNativePaths(paths)
     else pendingOpenGroupId = undefined
   } catch (error) {
@@ -3486,12 +3482,7 @@ async function relinkTrackNative(id: string): Promise<void> {
   pendingRelinkTrackId = undefined
   pendingRelinkChannel = undefined
   try {
-    const picked = await openDialog({
-      title: 'Relink track source',
-      multiple: true,
-      filters: [{ name: 'Genomics tracks', extensions: [...SUPPORTED_TRACK_DIALOG_EXTENSIONS] }],
-    })
-    const paths = Array.isArray(picked) ? picked : picked ? [picked] : []
+    const paths = await pickNativeTrackPaths() ?? []
     if (!paths.length) return
     const selected = await Promise.all(paths.map(describeNativeFile))
     const primary = selected.find((file) => !/\.(bai|csi)$/i.test(file.name))
