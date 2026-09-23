@@ -9,9 +9,9 @@ describe('derived matrix source', () => {
   it('reuses chromosome results and invalidates when the original file changes', async () => {
     const describe = vi.mocked(describeNativeFile)
     describe.mockReset()
-    describe.mockResolvedValueOnce({ path: 'matrix.cool', name: 'matrix.cool', size: 500, lastModified: 1 })
-      .mockResolvedValueOnce({ path: 'matrix.cool', name: 'matrix.cool', size: 500, lastModified: 1 })
-      .mockResolvedValueOnce({ path: 'matrix.cool', name: 'matrix.cool', size: 501, lastModified: 2 })
+    describe.mockResolvedValueOnce({ path: 'matrix.cool', name: 'matrix.cool', size: 500, lastModified: 1, needsHydration: false })
+      .mockResolvedValueOnce({ path: 'matrix.cool', name: 'matrix.cool', size: 500, lastModified: 1, needsHydration: false })
+      .mockResolvedValueOnce({ path: 'matrix.cool', name: 'matrix.cool', size: 501, lastModified: 2, needsHydration: false })
     const matrix: MatrixFeature = {
       featureType: 'matrix', start: 0, end: 60, resolution: 10, valueMode: 'observed-expected',
       cells: [{ bin1: 0, bin2: 20, value: 4 }, { bin1: 10, bin2: 30, value: 2 }],

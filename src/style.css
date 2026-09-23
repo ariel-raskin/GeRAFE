@@ -391,6 +391,12 @@ button, label { -webkit-tap-highlight-color: transparent; }
 .empty-workspace-brand img { width: 100%; height: clamp(160px, 62vh, min(630px, calc(100vh - 330px))); object-fit: contain; filter: drop-shadow(0 7px 13px rgba(39, 31, 12, .22)); }
 .empty-workspace-brand strong { margin-top: 6px; padding-left: .16em; font-family: Bahnschrift, 'Segoe UI Variable Display', 'Segoe UI', sans-serif; font-size: clamp(32px, 4.5vw, 60px); font-stretch: condensed; font-weight: 650; line-height: 1.05; letter-spacing: .16em; }
 html[data-theme='dark'] .empty-workspace-brand img { filter: drop-shadow(0 3px 6px rgba(0, 0, 0, .45)); }
+.cloud-file-downloads { position: absolute; z-index: 9; top: 70px; right: 0; left: 0; display: grid; gap: 2px; max-height: calc(100% - 114px); overflow-y: auto; pointer-events: none; }
+.cloud-file-downloads[hidden] { display: none; }
+.cloud-file-download-track { box-sizing: border-box; display: grid; grid-template-columns: minmax(150px, 25%) minmax(0, 1fr) 120px; align-items: center; gap: 12px; min-height: 46px; padding: 7px 14px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--canvas-bg) 93%, var(--accent)); color: var(--ink); box-shadow: 0 3px 10px rgba(0, 0, 0, .12); font-size: 11px; }
+.cloud-file-download-track strong, .cloud-file-download-track span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cloud-file-download-track progress { width: 100%; accent-color: var(--accent); }
+@media (max-width: 650px) { .cloud-file-download-track { grid-template-columns: minmax(0, 1fr) 100px; } .cloud-file-download-track span { grid-column: 1; grid-row: 2; } .cloud-file-download-track progress { grid-column: 2; grid-row: 1 / 3; } }
 #genome-canvas, #bottom-canvas { display: block; cursor: var(--cursor-grab); touch-action: none; user-select: none; }
 #genome-header.is-dragging,
 #genome-canvas.is-dragging, #bottom-canvas.is-dragging { cursor: var(--cursor-grabbing); }

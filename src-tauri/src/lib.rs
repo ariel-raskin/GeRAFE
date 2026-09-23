@@ -6,6 +6,7 @@ use std::{
     path::Path,
     time::UNIX_EPOCH,
 };
+use tauri::ipc::Channel;
 use tauri::Manager;
 
 mod bedgraph_cache;
@@ -19,6 +20,21 @@ const APP_IDENTIFIER: &str = "org.arielraskin.gerafe";
 struct NativeFileStat {
     size: u64,
     last_modified: u64,
+    needs_hydration: bool,
+}
+
+#[cfg(windows)]
+fn needs_hydration(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    // Offline and recall-on-data-access indicate that a cloud provider has not
+    // made all file bytes available locally. Recall-on-open is only reported by
+    // directory enumeration and is not useful for this metadata call.
+    metadata.file_attributes() & (0x0000_1000 | 0x0040_0000) != 0
+}
+
+#[cfg(not(windows))]
+fn needs_hydration(_metadata: &fs::Metadata) -> bool {
+    false
 }
 
 #[tauri::command]
@@ -37,7 +53,65 @@ fn stat_file(path: String) -> Result<NativeFileStat, String> {
     Ok(NativeFileStat {
         size: metadata.len(),
         last_modified,
+        needs_hydration: needs_hydration(&metadata),
     })
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileHydrationProgress {
+    bytes_read: u64,
+    total_bytes: u64,
+}
+
+fn read_file_for_hydration(
+    path: &str,
+    mut progress: impl FnMut(FileHydrationProgress),
+) -> Result<(), String> {
+    let mut file = File::open(path).map_err(|error| format!("Could not open {path}: {error}"))?;
+    let total_bytes = file
+        .metadata()
+        .map_err(|error| format!("Could not inspect {path}: {error}"))?
+        .len();
+    let mut bytes_read = 0u64;
+    let mut buffer = vec![0; 2 * 1024 * 1024];
+    progress(FileHydrationProgress {
+        bytes_read,
+        total_bytes,
+    });
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|error| format!("Could not download {path}: {error}"))?;
+        if count == 0 {
+            break;
+        }
+        bytes_read += count as u64;
+        progress(FileHydrationProgress {
+            bytes_read,
+            total_bytes,
+        });
+    }
+    if bytes_read != total_bytes {
+        return Err(format!(
+            "{path} changed size while being downloaded; please reopen it."
+        ));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn hydrate_file(
+    path: String,
+    on_progress: Channel<FileHydrationProgress>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        read_file_for_hydration(&path, |progress| {
+            let _ = on_progress.send(progress);
+        })
+    })
+    .await
+    .map_err(|error| format!("Could not finish cloud download: {error}"))?
 }
 
 #[tauri::command]
@@ -356,6 +430,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             stat_file,
+            hydrate_file,
             read_file_range,
             read_text_file,
             write_text_file,
@@ -429,5 +504,34 @@ mod tests {
         assert_eq!(cursor_dimension(extracted[6]), 32);
         assert_eq!(cursor_dimension(extracted[7]), 32);
         assert_eq!(&extracted[22..], &image);
+    }
+
+    #[test]
+    fn hydration_reports_monotonic_bytes_and_rejects_missing_files() {
+        use std::time::SystemTime;
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("gerafe-hydration-{}-{unique}", std::process::id()));
+        fs::write(&path, vec![7u8; 2 * 1024 * 1024 + 17]).unwrap();
+        assert!(
+            !stat_file(path.to_str().unwrap().to_string())
+                .unwrap()
+                .needs_hydration
+        );
+        let mut updates = Vec::new();
+        read_file_for_hydration(path.to_str().unwrap(), |progress| updates.push(progress)).unwrap();
+        assert_eq!(updates.first().unwrap().bytes_read, 0);
+        assert_eq!(updates.last().unwrap().bytes_read, 2 * 1024 * 1024 + 17);
+        assert!(updates
+            .windows(2)
+            .all(|pair| pair[0].bytes_read < pair[1].bytes_read));
+        assert!(updates
+            .iter()
+            .all(|progress| progress.total_bytes == 2 * 1024 * 1024 + 17));
+        fs::remove_file(&path).unwrap();
+        assert!(read_file_for_hydration(path.to_str().unwrap(), |_| {}).is_err());
     }
 }

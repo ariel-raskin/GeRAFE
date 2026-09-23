@@ -147,6 +147,7 @@ GeRAFE** to see the installed version.
 ### Open and navigate
 
 - Open files with **File → Open tracks…**, `Ctrl+O`, or drag and drop.
+- In the Windows desktop app, opening an online-only cloud file shows a temporary row with its name while GeRAFE makes its bytes available. A percentage appears as bytes are read; the row disappears when the track opens, or an error explains a failed download. BAM indexes are prepared too.
 - Search for a gene such as `RUNX1`, or enter a locus such as `chr8:127,700,001-127,900,000`.
 - Drag horizontally over the track data to pan.
 - Drag horizontally through blank track-area space as well as loaded tracks; the canvas fills the available pane even when its track stack is short.
@@ -235,6 +236,7 @@ GeRAFE also opens legacy `.locus.json` workspaces. Workspace files contain layou
 - Individual BAM reads are drawn below a 150 kb visible span; BAM requests are limited to 2 Mb to avoid unbounded pileups.
 - Mismatches can be read from BAM MD tags. Reconstructing mismatches for BAMs without MD tags is unavailable because reference-sequence bases are not currently loaded.
 - Browser-only development sessions cannot retain JavaScript `File` objects across a page reload; native desktop sessions can retain file paths.
+- Cloud-file progress depends on the Windows offline/recall file attributes. Some sync providers block while fetching the entire file on the first read, so the row can remain indeterminate until that read completes; the displayed percentage measures file bytes prepared, not the provider's network transfer. Large online-only genomics files may require substantial local storage and time. Browser sessions do not expose these native file attributes.
 - Ordinary signal tracks can be collapsed into shared-scale stacks. Stranded signal pairs currently use the shared-baseline diverging presentation with independent positive and negative magnitude scales; alternate stacked or fully separate presentations for those paired channels are not yet available.
 
 ## Development

@@ -48,7 +48,8 @@ import type { MatrixOutline, MatrixPalette, SignalScaleChannel, SourceFormat, Tr
 import type { Region, TrackSource, TrackRuntime } from './types.ts'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { describeNativeFile, isDesktopApp, NativeFileHandle, prepareBedGraphCache, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
+import { describeNativeFile, hydrateNativeFile, isDesktopApp, NativeFileHandle, prepareBedGraphCache, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
+import { cloudProgressPercent } from './cloud-file-progress.ts'
 import type { LocalFileDescriptor } from './native-file.ts'
 import { SUPPORTED_TRACK_DIALOG_EXTENSIONS, SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
 import { migrateLegacyStorage, STORAGE_KEYS } from './storage.ts'
@@ -222,6 +223,7 @@ app.innerHTML = `
         </div>
         <div class="drop-overlay"><strong>Drop genomics files to open</strong><span>${SUPPORTED_TRACK_EXTENSION_LABEL}</span></div>
       </div>
+      <div class="cloud-file-downloads" id="cloud-file-downloads" aria-live="polite" hidden></div>
       <section class="bottom-pane" id="bottom-pane" aria-label="Secondary track list">
         <div class="pane-resizer" id="pane-resizer" title="Drag to resize the lower track list"></div>
         <div class="bottom-track-scroll track-scroll" id="bottom-track-scroll">
@@ -1161,7 +1163,9 @@ async function openTrackPicker(): Promise<void> {
 }
 
 async function loadNativePaths(paths: readonly string[]): Promise<void> {
-  const selected = await Promise.all(paths.map(describeNativeFile))
+  const descriptions = await Promise.allSettled(paths.map(describeNativeFile))
+  const selected = descriptions.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])
+  for (const result of descriptions) if (result.status === 'rejected') showToast(result.reason instanceof Error ? result.reason.message : String(result.reason), true)
   const destinationGroupId = pendingOpenGroupId
   pendingOpenGroupId = undefined
   for (const file of selected) {
@@ -1186,7 +1190,50 @@ async function loadNativePaths(paths: readonly string[]): Promise<void> {
   }
 }
 
+const cloudOpeningRows = new Map<string, HTMLElement>()
+
+function clearCloudOpening(path: string): void {
+  cloudOpeningRows.get(path)?.remove()
+  cloudOpeningRows.delete(path)
+  document.querySelector<HTMLElement>('#cloud-file-downloads')!.hidden = cloudOpeningRows.size === 0
+}
+
+async function prepareCloudFile(file: LocalFileDescriptor): Promise<void> {
+  if (!file.needsHydration || !(await describeNativeFile(file.path)).needsHydration) return
+  const container = document.querySelector<HTMLElement>('#cloud-file-downloads')!
+  const row = document.createElement('div')
+  row.className = 'cloud-file-download-track'
+  row.setAttribute('role', 'status')
+  const name = document.createElement('strong')
+  name.textContent = file.name
+  const detail = document.createElement('span')
+  detail.textContent = 'Downloading cloud file… waiting for provider'
+  const meter = document.createElement('progress')
+  meter.max = 100
+  row.append(name, detail, meter)
+  container.append(row)
+  container.hidden = false
+  cloudOpeningRows.set(file.path, row)
+  await hydrateNativeFile(file.path, ({ bytesRead, totalBytes }) => {
+    const percent = cloudProgressPercent(bytesRead, totalBytes)
+    if (percent !== undefined) {
+      meter.value = percent
+      detail.textContent = `Preparing ${percent}% · ${formatByteCount(bytesRead)} of ${formatByteCount(totalBytes)}`
+    }
+  })
+  detail.textContent = 'Opening track…'
+}
+
 async function sourceFromNativeFile(file: LocalFileDescriptor, selected: readonly LocalFileDescriptor[]): Promise<OpenedSource> {
+  try {
+    await prepareCloudFile(file)
+    return await sourceFromPreparedNativeFile(file, selected)
+  } finally {
+    clearCloudOpening(file.path)
+  }
+}
+
+async function sourceFromPreparedNativeFile(file: LocalFileDescriptor, selected: readonly LocalFileDescriptor[]): Promise<OpenedSource> {
   const name = file.name.toLowerCase()
   const handle = new NativeFileHandle(file.path)
   const matrixFormat = matrixFormatForName(name)
@@ -1223,10 +1270,15 @@ async function sourceFromNativeFile(file: LocalFileDescriptor, selected: readonl
   if (name.endsWith('.bam')) {
     const index = findNativeBamIndex(file, selected) ?? await findAdjacentNativeBamIndex(file)
     if (!index) throw new Error(`${file.name}: no adjacent .bai/.csi was found; select the BAM and its index together.`)
-    return {
-      source: await BamAlignmentSource.fromFilehandles(file.name, handle, index.name, new NativeFileHandle(index.path)),
-      sourceSpec: makeSourceSpec(file, 'bam', index),
-      kind: 'alignment',
+    try {
+      await prepareCloudFile(index)
+      return {
+        source: await BamAlignmentSource.fromFilehandles(file.name, handle, index.name, new NativeFileHandle(index.path)),
+        sourceSpec: makeSourceSpec(file, 'bam', index),
+        kind: 'alignment',
+      }
+    } finally {
+      clearCloudOpening(index.path)
     }
   }
   throw new Error(`${file.name}: this file type is not currently supported.`)
@@ -1289,6 +1341,7 @@ async function restorePersistedSources(): Promise<void> {
         if (current.size !== saved.size) throw new Error(`${saved.name} has changed size since it was opened.`)
         return current
       }))
+      for (const descriptor of descriptors) await prepareCloudFile(descriptor)
       const primary = descriptors.find((_, index) => sourceSpec.files[index].role === 'signal')!
       const source = sourceSpec.format === 'matrix-comparison'
         ? new MatrixComparisonSource(sourceSpec.name,
@@ -1303,6 +1356,8 @@ async function restorePersistedSources(): Promise<void> {
       restored += 1
     } catch (error) {
       console.warn(`Could not restore ${sourceSpec.name}`, error)
+    } finally {
+      for (const saved of sourceSpec.files) if (saved.path) clearCloudOpening(saved.path)
     }
   }
   if (!restored) return
