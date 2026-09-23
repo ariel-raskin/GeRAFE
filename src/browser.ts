@@ -1671,13 +1671,12 @@ export class GenomeBrowser {
     const barY = top + Math.min(24, Math.max(19, height - 9))
     ctx.fillStyle = palette.muted
     ctx.font = '11px Inter, system-ui, sans-serif'
-    const percentLabel = progress.percent === undefined ? '' : ` · ${Math.round(progress.percent)}%${progress.basis === 'local' ? ' local' : progress.basis === 'read' ? ' prepared' : ''}`
+    const percentLabel = progress.percent === undefined ? ' · indeterminate' : ` · ${Math.round(progress.percent)}%${progress.basis === 'local' ? ' local' : progress.basis === 'read' ? ' prepared' : ''}`
     ctx.fillText(`${progress.message}${percentLabel}`, x, Math.min(top + 14, barY - 6), Math.max(40, width - x - 18))
     ctx.fillStyle = palette.line
     ctx.fillRect(x, barY, barWidth, 5)
     ctx.fillStyle = palette.selection
     if (progress.percent !== undefined) ctx.fillRect(x, barY, barWidth * Math.max(0, Math.min(100, progress.percent)) / 100, 5)
-    else ctx.fillRect(x, barY, Math.min(52, barWidth / 4), 5)
   }
 
   private drawTrack(

@@ -87,13 +87,17 @@ const openingTrackCanvas = await page.evaluate(async () => {
   const filled = [...ctx.getImageData(220, 24, 1, 1).data]
   const empty = [...ctx.getImageData(500, 24, 1, 1).data]
   const order = documentState.tracks.map((track) => track.id)
+  genome.setOpeningProgress('pending-track', { message: 'Still waiting for cloud provider' })
+  genome.render()
+  const indeterminateStart = [...ctx.getImageData(220, 24, 1, 1).data]
+  const indeterminateEnd = [...ctx.getImageData(500, 24, 1, 1).data]
   removeTrack(documentState, 'pending-track')
   genome.syncDocument(documentState, new Map())
   genome.render()
   const afterRemoval = [...ctx.getImageData(220, 24, 1, 1).data]
   genome.destroy()
   host.remove()
-  return { filled, empty, afterRemoval, order }
+  return { filled, empty, indeterminateStart, indeterminateEnd, afterRemoval, order }
 })
 const matrixInspectorSizing = await page.evaluate(() => {
   const inspector = document.createElement('div')
@@ -133,7 +137,7 @@ const emptyWorkspaceBrand = await page.locator('.empty-workspace-brand').evaluat
 const cornerBrandCount = await page.locator('.corner-brand').count()
 const footerHeight = await page.locator('.browser-footer').evaluate((element) => element.getBoundingClientRect().height)
 if (!pickerHidesUnsupported || !pickerSavedShortcut || !pickerSelectionText?.includes('2 selected') || pickerPaths.length !== 2 || !pickerPaths.some((path) => path.endsWith('signal.bw')) || !pickerPaths.some((path) => path.endsWith('sample.bam.bai')) || !pickerClosed || pickerState.visited[0] !== 'C:\\Smoke' || !pickerState.visited.includes('C:\\') || pickerState.lastTrack !== 'C:\\Smoke' || pickerState.lastWorkspace !== 'D:\\Workspaces' || !pickerState.saved?.includes('C:\\\\Smoke')) throw new Error('In-app track picker smoke failed')
-if (openingTrackCanvas.order[0] !== 'pending-track' || openingTrackCanvas.filled.slice(0, 3).join(',') === openingTrackCanvas.empty.slice(0, 3).join(',') || openingTrackCanvas.filled.slice(0, 3).join(',') === openingTrackCanvas.afterRemoval.slice(0, 3).join(',')) throw new Error(`In-row cloud progress smoke failed: ${JSON.stringify(openingTrackCanvas)}; ${consoleErrors.join('; ')}`)
+if (openingTrackCanvas.order[0] !== 'pending-track' || openingTrackCanvas.filled.slice(0, 3).join(',') === openingTrackCanvas.empty.slice(0, 3).join(',') || openingTrackCanvas.indeterminateStart.slice(0, 3).join(',') !== openingTrackCanvas.indeterminateEnd.slice(0, 3).join(',') || openingTrackCanvas.filled.slice(0, 3).join(',') === openingTrackCanvas.afterRemoval.slice(0, 3).join(',')) throw new Error(`In-row cloud progress smoke failed: ${JSON.stringify(openingTrackCanvas)}; ${consoleErrors.join('; ')}`)
 if (!initialTrackStatus?.includes('0 tracks loaded')) throw new Error(`Unexpected initial status: ${initialTrackStatus}; ${consoleErrors.join('; ')}`)
 await page.locator('#locus-input').fill(testGene)
 await page.locator('#locus-form').press('Enter')
