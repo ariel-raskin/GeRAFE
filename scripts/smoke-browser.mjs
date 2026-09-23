@@ -1,5 +1,5 @@
 import { chromium } from 'playwright-core'
-import { access } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 
 const appUrl = process.argv[2] ?? 'http://127.0.0.1:5173'
 const testGene = process.env.GERAFE_SMOKE_GENE ?? 'RUNX1'
@@ -33,6 +33,25 @@ page.on('pageerror', (error) => consoleErrors.push(error.message))
 
 await page.goto(appUrl, { waitUntil: 'networkidle' })
 await page.waitForSelector('#track-status')
+const igvFixture = '<Session genome="hg38" locus="chr8:127,700,001-127,800,000" version="8"><Resources><Resource path="signal.bw"/></Resources><Panel name="DataPanel"><Track id="signal.bw" name="Signal" color="12,34,56"><DataRange minimum="0" maximum="10"/></Track></Panel><Regions><Region chromosome="chr8" start="127710000" end="127720000" description="Focus"/></Regions></Session>'
+const igvSmoke = await page.evaluate(async (xml) => {
+  const { parseIgvSessionXml } = await import('/src/igv-session.ts')
+  const parsed = parseIgvSessionXml(xml)
+  let rejectedDtd = false
+  try { parseIgvSessionXml('<!DOCTYPE Session><Session genome="hg38"/>') } catch { rejectedDtd = true }
+  return { genome: parsed.genome, resource: parsed.resources[0]?.path, track: parsed.resources[0]?.track?.attributes.name, region: parsed.regions[0]?.label, rejectedDtd }
+}, igvFixture)
+if (igvSmoke.genome !== 'hg38' || igvSmoke.resource !== 'signal.bw' || igvSmoke.track !== 'Signal' || igvSmoke.region !== 'Focus' || !igvSmoke.rejectedDtd) throw new Error(`IGV parser smoke failed: ${JSON.stringify(igvSmoke)}`)
+if (process.env.GERAFE_IGV_SESSION_SMOKE_PATH) {
+  const realIgvXml = await readFile(process.env.GERAFE_IGV_SESSION_SMOKE_PATH, 'utf8')
+  const realIgv = await page.evaluate(async (xml) => {
+    const { parseIgvSessionXml } = await import('/src/igv-session.ts')
+    const parsed = parseIgvSessionXml(xml)
+    return { genome: parsed.genome, resources: parsed.resources.length }
+  }, realIgvXml)
+  if (!realIgv.genome || !realIgv.resources) throw new Error(`Real IGV session smoke failed: ${JSON.stringify(realIgv)}`)
+  console.log(`Real IGV session parsed: ${realIgv.genome}, ${realIgv.resources} resources`)
+}
 await page.waitForTimeout(500)
 await page.evaluate(async () => {
   localStorage.setItem('gerafe:last-track-folder', 'C:\\Smoke')

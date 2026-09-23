@@ -63,6 +63,9 @@ import type { AppUpdateState } from './app-update.ts'
 import { installWindowsCursorScaleCorrection } from './platform-cursors.ts'
 import { addInputHistory, matchingInputHistory, parseInputHistory } from './input-history.ts'
 import { groupSelection } from './track-selection.ts'
+import { buildIgvTrackDocument, igvPathsToCheck, parseIgvSessionXml, previewIgvSession } from './igv-session.ts'
+import type { IgvPreview, IgvSession } from './igv-session.ts'
+import { nativeFilePathKey } from './open-track-files.ts'
 
 void installWindowsCursorScaleCorrection()
 
@@ -129,6 +132,7 @@ app.innerHTML = `
             <span class="menu-separator"></span>
             <button class="menu-item" id="new-workspace-menu-item" type="button" role="menuitem"><span>New workspace</span></button>
             <button class="menu-item" id="open-workspace-menu-item" type="button" role="menuitem"><span>Open workspace…</span></button>
+            <button class="menu-item" id="import-igv-session-menu-item" type="button" role="menuitem"><span>Import IGV session…</span></button>
             <button class="menu-item" id="save-workspace-menu-item" type="button" role="menuitem"><span>Save workspace</span><kbd>Ctrl+S</kbd></button>
             <button class="menu-item" id="save-workspace-as-menu-item" type="button" role="menuitem"><span>Save workspace as…</span><kbd>Ctrl+Shift+S</kbd></button>
           </div>
@@ -753,6 +757,10 @@ document.querySelector<HTMLButtonElement>('#new-workspace-menu-item')!.addEventL
 document.querySelector<HTMLButtonElement>('#open-workspace-menu-item')!.addEventListener('click', () => {
   closeMenus()
   void openWorkspacePicker()
+})
+document.querySelector<HTMLButtonElement>('#import-igv-session-menu-item')!.addEventListener('click', () => {
+  closeMenus()
+  void openIgvSessionPicker()
 })
 document.querySelector<HTMLButtonElement>('#save-workspace-menu-item')!.addEventListener('click', () => {
   closeMenus()
@@ -3672,6 +3680,167 @@ async function openWorkspacePicker(): Promise<void> {
   } catch (error) {
     showToast(error instanceof Error ? error.message : String(error), true)
   }
+}
+
+async function openIgvSessionPicker(): Promise<void> {
+  if (!isDesktopApp()) {
+    showToast('IGV session import requires the GeRAFE desktop app so local paths can be checked.', true)
+    return
+  }
+  try {
+    const path = await openDialog({
+      title: 'Import IGV XML session',
+      multiple: false,
+      defaultPath: lastWorkspaceSaveDirectory,
+      filters: [{ name: 'IGV session', extensions: ['xml'] }],
+    })
+    if (!path) return
+    const session = parseIgvSessionXml(await readNativeTextFile(path))
+    await showIgvSessionPreview(session, path)
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error), true)
+  }
+}
+
+async function showIgvSessionPreview(session: IgvSession, sessionPath: string): Promise<void> {
+  const overrides = new Map<string, { path?: string; index?: string }>()
+  const files = new Map<string, LocalFileDescriptor | null>()
+  const modal = document.createElement('dialog')
+  modal.className = 'igv-import-dialog'
+  modal.innerHTML = `
+    <div class="igv-import-head"><div><strong>Import IGV session</strong><p>Preview what GeRAFE can restore before replacing the current workspace.</p></div><button type="button" class="dialog-button secondary" data-action="close">Close</button></div>
+    <div class="igv-import-controls"><label>Reference <select data-field="reference"></select></label><button type="button" class="dialog-button secondary" data-action="refresh">Refresh checks</button></div>
+    <div class="igv-import-summary"></div><div class="igv-import-list"></div>
+    <div class="igv-import-notes"></div>
+    <footer><button type="button" class="dialog-button secondary" data-action="cancel">Cancel</button><button type="button" class="dialog-button primary" data-action="import">Import ready items</button></footer>
+  `
+  document.body.append(modal)
+  const referenceSelect = modal.querySelector<HTMLSelectElement>('[data-field="reference"]')!
+  const summary = modal.querySelector<HTMLElement>('.igv-import-summary')!
+  const list = modal.querySelector<HTMLElement>('.igv-import-list')!
+  const notes = modal.querySelector<HTMLElement>('.igv-import-notes')!
+  const importButton = modal.querySelector<HTMLButtonElement>('[data-action="import"]')!
+  const matchingReference = [...references.keys()].find((id) => id.toLowerCase() === session.genome.toLowerCase())
+  let selectedReferenceId = matchingReference
+  let alive = true
+  let checking = false
+  let checkPending = false
+  let preview: IgvPreview
+  const capabilityForPath = (path: string) => nativeOpeningType(path)
+  const referenceMaps = () => new Map([...references].map(([id, reference]) => [id, reference.chromosomes]))
+  const render = () => {
+    preview = previewIgvSession(session, { sessionPath, references: referenceMaps(), selectedReferenceId, overrides, files, capabilityForPath })
+    referenceSelect.replaceChildren()
+    const empty = new Option('Choose a reference…', '')
+    referenceSelect.add(empty)
+    for (const reference of references.values()) referenceSelect.add(new Option(reference.name + ` (${reference.id})`, reference.id))
+    referenceSelect.value = selectedReferenceId ?? ''
+    const counts = new Map<string, number>()
+    for (const item of preview.items) counts.set(item.status, (counts.get(item.status) ?? 0) + 1)
+    summary.textContent = `IGV genome: ${session.genome} · ${counts.get('ready') ?? 0} ready · ${counts.get('checking') ?? 0} checking · ${counts.get('missing') ?? 0} missing · ${counts.get('missing-index') ?? 0} missing index · ${counts.get('unsupported') ?? 0} unsupported · ${preview.importedRegions} regions`
+    list.replaceChildren()
+    for (const item of preview.items) {
+      const row = document.createElement('div')
+      row.className = 'igv-import-row'
+      row.dataset.status = item.status
+      const info = document.createElement('div')
+      const name = document.createElement('strong')
+      name.textContent = item.resource.track?.attributes.name || item.path.split(/[\\/]/).at(-1) || item.path || '(unnamed resource)'
+      const pathLine = document.createElement('span')
+      pathLine.textContent = item.path
+      pathLine.title = item.path
+      const detail = document.createElement('small')
+      detail.textContent = `${item.status.replaceAll('-', ' ')}${item.reason ? ` · ${item.reason}` : ''}${item.ignoredSettings.length ? ` · IGV-only settings: ${item.ignoredSettings.join(', ')}` : ''}`
+      detail.title = detail.textContent
+      info.append(name, pathLine, detail)
+      const relink = document.createElement('button')
+      relink.className = 'dialog-button secondary'
+      relink.type = 'button'
+      relink.textContent = 'Relink…'
+      relink.addEventListener('click', async () => {
+        try {
+          const paths = await pickNativeTrackPaths()
+          if (!paths?.length || !alive) return
+          overrides.set(item.resource.key, { ...overrides.get(item.resource.key), path: paths[0] })
+          await checkFiles()
+        } catch (error) { showToast(error instanceof Error ? error.message : String(error), true) }
+      })
+      row.append(info, relink)
+      if (item.capability?.format === 'bam') {
+        const index = document.createElement('button')
+        index.className = 'dialog-button secondary'
+        index.type = 'button'
+        index.textContent = 'Set index…'
+        index.addEventListener('click', async () => {
+          const path = await openDialog({ title: 'Choose BAM index', multiple: false, filters: [{ name: 'BAM index', extensions: ['bai', 'csi'] }] })
+          if (!path || !alive) return
+          overrides.set(item.resource.key, { ...overrides.get(item.resource.key), index: path })
+          await checkFiles()
+        })
+        row.append(index)
+      }
+      list.append(row)
+    }
+    notes.replaceChildren()
+    for (const note of preview.notes) {
+      const paragraph = document.createElement('p')
+      paragraph.textContent = note
+      notes.append(paragraph)
+    }
+    if (!preview.notes.length) notes.textContent = 'Only the supported file tracks, shown settings, locus, and saved regions will be imported. The original IGV XML remains unchanged.'
+    importButton.disabled = checking || !preview.referenceId || (counts.get('ready') ?? 0) + preview.importedRegions === 0
+  }
+  const checkFiles = async () => {
+    if (checking) { checkPending = true; return }
+    checking = true
+    render()
+    const paths = igvPathsToCheck(session, sessionPath, overrides, capabilityForPath)
+      .filter((path) => !files.has(nativeFilePathKey(path)))
+    let cursor = 0
+    await Promise.all(Array.from({ length: Math.min(8, paths.length) }, async () => {
+      while (cursor < paths.length && alive) {
+        const path = paths[cursor++]
+        try { files.set(nativeFilePathKey(path), await describeNativeFile(path)) }
+        catch { files.set(nativeFilePathKey(path), null) }
+      }
+    }))
+    checking = false
+    if (alive) {
+      render()
+      if (checkPending) { checkPending = false; void checkFiles() }
+    }
+  }
+  const close = () => { alive = false; if (modal.open) modal.close(); modal.remove() }
+  modal.addEventListener('cancel', (event) => { event.preventDefault(); close() })
+  modal.querySelectorAll<HTMLElement>('[data-action="close"], [data-action="cancel"]').forEach((button) => button.addEventListener('click', close))
+  modal.querySelector<HTMLElement>('[data-action="refresh"]')!.addEventListener('click', () => { files.clear(); selectedReferenceId = referenceSelect.value || undefined; void checkFiles() })
+  referenceSelect.addEventListener('change', () => { selectedReferenceId = referenceSelect.value || undefined; render() })
+  importButton.addEventListener('click', async () => {
+    if (!preview.referenceId || checking) return
+    const loadedTracks = store.current.tracks.filter((track) => track.kind !== 'genes')
+    modal.close()
+    if (loadedTracks.length && !await confirmAction({
+      title: 'Replace current workspace?',
+      message: `Importing this IGV session will replace ${loadedTracks.length} loaded track${loadedTracks.length === 1 ? '' : 's'}. Save your current workspace first if needed.`,
+      submitLabel: 'Import session', danger: true,
+    })) { modal.showModal(); return }
+    const reference = references.get(preview.referenceId)!
+    const next = buildIgvTrackDocument(preview, session, reference.chromosomes, defaultRegion(reference))
+    bottomPaneAutoFit = true
+    selectedTrackIds.clear()
+    ++sourceRestoreGeneration
+    runtimeSources.clear()
+    await switchReference(reference.id)
+    store.replace(next)
+    browser.setRegion(next.region)
+    clearWorkspacePath()
+    restorePersistedSources()
+    close()
+    showToast(`Imported ${preview.items.filter((item) => item.status === 'ready').length} IGV files and ${preview.importedRegions} regions; save as a GeRAFE workspace to keep it.`)
+  })
+  modal.showModal()
+  render()
+  void checkFiles()
 }
 
 async function openWorkspace(file: File | undefined): Promise<void> {
