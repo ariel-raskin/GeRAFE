@@ -55,10 +55,18 @@ fn logical_drives() -> Vec<String> {
 }
 
 fn directory_listing(path: Option<String>) -> Result<DirectoryListing, String> {
-    let folder = path.map(std::path::PathBuf::from).or_else(|| {
-        [dirs::document_dir(), dirs::home_dir(), std::env::current_dir().ok()]
-            .into_iter().flatten().find(|candidate| candidate.is_dir())
-    })
+    let folder = path
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            [
+                dirs::document_dir(),
+                dirs::home_dir(),
+                std::env::current_dir().ok(),
+            ]
+            .into_iter()
+            .flatten()
+            .find(|candidate| candidate.is_dir())
+        })
         .ok_or_else(|| "Could not find a starting folder.".to_string())?;
     let path_string = folder.to_string_lossy().to_string();
     let mut entries = Vec::new();
