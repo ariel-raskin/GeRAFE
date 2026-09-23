@@ -1,11 +1,15 @@
 import { listNativeDirectory, type NativeDirectoryListing } from './native-file.ts'
+import { nativeFilePathKey, type OpenNativeFileRole } from './open-track-files.ts'
 import { folderCrumbs, folderShortcutLabel, LAST_TRACK_FOLDER_KEY, parseSavedTrackFolders, SAVED_TRACK_FOLDERS_KEY } from './track-picker-state.ts'
 
 export function isSupportedPickerFile(name: string): boolean {
   return /\.(?:bw|bigwig|bedgraph|bedgraph\.gz|tdf|bam|bai|csi|bed|bedpe|hic|cool|mcool)$/i.test(name)
 }
 
-export async function pickNativeTrackPaths(browse: (path?: string) => Promise<NativeDirectoryListing> = listNativeDirectory): Promise<string[] | null> {
+export async function pickNativeTrackPaths(
+  browse: (path?: string) => Promise<NativeDirectoryListing> = listNativeDirectory,
+  getOpenFiles: () => ReadonlyMap<string, OpenNativeFileRole> = () => new Map(),
+): Promise<string[] | null> {
   const dialog = document.createElement('div')
   dialog.className = 'track-file-picker'
   dialog.setAttribute('role', 'dialog')
@@ -121,26 +125,36 @@ export async function pickNativeTrackPaths(browse: (path?: string) => Promise<Na
     if (!listing) return
     const term = searchInput.value.trim().toLowerCase()
     const entries = listing.entries.filter((entry) => (entry.isDirectory || isSupportedPickerFile(entry.name)) && entry.name.toLowerCase().includes(term))
+    const openFiles = getOpenFiles()
     list.replaceChildren()
     for (const entry of entries.slice(0, 600)) {
+      const openRole = entry.isDirectory ? undefined : openFiles.get(nativeFilePathKey(entry.path))
+      const openLabel = openRole === 'index' ? 'Index in use' : openRole === 'track' ? 'In workspace' : undefined
+      const availabilityLabel = entry.availability === 'online-only' ? 'Online-only' : entry.availability === 'on-device' ? 'On this device' : undefined
       const row = document.createElement('button')
       row.type = 'button'
       row.className = `track-file-picker-entry${entry.isDirectory ? ' is-folder' : ''}`
       row.setAttribute('role', 'option')
       row.setAttribute('aria-selected', String(!entry.isDirectory && selected.has(entry.path)))
-      row.title = entry.availability ? `${entry.path}\n${entry.availability === 'online-only' ? 'Online-only: opening may download this file' : 'On this device now'}` : entry.path
+      row.title = [entry.path, openLabel, availabilityLabel === 'Online-only' ? 'Online-only: opening may download this file' : availabilityLabel].filter(Boolean).join('\n')
+      if (openLabel || availabilityLabel) row.setAttribute('aria-label', [entry.name, openLabel, availabilityLabel].filter(Boolean).join(', '))
       const icon = document.createElement('span')
       icon.className = 'track-file-picker-entry-icon'
       icon.textContent = entry.isDirectory ? '▸' : selected.has(entry.path) ? '✓' : '□'
       const name = document.createElement('span')
       name.textContent = entry.name
       row.append(icon, name)
+      if (openLabel) {
+        const badge = document.createElement('span')
+        badge.className = `track-file-picker-open-status is-${openRole}`
+        badge.textContent = `● ${openLabel}`
+        row.append(badge)
+      }
       if (!entry.isDirectory && entry.availability) {
         const badge = document.createElement('span')
         badge.className = `track-file-picker-availability is-${entry.availability}`
         badge.textContent = entry.availability === 'online-only' ? '☁ Online-only' : '✓ On this device'
         row.append(badge)
-        row.setAttribute('aria-label', `${entry.name}, ${entry.availability === 'online-only' ? 'online-only' : 'on this device'}`)
       }
       row.addEventListener('click', () => {
         if (entry.isDirectory) { void navigate(entry.path); return }

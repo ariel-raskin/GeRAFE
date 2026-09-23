@@ -39,6 +39,7 @@ await page.evaluate(async () => {
   localStorage.setItem('gerafe-workspace-directory', 'D:\\Workspaces')
   window.__pickerVisited = []
   window.__pickerCloudState = 'online-only'
+  window.__pickerOpenFiles = new Map([['c:\\smoke\\folder\\signal.bw', 'track'], ['c:\\smoke\\sample.bam.bai', 'index']])
   const { pickNativeTrackPaths } = await import('/src/desktop-track-picker.ts')
   window.__trackPickerSmoke = pickNativeTrackPaths(async (path) => {
     window.__pickerVisited.push(path)
@@ -49,9 +50,10 @@ await page.evaluate(async () => {
       { name: 'sample.bam.bai', path: 'C:\\Smoke\\sample.bam.bai', isDirectory: false, availability: window.__pickerCloudState },
       { name: 'notes.txt', path: 'C:\\Smoke\\notes.txt', isDirectory: false },
     ] }
-  })
+  }, () => window.__pickerOpenFiles)
 })
 await page.locator('.track-file-picker-entry.is-folder').click()
+const pickerOpenTrackBadge = await page.locator('.track-file-picker-entry').filter({ hasText: 'signal.bw' }).locator('.track-file-picker-open-status').textContent()
 await page.locator('.track-file-picker-entry').filter({ hasText: 'signal.bw' }).click()
 await page.locator('.track-file-picker [data-action="up"]').click()
 await page.locator('.track-file-picker [data-action="save-folder"]').click()
@@ -60,9 +62,11 @@ await page.locator('.track-file-picker-breadcrumbs .picker-crumb').first().click
 await page.locator('.track-file-picker-favorites .picker-chip').filter({ hasText: 'Smoke' }).click()
 const pickerHidesUnsupported = await page.locator('.track-file-picker-entry').filter({ hasText: 'notes.txt' }).count() === 0
 const pickerOnlineOnlyBadge = await page.locator('.track-file-picker-entry').filter({ hasText: 'sample.bam.bai' }).locator('.is-online-only').textContent()
-await page.evaluate(() => { window.__pickerCloudState = 'on-device' })
+const pickerIndexInUseBadge = await page.locator('.track-file-picker-entry').filter({ hasText: 'sample.bam.bai' }).locator('.track-file-picker-open-status').textContent()
+await page.evaluate(() => { window.__pickerCloudState = 'on-device'; window.__pickerOpenFiles.clear() })
 await page.locator('.track-file-picker [data-action="refresh"]').click()
 const pickerRefreshedBadge = await page.locator('.track-file-picker-entry').filter({ hasText: 'sample.bam.bai' }).locator('.is-on-device').textContent()
+const pickerRemovedOpenBadge = await page.locator('.track-file-picker-entry').filter({ hasText: 'sample.bam.bai' }).locator('.track-file-picker-open-status').count() === 0
 await page.locator('.track-file-picker-entry').filter({ hasText: 'sample.bam.bai' }).click()
 const pickerSelectionText = await page.locator('.track-file-picker-summary').textContent()
 await page.locator('.track-file-picker [data-action="open"]').click()
@@ -141,7 +145,7 @@ const emptyWorkspaceBrand = await page.locator('.empty-workspace-brand').evaluat
 })
 const cornerBrandCount = await page.locator('.corner-brand').count()
 const footerHeight = await page.locator('.browser-footer').evaluate((element) => element.getBoundingClientRect().height)
-if (!pickerHidesUnsupported || !pickerSavedShortcut || !pickerOnlineOnlyBadge?.includes('Online-only') || !pickerRefreshedBadge?.includes('On this device') || !pickerSelectionText?.includes('2 selected') || pickerPaths.length !== 2 || !pickerPaths.some((path) => path.endsWith('signal.bw')) || !pickerPaths.some((path) => path.endsWith('sample.bam.bai')) || !pickerClosed || pickerState.visited[0] !== 'C:\\Smoke' || !pickerState.visited.includes('C:\\') || pickerState.lastTrack !== 'C:\\Smoke' || pickerState.lastWorkspace !== 'D:\\Workspaces' || !pickerState.saved?.includes('C:\\\\Smoke')) throw new Error('In-app track picker smoke failed')
+if (!pickerHidesUnsupported || !pickerSavedShortcut || !pickerOnlineOnlyBadge?.includes('Online-only') || !pickerRefreshedBadge?.includes('On this device') || !pickerOpenTrackBadge?.includes('In workspace') || !pickerIndexInUseBadge?.includes('Index in use') || !pickerRemovedOpenBadge || !pickerSelectionText?.includes('2 selected') || pickerPaths.length !== 2 || !pickerPaths.some((path) => path.endsWith('signal.bw')) || !pickerPaths.some((path) => path.endsWith('sample.bam.bai')) || !pickerClosed || pickerState.visited[0] !== 'C:\\Smoke' || !pickerState.visited.includes('C:\\') || pickerState.lastTrack !== 'C:\\Smoke' || pickerState.lastWorkspace !== 'D:\\Workspaces' || !pickerState.saved?.includes('C:\\\\Smoke')) throw new Error('In-app track picker smoke failed')
 if (openingTrackCanvas.order[0] !== 'pending-track' || openingTrackCanvas.filled.slice(0, 3).join(',') === openingTrackCanvas.empty.slice(0, 3).join(',') || openingTrackCanvas.indeterminateStart.slice(0, 3).join(',') !== openingTrackCanvas.indeterminateEnd.slice(0, 3).join(',') || openingTrackCanvas.filled.slice(0, 3).join(',') === openingTrackCanvas.afterRemoval.slice(0, 3).join(',')) throw new Error(`In-row cloud progress smoke failed: ${JSON.stringify(openingTrackCanvas)}; ${consoleErrors.join('; ')}`)
 if (!initialTrackStatus?.includes('0 tracks loaded')) throw new Error(`Unexpected initial status: ${initialTrackStatus}; ${consoleErrors.join('; ')}`)
 await page.locator('#locus-input').fill(testGene)
