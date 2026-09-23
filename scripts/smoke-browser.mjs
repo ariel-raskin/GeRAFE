@@ -34,6 +34,25 @@ page.on('pageerror', (error) => consoleErrors.push(error.message))
 await page.goto(appUrl, { waitUntil: 'networkidle' })
 await page.waitForSelector('#track-status')
 await page.waitForTimeout(500)
+await page.evaluate(async () => {
+  const { pickNativeTrackPaths } = await import('/src/desktop-track-picker.ts')
+  window.__trackPickerSmoke = pickNativeTrackPaths(async (path) => path === 'C:\\Smoke\\folder'
+    ? { path, parent: 'C:\\Smoke', drives: ['C:\\'], entries: [{ name: 'signal.bw', path: `${path}\\signal.bw`, isDirectory: false }] }
+    : { path: 'C:\\Smoke', parent: 'C:\\', drives: ['C:\\'], entries: [
+      { name: 'folder', path: 'C:\\Smoke\\folder', isDirectory: true },
+      { name: 'sample.bam.bai', path: 'C:\\Smoke\\sample.bam.bai', isDirectory: false },
+      { name: 'notes.txt', path: 'C:\\Smoke\\notes.txt', isDirectory: false },
+    ] })
+})
+await page.locator('.track-file-picker-entry.is-folder').click()
+await page.locator('.track-file-picker-entry').filter({ hasText: 'signal.bw' }).click()
+await page.locator('.track-file-picker [data-action="up"]').click()
+const pickerHidesUnsupported = await page.locator('.track-file-picker-entry').filter({ hasText: 'notes.txt' }).count() === 0
+await page.locator('.track-file-picker-entry').filter({ hasText: 'sample.bam.bai' }).click()
+const pickerSelectionText = await page.locator('.track-file-picker-summary').textContent()
+await page.locator('.track-file-picker [data-action="open"]').click()
+const pickerPaths = await page.evaluate(() => window.__trackPickerSmoke)
+const pickerClosed = await page.locator('.track-file-picker').count() === 0
 const matrixInspectorSizing = await page.evaluate(() => {
   const inspector = document.createElement('div')
   inspector.className = 'matrix-inspector'
@@ -71,6 +90,7 @@ const emptyWorkspaceBrand = await page.locator('.empty-workspace-brand').evaluat
 })
 const cornerBrandCount = await page.locator('.corner-brand').count()
 const footerHeight = await page.locator('.browser-footer').evaluate((element) => element.getBoundingClientRect().height)
+if (!pickerHidesUnsupported || !pickerSelectionText?.includes('2 selected') || pickerPaths.length !== 2 || !pickerPaths.some((path) => path.endsWith('signal.bw')) || !pickerPaths.some((path) => path.endsWith('sample.bam.bai')) || !pickerClosed) throw new Error('In-app track picker smoke failed')
 if (!initialTrackStatus?.includes('0 tracks loaded')) throw new Error(`Unexpected initial status: ${initialTrackStatus}; ${consoleErrors.join('; ')}`)
 await page.locator('#locus-input').fill(testGene)
 await page.locator('#locus-form').press('Enter')

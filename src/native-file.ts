@@ -20,6 +20,19 @@ export interface NativeFileHydrationProgress {
   totalBytes: number
 }
 
+export interface NativeDirectoryEntry {
+  name: string
+  path: string
+  isDirectory: boolean
+}
+
+export interface NativeDirectoryListing {
+  path: string
+  parent?: string
+  drives: string[]
+  entries: NativeDirectoryEntry[]
+}
+
 export interface PreparedBedGraphCache extends LocalFileDescriptor {
   reused: boolean
 }
@@ -37,6 +50,10 @@ export async function hydrateNativeFile(path: string, onProgress: (progress: Nat
   const channel = new Channel<NativeFileHydrationProgress>()
   channel.onmessage = onProgress
   await invoke('hydrate_file', { path, onProgress: channel })
+}
+
+export async function listNativeDirectory(path?: string): Promise<NativeDirectoryListing> {
+  return invoke<NativeDirectoryListing>('list_directory', { path })
 }
 
 export async function readNativeTextFile(path: string): Promise<string> {

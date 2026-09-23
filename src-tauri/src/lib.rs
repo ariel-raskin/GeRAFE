@@ -23,6 +23,88 @@ struct NativeFileStat {
     needs_hydration: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectoryEntrySummary {
+    name: String,
+    path: String,
+    is_directory: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectoryListing {
+    path: String,
+    parent: Option<String>,
+    drives: Vec<String>,
+    entries: Vec<DirectoryEntrySummary>,
+}
+
+#[cfg(windows)]
+fn logical_drives() -> Vec<String> {
+    let mask = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
+    (0..26)
+        .filter(|bit| mask & (1 << bit) != 0)
+        .map(|bit| format!("{}:\\", (b'A' + bit as u8) as char))
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn logical_drives() -> Vec<String> {
+    vec!["/".to_string()]
+}
+
+fn directory_listing(path: Option<String>) -> Result<DirectoryListing, String> {
+    let folder = path
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            [
+                dirs::document_dir(),
+                dirs::home_dir(),
+                std::env::current_dir().ok(),
+            ]
+            .into_iter()
+            .flatten()
+            .find(|candidate| candidate.is_dir())
+        })
+        .ok_or_else(|| "Could not find a starting folder.".to_string())?;
+    let path_string = folder.to_string_lossy().to_string();
+    let mut entries = Vec::new();
+    for entry in
+        fs::read_dir(&folder).map_err(|error| format!("Could not open {path_string}: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("Could not list {path_string}: {error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("Could not inspect {path_string}: {error}"))?;
+        entries.push(DirectoryEntrySummary {
+            name: entry.file_name().to_string_lossy().to_string(),
+            path: entry.path().to_string_lossy().to_string(),
+            is_directory: file_type.is_dir(),
+        });
+    }
+    entries.sort_by(|a, b| {
+        b.is_directory
+            .cmp(&a.is_directory)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(DirectoryListing {
+        path: path_string,
+        parent: folder
+            .parent()
+            .map(|parent| parent.to_string_lossy().to_string()),
+        drives: logical_drives(),
+        entries,
+    })
+}
+
+#[tauri::command]
+async fn list_directory(path: Option<String>) -> Result<DirectoryListing, String> {
+    tokio::task::spawn_blocking(move || directory_listing(path))
+        .await
+        .map_err(|error| format!("Could not list folder: {error}"))?
+}
+
 #[cfg(windows)]
 fn needs_hydration(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
@@ -430,6 +512,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             stat_file,
+            list_directory,
             hydrate_file,
             read_file_range,
             read_text_file,
@@ -533,5 +616,27 @@ mod tests {
             .all(|progress| progress.total_bytes == 2 * 1024 * 1024 + 17));
         fs::remove_file(&path).unwrap();
         assert!(read_file_for_hydration(path.to_str().unwrap(), |_| {}).is_err());
+    }
+
+    #[test]
+    fn directory_browser_lists_names_without_opening_file_data() {
+        use std::time::SystemTime;
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("gerafe-browser-{}-{unique}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join("folder")).unwrap();
+        fs::write(root.join("signal.bw"), b"not actually a bigwig").unwrap();
+        let listing = directory_listing(Some(root.to_string_lossy().to_string())).unwrap();
+        assert_eq!(listing.entries.len(), 2);
+        assert_eq!(listing.entries[0].name, "folder");
+        assert!(listing.entries[0].is_directory);
+        assert_eq!(listing.entries[1].name, "signal.bw");
+        assert!(!listing.entries[1].is_directory);
+        assert!(listing.parent.is_some());
+        fs::remove_dir_all(root).unwrap();
     }
 }
