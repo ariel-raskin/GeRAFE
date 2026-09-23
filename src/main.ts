@@ -1281,7 +1281,7 @@ async function prepareCloudFile(file: LocalFileDescriptor, onProgress: (progress
     void pollLocalBytes()
     if (!stallReported && Date.now() - lastAdvanceAt > 20_000) {
       stallReported = true
-      report({ ...lastProgress, message: 'Still waiting for cloud provider — check its sync status' })
+      report({ ...lastProgress, message: 'Provider not returning bytes — try Make available offline in Explorer' })
     }
   }, 350)
   try {
