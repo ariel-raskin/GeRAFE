@@ -306,6 +306,7 @@ software license may be selected later.
 - [Prerelease beta-testing terms](BETA_TESTING.md)
 - [Development history before Git](docs/DEVELOPMENT_HISTORY.md)
 - [Feasibility and performance notes](docs/FEASIBILITY.md)
+- [Figure Editor plan](docs/FIGURE_EDITOR_PLAN.md)
 - [Multi-computer Windows setup](docs/MULTI_COMPUTER_SETUP.md)
 - [Release and in-app update workflow](docs/RELEASES.md)
 - [Related genome browsers and visualization tools](docs/RELATED_TOOLS.md)
