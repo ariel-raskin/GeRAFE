@@ -1,7 +1,7 @@
 import './style.css'
 import { ungzip } from 'pako-esm2'
 import { distributeFittedPixels, GenomeBrowser, heightScoreForPixels, MATRIX_BLUE_BLACK_COLORS, MATRIX_WARM_COLORS, trackPixelHeight } from './browser.ts'
-import type { MatrixDisplayPreferences, RegionToolMode } from './browser.ts'
+import type { MatrixDisplayPreferences, RegionToolMode, TrackOpeningProgress } from './browser.ts'
 import { BedGraphSource, MAX_BEDGRAPH_BYTES } from './data/bedgraph.ts'
 import { gzipText } from './data/gzip.ts'
 import { BedSource } from './data/bed.ts'
@@ -48,9 +48,10 @@ import type { MatrixOutline, MatrixPalette, SignalScaleChannel, SourceFormat, Tr
 import type { Region, TrackSource, TrackRuntime } from './types.ts'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { describeNativeFile, hydrateNativeFile, isDesktopApp, NativeFileHandle, prepareBedGraphCache, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
+import { cloudLocalBytes, describeNativeFile, hydrateNativeFile, isDesktopApp, NativeFileHandle, prepareBedGraphCache, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
 import { cloudProgressPercent } from './cloud-file-progress.ts'
 import { pickNativeTrackPaths } from './desktop-track-picker.ts'
+import { LAST_TRACK_FOLDER_KEY, parentFolderOfFile } from './track-picker-state.ts'
 import type { LocalFileDescriptor } from './native-file.ts'
 import { SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
 import { migrateLegacyStorage, STORAGE_KEYS } from './storage.ts'
@@ -224,7 +225,6 @@ app.innerHTML = `
         </div>
         <div class="drop-overlay"><strong>Drop genomics files to open</strong><span>${SUPPORTED_TRACK_EXTENSION_LABEL}</span></div>
       </div>
-      <div class="cloud-file-downloads" id="cloud-file-downloads" aria-live="polite" hidden></div>
       <section class="bottom-pane" id="bottom-pane" aria-label="Secondary track list">
         <div class="pane-resizer" id="pane-resizer" title="Drag to resize the lower track list"></div>
         <div class="bottom-track-scroll track-scroll" id="bottom-track-scroll">
@@ -1166,70 +1166,115 @@ async function loadNativePaths(paths: readonly string[]): Promise<void> {
   pendingOpenGroupId = undefined
   for (const file of selected) {
     if (/\.(bai|csi)$/i.test(file.name)) continue
+    const opening = nativeOpeningType(file.name)
+    const index = file.name.toLowerCase().endsWith('.bam') ? findNativeBamIndex(file, selected) ?? await findAdjacentNativeBamIndex(file) : undefined
+    const reserve = Boolean(opening && (file.needsHydration || index?.needsHydration))
+    const trackId = crypto.randomUUID()
+    const reservedSource = reserve && opening ? makeSourceSpec(file, opening.format, index) : undefined
+    if (reservedSource && opening) {
+      addOpenedTrack(reservedSource, opening.kind, trackId, destinationGroupId, false)
+      browser.setOpeningProgress(trackId, { message: 'Waiting for cloud file…' })
+    }
     try {
-      const { source, sourceSpec, kind } = await sourceFromNativeFile(file, selected)
-      const trackId = crypto.randomUUID()
-      runtimeSources.set(sourceSpec.id, source)
-      store.edit((draft) => {
-        const added = kind === 'interval' ? addIntervalTrack(draft, sourceSpec, { id: trackId })
-          : kind === 'interaction' ? addInteractionTrack(draft, sourceSpec, { id: trackId })
-            : kind === 'matrix' ? addMatrixTrack(draft, sourceSpec, { id: trackId, defaultNormalization: isNativeMatrixSource(source) ? source.matrixMetadata.defaultNormalization : undefined })
-            : kind === 'alignment' ? addAlignmentTrack(draft, sourceSpec, { id: trackId })
-            : addSignalTrack(draft, sourceSpec, { id: trackId, displayGroupId: destinationGroupId, autoPair: savedStrandedAutoLink(), autoStrandColors: savedStrandedAutoColors() })
-        if (destinationGroupId) addTracksToGroup(draft, destinationGroupId, [added.id])
-      })
-      await browser.attachSource(sourceSpec.id, source)
+      const { source, sourceSpec, kind } = await sourceFromNativeFile(file, selected,
+        (progress) => { if (reservedSource) browser.setOpeningProgress(trackId, progress) })
+      if (reservedSource) {
+        if (!store.current.tracks.some((track) => track.id === trackId)) continue
+        const completedSpec = { ...sourceSpec, id: reservedSource.id }
+        runtimeSources.set(completedSpec.id, source)
+        store.edit((draft) => {
+          const sourceIndex = draft.sources.findIndex((candidate) => candidate.id === reservedSource.id)
+          if (sourceIndex >= 0) draft.sources[sourceIndex] = completedSpec
+          const track = draft.tracks.find((candidate) => candidate.id === trackId)
+          if (track?.kind === 'matrix' && isNativeMatrixSource(source)) track.matrixNormalization = source.matrixMetadata.defaultNormalization
+        })
+        browser.setOpeningProgress(trackId, { message: 'Opening track data…' })
+        await browser.attachSource(completedSpec.id, source)
+        browser.setOpeningProgress(trackId)
+        if (kind === 'signal' && savedStrandedAutoLink()) store.edit((draft) => { autoPairStrandedTracks(draft, { autoColors: savedStrandedAutoColors() }) })
+      } else {
+        runtimeSources.set(sourceSpec.id, source)
+        addOpenedTrack(sourceSpec, kind, trackId, destinationGroupId, true, source)
+        await browser.attachSource(sourceSpec.id, source)
+      }
+      const folder = parentFolderOfFile(file.path)
+      if (folder) localStorage.setItem(LAST_TRACK_FOLDER_KEY, folder)
       showToast(`Opened ${file.name}`)
     } catch (error) {
+      if (reservedSource) {
+        browser.setOpeningProgress(trackId)
+        runtimeSources.delete(reservedSource.id)
+        store.edit((draft) => removeTrack(draft, trackId))
+      }
       showToast(error instanceof Error ? error.message : String(error), true)
     }
   }
 }
 
-const cloudOpeningRows = new Map<string, HTMLElement>()
-
-function clearCloudOpening(path: string): void {
-  cloudOpeningRows.get(path)?.remove()
-  cloudOpeningRows.delete(path)
-  document.querySelector<HTMLElement>('#cloud-file-downloads')!.hidden = cloudOpeningRows.size === 0
-}
-
-async function prepareCloudFile(file: LocalFileDescriptor): Promise<void> {
-  if (!file.needsHydration || !(await describeNativeFile(file.path)).needsHydration) return
-  const container = document.querySelector<HTMLElement>('#cloud-file-downloads')!
-  const row = document.createElement('div')
-  row.className = 'cloud-file-download-track'
-  row.setAttribute('role', 'status')
-  const name = document.createElement('strong')
-  name.textContent = file.name
-  const detail = document.createElement('span')
-  detail.textContent = 'Downloading cloud file… waiting for provider'
-  const meter = document.createElement('progress')
-  meter.max = 100
-  row.append(name, detail, meter)
-  container.append(row)
-  container.hidden = false
-  cloudOpeningRows.set(file.path, row)
-  await hydrateNativeFile(file.path, ({ bytesRead, totalBytes }) => {
-    const percent = cloudProgressPercent(bytesRead, totalBytes)
-    if (percent !== undefined) {
-      meter.value = percent
-      detail.textContent = `Preparing ${percent}% · ${formatByteCount(bytesRead)} of ${formatByteCount(totalBytes)}`
-    }
+function addOpenedTrack(sourceSpec: TrackSourceSpec, kind: OpenedSource['kind'], trackId: string, destinationGroupId?: string, autoPair = true, source?: TrackSource): void {
+  store.edit((draft) => {
+    const added = kind === 'interval' ? addIntervalTrack(draft, sourceSpec, { id: trackId })
+      : kind === 'interaction' ? addInteractionTrack(draft, sourceSpec, { id: trackId })
+        : kind === 'matrix' ? addMatrixTrack(draft, sourceSpec, { id: trackId, defaultNormalization: source && isNativeMatrixSource(source) ? source.matrixMetadata.defaultNormalization : undefined })
+        : kind === 'alignment' ? addAlignmentTrack(draft, sourceSpec, { id: trackId })
+          : addSignalTrack(draft, sourceSpec, { id: trackId, displayGroupId: destinationGroupId, autoPair: autoPair && savedStrandedAutoLink(), autoStrandColors: savedStrandedAutoColors() })
+    if (destinationGroupId) addTracksToGroup(draft, destinationGroupId, [added.id])
   })
-  detail.textContent = 'Opening track…'
 }
 
-async function sourceFromNativeFile(file: LocalFileDescriptor, selected: readonly LocalFileDescriptor[]): Promise<OpenedSource> {
-  try {
-    await prepareCloudFile(file)
-    return await sourceFromPreparedNativeFile(file, selected)
-  } finally {
-    clearCloudOpening(file.path)
+function nativeOpeningType(name: string): { kind: OpenedSource['kind']; format: SourceFormat } | undefined {
+  const lower = name.toLowerCase()
+  const matrix = matrixFormatForName(lower)
+  if (matrix) return { kind: 'matrix', format: matrix }
+  if (/\.(?:bw|bigwig)$/.test(lower)) return { kind: 'signal', format: 'bigwig' }
+  if (/\.bedgraph(?:\.gz)?$/.test(lower)) return { kind: 'signal', format: 'bedgraph' }
+  if (lower.endsWith('.tdf')) return { kind: 'signal', format: 'tdf' }
+  if (lower.endsWith('.bed')) return { kind: 'interval', format: 'bed' }
+  if (lower.endsWith('.bedpe')) return { kind: 'interaction', format: 'bedpe' }
+  if (lower.endsWith('.bam')) return { kind: 'alignment', format: 'bam' }
+  return undefined
+}
+
+async function prepareCloudFile(file: LocalFileDescriptor, onProgress: (progress: TrackOpeningProgress) => void): Promise<void> {
+  if (!file.needsHydration || !(await describeNativeFile(file.path)).needsHydration) return
+  let localMeasurementAvailable = false
+  let pollInFlight = false
+  let active = true
+  const report = (progress: TrackOpeningProgress): void => {
+    if (!active) return
+    onProgress(progress)
   }
+  const pollLocalBytes = async (): Promise<void> => {
+    if (pollInFlight || !file.size) return
+    pollInFlight = true
+    try {
+      const bytes = await cloudLocalBytes(file.path)
+      if (bytes !== undefined) {
+        localMeasurementAvailable = true
+        const percent = Math.min(100, Math.max(0, Math.round(bytes / file.size * 100)))
+        report({ message: `${formatByteCount(bytes)} of ${formatByteCount(file.size)} available locally`, percent, basis: 'local' })
+      }
+    } catch { /* provider does not expose Cloud Files progress; retain the read-progress fallback */ }
+    finally { pollInFlight = false }
+  }
+  void pollLocalBytes()
+  const pollTimer = window.setInterval(() => void pollLocalBytes(), 350)
+  try {
+    await hydrateNativeFile(file.path, ({ bytesRead, totalBytes }) => {
+      if (localMeasurementAvailable) return
+      const percent = cloudProgressPercent(bytesRead, totalBytes)
+      if (percent !== undefined) report({ message: `${formatByteCount(bytesRead)} of ${formatByteCount(totalBytes)} prepared`, percent, basis: 'read' })
+    })
+    report({ message: 'Opening track data…' })
+  } finally { active = false; window.clearInterval(pollTimer) }
 }
 
-async function sourceFromPreparedNativeFile(file: LocalFileDescriptor, selected: readonly LocalFileDescriptor[]): Promise<OpenedSource> {
+async function sourceFromNativeFile(file: LocalFileDescriptor, selected: readonly LocalFileDescriptor[], onProgress: (progress: TrackOpeningProgress) => void): Promise<OpenedSource> {
+  await prepareCloudFile(file, onProgress)
+  return sourceFromPreparedNativeFile(file, selected, onProgress)
+}
+
+async function sourceFromPreparedNativeFile(file: LocalFileDescriptor, selected: readonly LocalFileDescriptor[], onProgress: (progress: TrackOpeningProgress) => void): Promise<OpenedSource> {
   const name = file.name.toLowerCase()
   const handle = new NativeFileHandle(file.path)
   const matrixFormat = matrixFormatForName(name)
@@ -1266,15 +1311,11 @@ async function sourceFromPreparedNativeFile(file: LocalFileDescriptor, selected:
   if (name.endsWith('.bam')) {
     const index = findNativeBamIndex(file, selected) ?? await findAdjacentNativeBamIndex(file)
     if (!index) throw new Error(`${file.name}: no adjacent .bai/.csi was found; select the BAM and its index together.`)
-    try {
-      await prepareCloudFile(index)
-      return {
-        source: await BamAlignmentSource.fromFilehandles(file.name, handle, index.name, new NativeFileHandle(index.path)),
-        sourceSpec: makeSourceSpec(file, 'bam', index),
-        kind: 'alignment',
-      }
-    } finally {
-      clearCloudOpening(index.path)
+    await prepareCloudFile(index, (progress) => onProgress({ ...progress, message: `Index: ${progress.message}` }))
+    return {
+      source: await BamAlignmentSource.fromFilehandles(file.name, handle, index.name, new NativeFileHandle(index.path)),
+      sourceSpec: makeSourceSpec(file, 'bam', index),
+      kind: 'alignment',
     }
   }
   throw new Error(`${file.name}: this file type is not currently supported.`)
@@ -1331,13 +1372,16 @@ async function restorePersistedSources(): Promise<void> {
   for (const sourceSpec of store.current.sources) {
     if (!usedSourceIds.has(sourceSpec.id)) continue
     if (!sourceSpec?.files.length || sourceSpec.files.some((file) => !file.path)) continue
+    const trackIds = store.current.tracks.filter((track) => track.sourceIds.includes(sourceSpec.id)).map((track) => track.id)
+    const report = (progress: TrackOpeningProgress): void => { for (const id of trackIds) browser.setOpeningProgress(id, progress) }
     try {
       const descriptors = await Promise.all(sourceSpec.files.map(async (saved) => {
         const current = await describeNativeFile(saved.path!)
         if (current.size !== saved.size) throw new Error(`${saved.name} has changed size since it was opened.`)
         return current
       }))
-      for (const descriptor of descriptors) await prepareCloudFile(descriptor)
+      if (descriptors.some((descriptor) => descriptor.needsHydration)) report({ message: 'Waiting for cloud file…' })
+      for (const descriptor of descriptors) await prepareCloudFile(descriptor, report)
       const primary = descriptors.find((_, index) => sourceSpec.files[index].role === 'signal')!
       const source = sourceSpec.format === 'matrix-comparison'
         ? new MatrixComparisonSource(sourceSpec.name,
@@ -1347,13 +1391,13 @@ async function restorePersistedSources(): Promise<void> {
           ? new NativeMatrixDerivedSource(sourceSpec.name,
             await NativeMatrixSource.open(primary.name, primary.path, matrixFormatForName(primary.name)!),
             sourceSpec.matrixDerivedMode!, sourceSpec.matrixDerivedNormalization!, sourceSpec.matrixDerivedResolution)
-        : (await sourceFromNativeFile(primary, descriptors)).source
+        : (await sourceFromNativeFile(primary, descriptors, report)).source
       runtimeSources.set(sourceSpec.id, source)
       restored += 1
     } catch (error) {
       console.warn(`Could not restore ${sourceSpec.name}`, error)
     } finally {
-      for (const saved of sourceSpec.files) if (saved.path) clearCloudOpening(saved.path)
+      for (const id of trackIds) browser.setOpeningProgress(id)
     }
   }
   if (!restored) return
@@ -3487,11 +3531,16 @@ async function relinkTrackNative(id: string): Promise<void> {
     const selected = await Promise.all(paths.map(describeNativeFile))
     const primary = selected.find((file) => !/\.(bai|csi)$/i.test(file.name))
     if (!primary) throw new Error('Select the data file, and its index too if it is a BAM.')
-    const opened = await sourceFromNativeFile(primary, selected)
+    if (primary.needsHydration || selected.some((file) => file.needsHydration)) browser.setOpeningProgress(id, { message: 'Waiting for cloud file…' })
+    const opened = await sourceFromNativeFile(primary, selected, (progress) => browser.setOpeningProgress(id, progress))
     await applyRelink(id, opened, channel)
+    const folder = parentFolderOfFile(primary.path)
+    if (folder) localStorage.setItem(LAST_TRACK_FOLDER_KEY, folder)
     showToast(`Relinked ${primary.name}`)
   } catch (error) {
     showToast(error instanceof Error ? error.message : String(error), true)
+  } finally {
+    browser.setOpeningProgress(id)
   }
 }
 

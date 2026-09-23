@@ -119,6 +119,73 @@ fn needs_hydration(_metadata: &fs::Metadata) -> bool {
     false
 }
 
+#[cfg(windows)]
+fn cloud_local_bytes_at(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+        Storage::{
+            CloudFilters::{
+                CfGetPlaceholderInfo, CF_PLACEHOLDER_INFO_STANDARD, CF_PLACEHOLDER_STANDARD_INFO,
+            },
+            FileSystem::{
+                CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
+                FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+            },
+        },
+    };
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    #[repr(align(8))]
+    struct AlignedBuffer([u8; 4096]);
+    let mut buffer = AlignedBuffer([0; 4096]);
+    let result = unsafe {
+        CfGetPlaceholderInfo(
+            handle,
+            CF_PLACEHOLDER_INFO_STANDARD,
+            buffer.0.as_mut_ptr().cast(),
+            buffer.0.len() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    unsafe { CloseHandle(handle) };
+    if result != 0 {
+        return None;
+    }
+    let info = unsafe { &*(buffer.0.as_ptr() as *const CF_PLACEHOLDER_STANDARD_INFO) };
+    u64::try_from(info.OnDiskDataSize).ok()
+}
+
+#[cfg(not(windows))]
+fn cloud_local_bytes_at(_path: &Path) -> Option<u64> {
+    None
+}
+
+#[tauri::command]
+async fn cloud_local_bytes(path: String) -> Option<u64> {
+    tokio::task::spawn_blocking(move || cloud_local_bytes_at(Path::new(&path)))
+        .await
+        .ok()
+        .flatten()
+}
+
 #[tauri::command]
 fn stat_file(path: String) -> Result<NativeFileStat, String> {
     let metadata =
@@ -512,6 +579,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             stat_file,
+            cloud_local_bytes,
             list_directory,
             hydrate_file,
             read_file_range,
@@ -599,6 +667,7 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("gerafe-hydration-{}-{unique}", std::process::id()));
         fs::write(&path, vec![7u8; 2 * 1024 * 1024 + 17]).unwrap();
+        assert_eq!(cloud_local_bytes_at(&path), None);
         assert!(
             !stat_file(path.to_str().unwrap().to_string())
                 .unwrap()

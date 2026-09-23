@@ -13,6 +13,7 @@ The Git history beginning with the import pull request is authoritative and repr
 - Detect Windows offline/recall attributes before opening desktop-native tracks and saved sources. A temporary named row reports indeterminate activity or prepared-byte percentage while a cloud provider supplies the file, including BAM indexes; it disappears on completion or error.
 - Local files and browser sessions keep their existing open path. The percentage represents bytes GeRAFE has read, not a provider-reported network percentage.
 - Replaced the desktop native track Open and relink dialogs with an in-app folder browser after the native dialog was observed to stall before returning an online-only path. Directory enumeration reads names and entry types only; file-content hydration remains under GeRAFE's progress UI.
+- Polished the picker with breadcrumb navigation, persisted favorite-folder buttons, and a track-open folder history separate from workspace paths. Cloud opens now reserve the destination track row and render progress there; Windows Cloud Files on-disk bytes are preferred when available, with prepared-byte progress clearly labeled as the fallback.
 
 ## September 23, 2026 — upper track fitting
 
