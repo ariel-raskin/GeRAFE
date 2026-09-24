@@ -65,7 +65,7 @@ import { groupSelection } from './track-selection.ts'
 import { buildIgvTrackDocument, igvPathsToCheck, parseIgvSessionXml, previewIgvSession } from './igv-session.ts'
 import type { IgvPreview, IgvSession } from './igv-session.ts'
 import { nativeFilePathKey } from './open-track-files.ts'
-import { createFigureDocument, type FigureDocument } from './figure-document.ts'
+import { createFigureDocument, figureRequiredSourceIds, type FigureDocument } from './figure-document.ts'
 import { FigureEditor } from './figure-editor.ts'
 
 void installWindowsCursorScaleCorrection()
@@ -1482,8 +1482,7 @@ function restorePersistedSources(): void {
 
 async function restoreFigureRuntimeSources(figure: FigureDocument): Promise<ReadonlyMap<string, TrackSource>> {
   const restored = new Map<string, TrackSource>()
-  const usedIds = new Set(figure.columns.flatMap((column) => Object.values(column.assignments).flatMap((ids) => ids))
-    .flatMap((trackId) => figure.sourceDocument.tracks.find((track) => track.id === trackId)?.sourceIds ?? []))
+  const usedIds = figureRequiredSourceIds(figure)
   await Promise.all(figure.sourceDocument.sources.filter((source) => usedIds.has(source.id)).map(async (sourceSpec) => {
     const active = runtimeSources.get(sourceSpec.id)
     if (active) { restored.set(sourceSpec.id, active); return }

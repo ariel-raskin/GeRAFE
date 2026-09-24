@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { pickNativeFilePaths } from './desktop-track-picker.ts'
-import { addFigureColumn, FigureDocumentStore, normalizeFigureDocument, setFigureColumnRegion, type FigureCellStyle, type FigureDocument } from './figure-document.ts'
+import { addFigureColumn, figureRequiredSourceIds, FigureDocumentStore, normalizeFigureDocument, setFigureColumnRegion, type FigureCellStyle, type FigureDocument } from './figure-document.ts'
 import { FigureRenderSession, figureSvgToPng } from './figure-render.ts'
 import { formatLocus, parseLocus } from './genome.ts'
 import { isDesktopApp, listNativeDirectory, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
@@ -101,11 +101,13 @@ export class FigureEditor {
     const inspector = this.root.querySelector<HTMLElement>('[data-role="inspector"]')!
     const field = (label: string, name: string, value: string | number, type = 'text', attributes = '') => `<label class="fe-field"><span>${esc(label)}</span><input data-edit="${name}" type="${type}" value="${esc(String(value))}" ${attributes}/></label>`
     if (selection.kind === 'page') {
-      const missing = doc.sourceDocument.sources.filter((source) => !this.sources.has(source.id) && doc.rows.some((row) => row.included && doc.columns.some((column) => (column.assignments[row.id] ?? []).some((trackId) => doc.sourceDocument.tracks.find((track) => track.id === trackId)?.sourceIds.includes(source.id)))))
+      const required = figureRequiredSourceIds(doc)
+      const missing = doc.sourceDocument.sources.filter((source) => required.has(source.id) && !this.sources.has(source.id))
+      const annotationWidth = (kind: string, id: string, defaultWidth: number) => field('Line width (mm)', 'annotation-line-width', doc.annotationStyles?.[`${kind}:${id}`]?.lineWidthMm ?? defaultWidth, 'number', `min="0.05" max="3" step="0.05" data-annotation-kind="${kind}" data-annotation="${esc(id)}"`)
       const annotationControls = [
-        ...doc.sourceDocument.savedRegions.map((saved) => `<div class="fe-annotation"><strong>${esc(saved.label)}</strong><label><input data-edit="annotation-visible" data-annotation-kind="region" data-annotation="${esc(saved.id)}" type="checkbox" ${saved.highlighted ? 'checked' : ''}/> Show</label><input data-edit="annotation-color" data-annotation-kind="region" data-annotation="${esc(saved.id)}" type="color" value="${esc(saved.color)}" aria-label="${esc(saved.label)} color"/></div>`),
-        ...doc.sourceDocument.comparisonDividers.map((divider, index) => `<div class="fe-annotation"><strong>Divider ${index + 1}</strong><input data-edit="annotation-color" data-annotation-kind="divider" data-annotation="${esc(divider.id)}" type="color" value="${esc(divider.color)}" aria-label="Divider ${index + 1} color"/></div>`),
-        ...doc.sourceDocument.matrixOutlines.map((outline) => `<div class="fe-annotation"><strong>${esc(outline.label)}</strong><label><input data-edit="annotation-visible" data-annotation-kind="outline" data-annotation="${esc(outline.id)}" type="checkbox" ${outline.visible ? 'checked' : ''}/> Show</label><input data-edit="annotation-color" data-annotation-kind="outline" data-annotation="${esc(outline.id)}" type="color" value="${esc(outline.color)}" aria-label="${esc(outline.label)} color"/></div>`),
+        ...doc.sourceDocument.savedRegions.map((saved) => `<div class="fe-annotation-card"><div class="fe-annotation"><strong>${esc(saved.label)}</strong><label><input data-edit="annotation-visible" data-annotation-kind="region" data-annotation="${esc(saved.id)}" type="checkbox" ${saved.highlighted ? 'checked' : ''}/> Show</label><input data-edit="annotation-color" data-annotation-kind="region" data-annotation="${esc(saved.id)}" type="color" value="${esc(saved.color)}" aria-label="${esc(saved.label)} color"/></div><label class="fe-checkbox"><input data-edit="annotation-fill" data-annotation-kind="region" data-annotation="${esc(saved.id)}" type="checkbox" ${saved.fill ? 'checked' : ''}/> Fill region</label>${field('Shade opacity', 'annotation-shade', saved.shadeOpacity, 'number', `min="0" max="1" step="0.05" data-annotation-kind="region" data-annotation="${esc(saved.id)}"`)}<label class="fe-field"><span>Boundary</span><select data-edit="annotation-line-style" data-annotation-kind="region" data-annotation="${esc(saved.id)}"><option value="solid" ${saved.boundaryStyle === 'solid' ? 'selected' : ''}>Solid</option><option value="dashed" ${saved.boundaryStyle === 'dashed' ? 'selected' : ''}>Dashed</option><option value="none" ${saved.boundaryStyle === 'none' ? 'selected' : ''}>None</option></select></label>${annotationWidth('region', saved.id, 0.16)}</div>`),
+        ...doc.sourceDocument.comparisonDividers.map((divider, index) => `<div class="fe-annotation-card"><div class="fe-annotation"><strong>Divider ${index + 1}</strong><input data-edit="annotation-color" data-annotation-kind="divider" data-annotation="${esc(divider.id)}" type="color" value="${esc(divider.color)}" aria-label="Divider ${index + 1} color"/></div><label class="fe-field"><span>Line</span><select data-edit="annotation-line-style" data-annotation-kind="divider" data-annotation="${esc(divider.id)}"><option value="solid" ${divider.lineStyle === 'solid' ? 'selected' : ''}>Solid</option><option value="dashed" ${divider.lineStyle === 'dashed' ? 'selected' : ''}>Dashed</option></select></label>${annotationWidth('divider', divider.id, 0.2)}</div>`),
+        ...doc.sourceDocument.matrixOutlines.map((outline) => `<div class="fe-annotation-card"><div class="fe-annotation"><strong>${esc(outline.label)}</strong><label><input data-edit="annotation-visible" data-annotation-kind="outline" data-annotation="${esc(outline.id)}" type="checkbox" ${outline.visible ? 'checked' : ''}/> Show</label><input data-edit="annotation-color" data-annotation-kind="outline" data-annotation="${esc(outline.id)}" type="color" value="${esc(outline.color)}" aria-label="${esc(outline.label)} color"/></div>${annotationWidth('outline', outline.id, 0.35)}</div>`),
       ].join('')
       inspector.innerHTML = `<h2>Page</h2>${field('Figure name', 'figure-name', doc.name)}${field('Title', 'page-title', doc.page.title)}${field('Width (mm)', 'page-width', doc.page.widthMm, 'number', 'min="50" max="600" step="1"')}${field('Height (mm; 0 = fit)', 'page-height', doc.page.heightMm, 'number', 'min="0" max="600" step="1"')}${field('Margins (mm)', 'page-margin', doc.page.marginMm, 'number', 'min="0" max="100" step="0.5"')}${field('Label area (mm)', 'page-label-width', doc.page.labelWidthMm, 'number', 'min="0" max="120" step="0.5"')}${field('Column gap (mm)', 'page-column-gap', doc.page.columnGapMm, 'number', 'min="0" max="100" step="0.5"')}${field('Row gap (mm)', 'page-row-gap', doc.page.rowGapMm, 'number', 'min="0" max="50" step="0.5"')}${field('Ruler height (mm)', 'page-ruler-height', doc.page.rulerHeightMm, 'number', 'min="0" max="50" step="0.5"')}${field('Font family', 'page-font', doc.page.fontFamily)}${field('Font size (pt)', 'page-font-size', doc.page.fontSizePt, 'number', 'min="4" max="40" step="0.5"')}${field('Background', 'page-background', doc.page.background, 'color')}${annotationControls ? `<h3>Annotations</h3>${annotationControls}` : ''}${missing.length ? `<div class="fe-missing"><h3>Missing source files</h3><p>Reopen these files before export. Existing figure edits are preserved.</p>${missing.map((source) => `<div><span>${esc(source.name)}</span><button type="button" data-action="relink-source" data-source="${esc(source.id)}">Relink…</button></div>`).join('')}</div>` : ''}`
       return
@@ -126,10 +128,17 @@ export class FigureEditor {
     }).join('')
     const styleControls = doc.columns.map((column, index) => {
       const style = column.styles?.[row.id] ?? {}
-      const assignedId = column.assignments[row.id]?.[0]
+      const assignedIds = column.assignments[row.id] ?? []
+      const assignedId = assignedIds[0]
       const spec = doc.sourceDocument.tracks.find((track) => track.id === assignedId)
-      const signal = spec?.kind === 'signal' || spec?.kind === 'stranded'
-      return `<div class="fe-cell-style"><h3>Column ${index + 1} appearance</h3>${field('Color', 'cell-color', style.color ?? spec?.color ?? '#245b9e', 'color', `data-column="${esc(column.id)}"`)}${spec?.kind === 'stranded' ? field('Negative color', 'cell-negative-color', style.negativeColor ?? spec.negativeColor ?? '#2878d4', 'color', `data-column="${esc(column.id)}"`) : ''}${field('Opacity (%)', 'cell-opacity', style.opacity ?? 100, 'number', `min="0" max="100" step="1" data-column="${esc(column.id)}"`)}${signal ? `<label class="fe-field"><span>Scale</span><select data-edit="cell-scale-mode" data-column="${esc(column.id)}"><option value="shared" ${!style.scaleMode || style.scaleMode === 'shared' ? 'selected' : ''}>Shared across columns</option><option value="independent" ${style.scaleMode === 'independent' ? 'selected' : ''}>Independent</option><option value="fixed" ${style.scaleMode === 'fixed' ? 'selected' : ''}>Fixed limits</option></select></label>${style.scaleMode === 'fixed' ? field('Minimum', 'cell-scale-min', style.scaleMin ?? 0, 'number', `step="any" data-column="${esc(column.id)}"`) + field('Maximum', 'cell-scale-max', style.scaleMax ?? 1, 'number', `step="any" data-column="${esc(column.id)}"`) : ''}<label class="fe-checkbox"><input type="checkbox" data-edit="cell-show-scale" data-column="${esc(column.id)}" ${style.showScale !== false ? 'checked' : ''}/> Show scale values</label>` : ''}${spec?.kind === 'signal' ? `<label class="fe-field"><span>Graph</span><select data-edit="cell-render-style" data-column="${esc(column.id)}"><option value="source" ${!style.renderStyle || style.renderStyle === 'source' ? 'selected' : ''}>Source setting</option><option value="fill" ${style.renderStyle === 'fill' ? 'selected' : ''}>Filled</option><option value="line" ${style.renderStyle === 'line' ? 'selected' : ''}>Line</option></select></label>` : ''}</div>`
+      const quantitative = spec?.kind === 'signal' || spec?.kind === 'stranded' || spec?.kind === 'matrix'
+      const color = spec && assignedIds.length === 1 ? field('Color', 'cell-color', style.color ?? spec.color, 'color', `data-column="${esc(column.id)}"`) : ''
+      const negativeColor = spec?.kind === 'stranded' ? field('Negative color', 'cell-negative-color', style.negativeColor ?? spec.negativeColor ?? '#2878d4', 'color', `data-column="${esc(column.id)}"`) : ''
+      const opacity = spec && (spec.kind === 'signal' || spec.kind === 'stranded' || spec.kind === 'matrix') ? field('Opacity (%)', 'cell-opacity', style.opacity ?? 100, 'number', `min="0" max="100" step="1" data-column="${esc(column.id)}"`) : ''
+      const scale = quantitative ? `<label class="fe-field"><span>Scale</span><select data-edit="cell-scale-mode" data-column="${esc(column.id)}"><option value="shared" ${!style.scaleMode || style.scaleMode === 'shared' ? 'selected' : ''}>Shared across columns</option><option value="independent" ${style.scaleMode === 'independent' ? 'selected' : ''}>Independent</option><option value="fixed" ${style.scaleMode === 'fixed' ? 'selected' : ''}>Fixed limits</option></select></label>${style.scaleMode === 'fixed' ? field('Minimum', 'cell-scale-min', style.scaleMin ?? 0, 'number', `step="any" data-column="${esc(column.id)}"`) + field('Maximum', 'cell-scale-max', style.scaleMax ?? 1, 'number', `step="any" data-column="${esc(column.id)}"`) : ''}<label class="fe-checkbox"><input type="checkbox" data-edit="cell-show-scale" data-column="${esc(column.id)}" ${style.showScale !== false ? 'checked' : ''}/> Show scale values</label>` : ''
+      const graph = spec?.kind === 'signal' ? `<label class="fe-field"><span>Graph</span><select data-edit="cell-render-style" data-column="${esc(column.id)}"><option value="source" ${!style.renderStyle || style.renderStyle === 'source' ? 'selected' : ''}>Source setting</option><option value="fill" ${style.renderStyle === 'fill' ? 'selected' : ''}>Filled</option><option value="line" ${style.renderStyle === 'line' ? 'selected' : ''}>Line</option></select></label>` : ''
+      const palette = spec?.kind === 'matrix' ? `<label class="fe-field"><span>Palette</span><select data-edit="cell-matrix-palette" data-column="${esc(column.id)}"><option value="source" ${!style.matrixPalette || style.matrixPalette === 'source' ? 'selected' : ''}>Source setting</option><option value="warm" ${style.matrixPalette === 'warm' ? 'selected' : ''}>Warm</option><option value="blue-black" ${style.matrixPalette === 'blue-black' ? 'selected' : ''}>Blue-black</option><option value="single" ${style.matrixPalette === 'single' ? 'selected' : ''}>Single color</option></select></label>` : ''
+      return `<div class="fe-cell-style"><h3>Column ${index + 1} appearance</h3>${color}${negativeColor}${opacity}${scale}${graph}${palette}</div>`
     }).join('')
     inspector.innerHTML = rowFields + `<h3>Column assignments</h3>${assignments}<p class="fe-help">Click a rendered cell to select it. Figure styling does not alter the GeR workspace.</p>${styleControls}`
   }
@@ -210,16 +219,23 @@ export class FigureEditor {
       else if (key === 'page-font') page.fontFamily = input.value.trim() || 'Arial, sans-serif'
       else if (key === 'page-font-size') page.fontSizePt = number
       else if (key === 'page-background') page.background = input.value
-      else if (key === 'annotation-visible' || key === 'annotation-color') {
+      else if (key.startsWith('annotation-')) {
         const kind = input.dataset.annotationKind
         const id = input.dataset.annotation
         const annotation = kind === 'region' ? draft.sourceDocument.savedRegions.find((item) => item.id === id)
           : kind === 'divider' ? draft.sourceDocument.comparisonDividers.find((item) => item.id === id)
             : draft.sourceDocument.matrixOutlines.find((item) => item.id === id)
-        if (annotation) {
+        if (key === 'annotation-line-width' && kind && id) {
+          const styles = draft.annotationStyles ??= {}
+          styles[`${kind}:${id}`] = { lineWidthMm: number }
+        } else if (annotation) {
           if (key === 'annotation-color') annotation.color = input.value
-          else if ('highlighted' in annotation) annotation.highlighted = (input as HTMLInputElement).checked
-          else if ('visible' in annotation) annotation.visible = (input as HTMLInputElement).checked
+          else if (key === 'annotation-visible' && 'highlighted' in annotation) annotation.highlighted = (input as HTMLInputElement).checked
+          else if (key === 'annotation-visible' && 'visible' in annotation) annotation.visible = (input as HTMLInputElement).checked
+          else if (key === 'annotation-fill' && 'fill' in annotation) annotation.fill = (input as HTMLInputElement).checked
+          else if (key === 'annotation-shade' && 'shadeOpacity' in annotation) annotation.shadeOpacity = number
+          else if (key === 'annotation-line-style' && 'boundaryStyle' in annotation) annotation.boundaryStyle = input.value as typeof annotation.boundaryStyle
+          else if (key === 'annotation-line-style' && 'lineStyle' in annotation) annotation.lineStyle = input.value as typeof annotation.lineStyle
         }
       }
       else if (key === 'linked-regions') draft.linkedRegions = (input as HTMLInputElement).checked
@@ -246,6 +262,7 @@ export class FigureEditor {
           else if (key === 'cell-negative-color') style.negativeColor = input.value
           else if (key === 'cell-opacity') style.opacity = number
           else if (key === 'cell-render-style') style.renderStyle = input.value as FigureCellStyle['renderStyle']
+          else if (key === 'cell-matrix-palette') style.matrixPalette = input.value as FigureCellStyle['matrixPalette']
           else if (key === 'cell-scale-mode') { style.scaleMode = input.value as FigureCellStyle['scaleMode']; if (style.scaleMode === 'fixed') { style.scaleMin ??= 0; style.scaleMax ??= 1 } }
           else if (key === 'cell-scale-min') style.scaleMin = number
           else if (key === 'cell-scale-max') style.scaleMax = number
