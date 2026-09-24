@@ -11,6 +11,7 @@ describe('genomic coordinates', () => {
   it('accepts chromosome aliases and commas', () => {
     expect(parseLocus('8:1,001-2,000', hg38)).toEqual({ chr: 'chr8', start: 1000, end: 2000 })
     expect(resolveChromosome('X', hg38)).toBe('chrX')
+    expect(resolveChromosome('chr1', new Map([['1', 248_956_422]]))).toBe('1')
   })
 
   it('accepts pasted whitespace-delimited coordinates and case variants', () => {

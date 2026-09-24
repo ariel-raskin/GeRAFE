@@ -3,6 +3,7 @@ import type { BamRecord } from '@gmod/bam'
 import { BlobFile } from 'generic-filehandle2'
 import type { GenericFilehandle } from 'generic-filehandle2'
 import type { AlignmentCoverageFeature, AlignmentDifference, AlignmentFeature, Region, TrackFeature, TrackQueryOptions, TrackSource } from '../types.ts'
+import { resolveChromosome } from '../genome.ts'
 
 const MAX_QUERY_SPAN = 2_000_000
 const ALIGNMENT_VISIBILITY_SPAN = 250_000
@@ -45,7 +46,8 @@ export class BamAlignmentSource implements TrackSource {
     const span = region.end - region.start
     if (span > MAX_QUERY_SPAN) throw new Error(`Zoom below ${(MAX_QUERY_SPAN / 1_000_000).toFixed(0)} Mb to view BAM data.`)
     const viewMode = options.bamViewMode ?? 'both'
-    const records = await this.reader.getRecordsForRange(region.chr, Math.floor(region.start), Math.ceil(region.end), {
+    const sourceChr = resolveChromosome(region.chr, this.chromosomes) ?? region.chr
+    const records = await this.reader.getRecordsForRange(sourceChr, Math.floor(region.start), Math.ceil(region.end), {
       signal,
       viewAsPairs: options.bamViewAsPairs ?? false,
       pairAcrossChr: false,
