@@ -46,18 +46,17 @@ import {
 } from './track-document.ts'
 import type { MatrixOutline, MatrixPalette, SignalScaleChannel, SourceFormat, TrackDocument, TrackSourceSpec, TrackSpec } from './track-document.ts'
 import type { Region, TrackSource, TrackRuntime } from './types.ts'
-import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { cloudLocalBytes, describeNativeFile, hydrateNativeFile, isDesktopApp, NativeFileHandle, prepareBedGraphCache, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
+import { cloudLocalBytes, describeNativeFile, hydrateNativeFile, isDesktopApp, listNativeDirectory, NativeFileHandle, prepareBedGraphCache, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
 import { cloudProgressPercent } from './cloud-file-progress.ts'
-import { pickNativeTrackPaths } from './desktop-track-picker.ts'
+import { pickNativeFilePaths, pickNativeTrackPaths } from './desktop-track-picker.ts'
 import { openNativeFiles } from './open-track-files.ts'
 import { startIndependentSourceRestores } from './independent-source-restores.ts'
 import { LAST_TRACK_FOLDER_KEY, parentFolderOfFile } from './track-picker-state.ts'
 import type { LocalFileDescriptor } from './native-file.ts'
 import { SUPPORTED_TRACK_EXTENSION_LABEL } from './supported-formats.ts'
 import { migrateLegacyStorage, STORAGE_KEYS } from './storage.ts'
-import { workspaceDirectory, workspaceFileName, workspaceSaveDefaultPath } from './workspace-save.ts'
+import { workspaceDirectory, workspaceFileName } from './workspace-save.ts'
 import { AppUpdateController, createTauriUpdateBackend, updateProgressPercent } from './app-update.ts'
 import type { AppUpdateState } from './app-update.ts'
 import { installWindowsCursorScaleCorrection } from './platform-cursors.ts'
@@ -715,7 +714,8 @@ referencePopup.addEventListener('click', (event) => {
   const importOption = (event.target as Element).closest<HTMLButtonElement>('[data-reference-import]')
   if (importOption) {
     setReferenceMenu(false)
-    referenceFileInput.click()
+    if (isDesktopApp()) void importDesktopReference()
+    else referenceFileInput.click()
     return
   }
   const option = (event.target as Element).closest<HTMLButtonElement>('[data-reference-id]')
@@ -3641,12 +3641,17 @@ async function saveWorkspace(): Promise<void> {
 async function saveWorkspaceAs(): Promise<void> {
   if (!isDesktopApp()) return downloadWorkspace()
   try {
-    const path = await saveDialog({
-      title: 'Save GeRAFE workspace',
-      defaultPath: workspaceSaveDefaultPath(lastWorkspaceSaveDirectory, workspaceFileName(store.current.referenceId)),
-      filters: [{ name: 'GeRAFE workspace', extensions: ['gerafe.json', 'json'] }],
-    })
+    const path = (await pickNativeFilePaths({
+      title: 'Save GeRAFE workspace as', category: 'WORKSPACE FILES',
+      fileMatches: (name) => /\.json$/i.test(name),
+      startFolder: lastWorkspaceSaveDirectory,
+      saveFileName: workspaceFileName(store.current.referenceId),
+    }))?.[0]
     if (!path) return
+    const folder = parentFolderOfFile(path)
+    if (!folder) throw new Error('Choose a folder before saving the workspace.')
+    const exists = (await listNativeDirectory(folder)).entries.some((entry) => !entry.isDirectory && nativeFilePathKey(entry.path) === nativeFilePathKey(path))
+    if (exists && !await confirmAction({ title: 'Replace workspace file?', message: `“${workspacePathLabel(path)}” already exists. Replace it with the current workspace?`, submitLabel: 'Replace file', danger: true })) return
     await writeWorkspace(path)
   } catch (error) {
     showToast(error instanceof Error ? error.message : String(error), true)
@@ -3669,12 +3674,11 @@ async function openWorkspacePicker(): Promise<void> {
     return
   }
   try {
-    const path = await openDialog({
-      title: 'Open GeRAFE workspace',
-      multiple: false,
-      defaultPath: lastWorkspaceSaveDirectory,
-      filters: [{ name: 'GeRAFE workspace', extensions: ['gerafe.json', 'locus.json', 'json'] }],
-    })
+    const path = (await pickNativeFilePaths({
+      title: 'Open GeRAFE workspace', category: 'WORKSPACE FILES',
+      fileMatches: (name) => /\.json$/i.test(name),
+      startFolder: lastWorkspaceSaveDirectory,
+    }))?.[0]
     if (!path) return
     await openWorkspaceContents(await readNativeTextFile(path), workspacePathLabel(path), path)
   } catch (error) {
@@ -3688,14 +3692,15 @@ async function openIgvSessionPicker(): Promise<void> {
     return
   }
   try {
-    const path = await openDialog({
-      title: 'Import IGV XML session',
-      multiple: false,
-      defaultPath: lastWorkspaceSaveDirectory,
-      filters: [{ name: 'IGV session', extensions: ['xml'] }],
-    })
+    const path = (await pickNativeFilePaths({
+      title: 'Import IGV XML session', category: 'IGV SESSION FILES',
+      fileMatches: (name) => /\.xml$/i.test(name),
+      startFolder: localStorage.getItem('gerafe:last-igv-folder') || lastWorkspaceSaveDirectory,
+    }))?.[0]
     if (!path) return
     const session = parseIgvSessionXml(await readNativeTextFile(path))
+    const directory = parentFolderOfFile(path)
+    if (directory) localStorage.setItem('gerafe:last-igv-folder', directory)
     await showIgvSessionPreview(session, path)
   } catch (error) {
     showToast(error instanceof Error ? error.message : String(error), true)
@@ -3772,7 +3777,12 @@ async function showIgvSessionPreview(session: IgvSession, sessionPath: string): 
         index.type = 'button'
         index.textContent = 'Set index…'
         index.addEventListener('click', async () => {
-          const path = await openDialog({ title: 'Choose BAM index', multiple: false, filters: [{ name: 'BAM index', extensions: ['bai', 'csi'] }] })
+          const path = (await pickNativeFilePaths({
+            title: 'Choose BAM index', category: 'BAM INDEX FILES',
+            fileMatches: (name) => /\.(?:bai|csi)$/i.test(name),
+            startFolder: parentFolderOfFile(overrides.get(item.resource.key)?.path ?? item.path),
+            getOpenFiles: () => openNativeFiles(store.current),
+          }))?.[0]
           if (!path || !alive) return
           overrides.set(item.resource.key, { ...overrides.get(item.resource.key), index: path })
           await checkFiles()
@@ -3912,8 +3922,34 @@ function escapeHtml(value: string): string {
 async function importReference(file: File | undefined): Promise<void> {
   if (!file) return
   try {
-    const chromosomes = parseChromosomeIndex(await file.text())
-    const baseName = file.name.replace(/(?:\.fa)?\.fai$|\.genome$|\.chrom\.sizes$|\.sizes$|\.txt$/i, '') || 'Custom reference'
+    await importReferenceContents(await file.text(), file.name)
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error), true)
+  } finally {
+    referenceFileInput.value = ''
+  }
+}
+
+async function importDesktopReference(): Promise<void> {
+  try {
+    const path = (await pickNativeFilePaths({
+      title: 'Import chromosome index', category: 'REFERENCE FILES',
+      fileMatches: (name) => /(?:\.fai|\.genome|\.chrom\.sizes|\.sizes|\.txt)$/i.test(name),
+      startFolder: localStorage.getItem('gerafe:last-reference-folder') || undefined,
+    }))?.[0]
+    if (!path) return
+    await importReferenceContents(await readNativeTextFile(path), workspacePathLabel(path))
+    const directory = parentFolderOfFile(path)
+    if (directory) localStorage.setItem('gerafe:last-reference-folder', directory)
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error), true)
+  }
+}
+
+async function importReferenceContents(contents: string, fileName: string): Promise<void> {
+  try {
+    const chromosomes = parseChromosomeIndex(contents)
+    const baseName = fileName.replace(/(?:\.fa)?\.fai$|\.genome$|\.chrom\.sizes$|\.sizes$|\.txt$/i, '') || 'Custom reference'
     const reference: ReferenceGenome = {
       id: `custom-${Date.now().toString(36)}`,
       name: baseName,
@@ -3925,8 +3961,6 @@ async function importReference(file: File | undefined): Promise<void> {
     await switchReference(reference.id)
   } catch (error) {
     showToast(error instanceof Error ? error.message : String(error), true)
-  } finally {
-    referenceFileInput.value = ''
   }
 }
 

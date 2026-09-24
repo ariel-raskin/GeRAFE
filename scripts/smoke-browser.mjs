@@ -92,6 +92,48 @@ await page.locator('.track-file-picker [data-action="open"]').click()
 const pickerPaths = await page.evaluate(() => window.__trackPickerSmoke)
 const pickerClosed = await page.locator('.track-file-picker').count() === 0
 const pickerState = await page.evaluate(() => ({ visited: window.__pickerVisited, lastTrack: localStorage.getItem('gerafe:last-track-folder'), lastWorkspace: localStorage.getItem('gerafe-workspace-directory'), saved: localStorage.getItem('gerafe:saved-track-folders') }))
+await page.evaluate(async () => {
+  const { pickNativeFilePaths } = await import('/src/desktop-track-picker.ts')
+  window.__sharedBrowse = async (path) => ({ path: path ?? 'D:\\Workspaces', parent: 'D:\\', drives: ['C:\\', 'D:\\'], entries: [
+    { name: 'study.gerafe.json', path: 'D:\\Workspaces\\study.gerafe.json', isDirectory: false },
+    { name: 'legacy.locus.json', path: 'D:\\Workspaces\\legacy.locus.json', isDirectory: false },
+    { name: 'session.xml', path: 'D:\\Workspaces\\session.xml', isDirectory: false },
+    { name: 'reference.fai', path: 'D:\\Workspaces\\reference.fai', isDirectory: false },
+    { name: 'sample.bam.bai', path: 'D:\\Workspaces\\sample.bam.bai', isDirectory: false },
+  ] })
+  window.__workspacePickerSmoke = pickNativeFilePaths({ title: 'Open GeRAFE workspace', category: 'WORKSPACE FILES', fileMatches: (name) => /\.json$/i.test(name), startFolder: 'D:\\Workspaces' }, window.__sharedBrowse)
+})
+const workspaceFilter = await page.locator('.track-file-picker-entry:not(.is-folder)').allTextContents()
+await page.locator('.track-file-picker-entry').filter({ hasText: 'study.gerafe.json' }).click()
+await page.locator('.track-file-picker [data-action="open"]').click()
+const workspacePickerPath = await page.evaluate(() => window.__workspacePickerSmoke)
+await page.evaluate(async () => {
+  const { pickNativeFilePaths } = await import('/src/desktop-track-picker.ts')
+  window.__savePickerSmoke = pickNativeFilePaths({ title: 'Save GeRAFE workspace as', category: 'WORKSPACE FILES', fileMatches: (name) => /\.json$/i.test(name), startFolder: 'D:\\Workspaces', saveFileName: 'new.gerafe.json' }, window.__sharedBrowse)
+})
+await page.locator('.track-file-picker [data-role="filename"]').fill('invalid\\name.json')
+const invalidSaveDisabled = await page.locator('.track-file-picker [data-action="open"]').isDisabled()
+await page.locator('.track-file-picker [data-role="filename"]').fill('figure.gerafe.json')
+await page.locator('.track-file-picker [data-action="open"]').click()
+const savePickerPath = await page.evaluate(() => window.__savePickerSmoke)
+await page.evaluate(async () => {
+  const parent = document.createElement('dialog')
+  parent.id = 'picker-parent-smoke'
+  parent.innerHTML = '<button type="button">Choose BAM index</button>'
+  document.body.append(parent)
+  parent.showModal()
+  const { pickNativeFilePaths } = await import('/src/desktop-track-picker.ts')
+  window.__nestedPickerSmoke = pickNativeFilePaths({ title: 'Choose BAM index', category: 'BAM INDEX FILES', fileMatches: (name) => /\.(?:bai|csi)$/i.test(name), startFolder: 'D:\\Workspaces' }, window.__sharedBrowse)
+})
+const nestedIndexFilter = await page.locator('.track-file-picker-entry:not(.is-folder)').allTextContents()
+await page.locator('.track-file-picker-entry').filter({ hasText: 'sample.bam.bai' }).click()
+await page.locator('.track-file-picker [data-action="open"]').click()
+const nestedPickerPath = await page.evaluate(() => {
+  document.querySelector('#picker-parent-smoke').close()
+  document.querySelector('#picker-parent-smoke').remove()
+  return window.__nestedPickerSmoke
+})
+const sharedPickerState = await page.evaluate(() => ({ lastTrack: localStorage.getItem('gerafe:last-track-folder'), lastWorkspace: localStorage.getItem('gerafe-workspace-directory') }))
 const openingTrackCanvas = await page.evaluate(async () => {
   const { GenomeBrowser } = await import('/src/browser.ts')
   const { createTrackDocument, addSignalTrack, removeTrack } = await import('/src/track-document.ts')
@@ -165,6 +207,7 @@ const emptyWorkspaceBrand = await page.locator('.empty-workspace-brand').evaluat
 const cornerBrandCount = await page.locator('.corner-brand').count()
 const footerHeight = await page.locator('.browser-footer').evaluate((element) => element.getBoundingClientRect().height)
 if (!pickerHidesUnsupported || !pickerSavedShortcut || !pickerOnlineOnlyBadge?.includes('Online-only') || !pickerRefreshedBadge?.includes('On this device') || !pickerOpenTrackBadge?.includes('In workspace') || !pickerIndexInUseBadge?.includes('Index in use') || !pickerRemovedOpenBadge || !pickerSelectionText?.includes('2 selected') || pickerPaths.length !== 2 || !pickerPaths.some((path) => path.endsWith('signal.bw')) || !pickerPaths.some((path) => path.endsWith('sample.bam.bai')) || !pickerClosed || pickerState.visited[0] !== 'C:\\Smoke' || !pickerState.visited.includes('C:\\') || pickerState.lastTrack !== 'C:\\Smoke' || pickerState.lastWorkspace !== 'D:\\Workspaces' || !pickerState.saved?.includes('C:\\\\Smoke')) throw new Error('In-app track picker smoke failed')
+if (workspaceFilter.length !== 2 || !workspaceFilter.some((name) => name.includes('legacy.locus.json')) || workspacePickerPath?.[0] !== 'D:\\Workspaces\\study.gerafe.json' || !invalidSaveDisabled || savePickerPath?.[0] !== 'D:\\Workspaces\\figure.gerafe.json' || nestedIndexFilter.length !== 1 || nestedPickerPath?.[0] !== 'D:\\Workspaces\\sample.bam.bai' || sharedPickerState.lastTrack !== 'C:\\Smoke' || sharedPickerState.lastWorkspace !== 'D:\\Workspaces') throw new Error('Shared desktop file browser smoke failed')
 if (openingTrackCanvas.order[0] !== 'pending-track' || openingTrackCanvas.filled.slice(0, 3).join(',') === openingTrackCanvas.empty.slice(0, 3).join(',') || openingTrackCanvas.indeterminateStart.slice(0, 3).join(',') !== openingTrackCanvas.indeterminateEnd.slice(0, 3).join(',') || openingTrackCanvas.filled.slice(0, 3).join(',') === openingTrackCanvas.afterRemoval.slice(0, 3).join(',')) throw new Error(`In-row cloud progress smoke failed: ${JSON.stringify(openingTrackCanvas)}; ${consoleErrors.join('; ')}`)
 if (!initialTrackStatus?.includes('0 tracks loaded')) throw new Error(`Unexpected initial status: ${initialTrackStatus}; ${consoleErrors.join('; ')}`)
 await page.locator('#locus-input').fill('  CHR1   109,681,277    110,058,784  ')

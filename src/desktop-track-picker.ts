@@ -6,18 +6,29 @@ export function isSupportedPickerFile(name: string): boolean {
   return /\.(?:bw|bigwig|bedgraph|bedgraph\.gz|tdf|bam|bai|csi|bed|bedpe|hic|cool|mcool)$/i.test(name)
 }
 
-export async function pickNativeTrackPaths(
+export interface NativeFilePickerOptions {
+  title: string
+  category: string
+  fileMatches: (name: string) => boolean
+  startFolder?: string
+  multiple?: boolean
+  saveFileName?: string
+  getOpenFiles?: () => ReadonlyMap<string, OpenNativeFileRole>
+}
+
+/** Shared desktop browser for opening one/many files and choosing a Save As path. */
+export async function pickNativeFilePaths(
+  options: NativeFilePickerOptions,
   browse: (path?: string) => Promise<NativeDirectoryListing> = listNativeDirectory,
-  getOpenFiles: () => ReadonlyMap<string, OpenNativeFileRole> = () => new Map(),
 ): Promise<string[] | null> {
-  const dialog = document.createElement('div')
+  const saving = options.saveFileName !== undefined
+  const getOpenFiles = options.getOpenFiles ?? (() => new Map<string, OpenNativeFileRole>())
+  const dialog = document.createElement('dialog')
   dialog.className = 'track-file-picker'
-  dialog.setAttribute('role', 'dialog')
-  dialog.setAttribute('aria-modal', 'true')
-  dialog.setAttribute('aria-label', 'Open genomics tracks')
+  dialog.setAttribute('aria-label', options.title)
   dialog.innerHTML = `
     <div class="track-file-picker-card">
-      <header><div><small>TRACK FILES</small><strong>Open genomics tracks</strong></div><button class="picker-icon-button" type="button" data-action="close" aria-label="Close file browser">×</button></header>
+      <header><div><small data-role="category"></small><strong data-role="title"></strong></div><button class="picker-icon-button" type="button" data-action="close" aria-label="Close file browser">×</button></header>
       <div class="track-file-picker-navigation">
         <div class="track-file-picker-breadcrumbs" data-role="breadcrumbs" aria-label="Current folder path"></div>
         <div class="track-file-picker-location">
@@ -33,12 +44,22 @@ export async function pickNativeTrackPaths(
         <div class="track-file-picker-favorites" data-role="favorites" aria-label="Saved folders"></div>
         <button class="picker-button picker-save-folder" type="button" data-action="save-folder" title="Save this folder as a quick button">☆ Save folder</button>
       </div>
-      <div class="track-file-picker-search-row"><input class="track-file-picker-search" data-role="search" aria-label="Filter files and folders" placeholder="Filter files and folders in this location…" spellcheck="false" autocomplete="off" /><small>Choose multiple files before opening</small></div>
-      <div class="track-file-picker-list" data-role="list" role="listbox" aria-label="Files and folders" aria-multiselectable="true"></div>
+      <div class="track-file-picker-search-row"><input class="track-file-picker-search" data-role="search" aria-label="Filter files and folders" placeholder="Filter files and folders in this location…" spellcheck="false" autocomplete="off" /><small data-role="hint"></small></div>
+      <div class="track-file-picker-list" data-role="list" role="listbox" aria-label="Files and folders"></div>
+      <label class="track-file-picker-file-name" data-role="filename-row" hidden>File name <input data-role="filename" aria-label="File name" spellcheck="false" autocomplete="off" /></label>
       <div class="track-file-picker-summary" data-role="summary"></div>
-      <footer><button class="picker-button" type="button" data-action="cancel">Cancel</button><button class="picker-button picker-button-primary" type="button" data-action="open" disabled>Open selected</button></footer>
+      <footer><button class="picker-button" type="button" data-action="cancel">Cancel</button><button class="picker-button picker-button-primary" type="button" data-action="open" disabled></button></footer>
     </div>`
+  dialog.querySelector<HTMLElement>('[data-role="category"]')!.textContent = options.category
+  dialog.querySelector<HTMLElement>('[data-role="title"]')!.textContent = options.title
+  dialog.querySelector<HTMLElement>('[data-role="hint"]')!.textContent = saving ? 'Choose a folder and enter a file name' : options.multiple ? 'Choose multiple files before opening' : 'Choose one file to open'
+  dialog.querySelector<HTMLElement>('[data-role="filename-row"]')!.hidden = !saving
+  dialog.querySelector<HTMLElement>('[data-role="list"]')!.setAttribute('aria-multiselectable', String(Boolean(options.multiple)))
+  const fileNameInput = dialog.querySelector<HTMLInputElement>('[data-role="filename"]')!
+  fileNameInput.value = options.saveFileName ?? ''
+  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
   document.body.append(dialog)
+  dialog.showModal()
   const pathInput = dialog.querySelector<HTMLInputElement>('[data-role="path"]')!
   const searchInput = dialog.querySelector<HTMLInputElement>('[data-role="search"]')!
   const list = dialog.querySelector<HTMLElement>('[data-role="list"]')!
@@ -48,8 +69,8 @@ export async function pickNativeTrackPaths(
   const saveFolderButton = dialog.querySelector<HTMLButtonElement>('[data-action="save-folder"]')!
   const summary = dialog.querySelector<HTMLElement>('[data-role="summary"]')!
   const openButton = dialog.querySelector<HTMLButtonElement>('[data-action="open"]')!
+  openButton.textContent = saving ? 'Save here' : options.multiple ? 'Open selected' : 'Open file'
   const upButton = dialog.querySelector<HTMLButtonElement>('[data-action="up"]')!
-  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
   const selected = new Map<string, string>()
   let savedFolders = parseSavedTrackFolders(localStorage.getItem(SAVED_TRACK_FOLDERS_KEY))
   let listing: NativeDirectoryListing | undefined
@@ -61,14 +82,22 @@ export async function pickNativeTrackPaths(
   const finish = (paths: string[] | null): void => {
     if (closed) return
     closed = true
+    dialog.close()
     dialog.remove()
     window.removeEventListener('keydown', onKeyDown, true)
     previousFocus?.focus()
     settle(paths)
   }
   const updateSelection = (): void => {
+    if (saving) {
+      const name = fileNameInput.value.trim()
+      const error = nativeSaveFileNameError(name) ?? (name && !options.fileMatches(name) ? 'Use a supported file name extension.' : undefined)
+      openButton.disabled = !listing || Boolean(error)
+      summary.textContent = error ?? (listing ? `Save in ${listing.path}` : 'Choose a folder.')
+      return
+    }
     openButton.disabled = selected.size === 0
-    summary.textContent = selected.size ? `${selected.size} selected: ${[...selected.values()].slice(0, 3).join(', ')}${selected.size > 3 ? ', …' : ''}` : 'Select one or more files; include a BAM index if it is not beside the BAM.'
+    summary.textContent = selected.size ? `${selected.size} selected: ${[...selected.values()].slice(0, 3).join(', ')}${selected.size > 3 ? ', …' : ''}` : options.multiple ? 'Select one or more files; include a BAM index if it is not beside the BAM.' : 'Select a file to open.'
   }
   const renderFavorites = (): void => {
     favorites.replaceChildren()
@@ -124,7 +153,7 @@ export async function pickNativeTrackPaths(
   const render = (): void => {
     if (!listing) return
     const term = searchInput.value.trim().toLowerCase()
-    const entries = listing.entries.filter((entry) => (entry.isDirectory || isSupportedPickerFile(entry.name)) && entry.name.toLowerCase().includes(term))
+    const entries = listing.entries.filter((entry) => (entry.isDirectory || options.fileMatches(entry.name)) && entry.name.toLowerCase().includes(term))
     const openFiles = getOpenFiles()
     list.replaceChildren()
     for (const entry of entries.slice(0, 600)) {
@@ -134,6 +163,7 @@ export async function pickNativeTrackPaths(
       const row = document.createElement('button')
       row.type = 'button'
       row.className = `track-file-picker-entry${entry.isDirectory ? ' is-folder' : ''}`
+      row.dataset.path = entry.path
       row.setAttribute('role', 'option')
       row.setAttribute('aria-selected', String(!entry.isDirectory && selected.has(entry.path)))
       row.title = [entry.path, openLabel, availabilityLabel === 'Online-only' ? 'Online-only: opening may download this file' : availabilityLabel].filter(Boolean).join('\n')
@@ -158,17 +188,23 @@ export async function pickNativeTrackPaths(
       }
       row.addEventListener('click', () => {
         if (entry.isDirectory) { void navigate(entry.path); return }
+        if (saving) { fileNameInput.value = entry.name; updateSelection(); return }
         if (selected.has(entry.path)) selected.delete(entry.path)
-        else selected.set(entry.path, entry.name)
-        const active = selected.has(entry.path)
-        row.setAttribute('aria-selected', String(active))
-        icon.textContent = active ? '✓' : '□'
+        else {
+          if (!options.multiple) selected.clear()
+          selected.set(entry.path, entry.name)
+        }
+        for (const option of list.querySelectorAll<HTMLButtonElement>('.track-file-picker-entry:not(.is-folder)')) {
+          const active = selected.has(option.dataset.path!)
+          option.setAttribute('aria-selected', String(active))
+          option.querySelector<HTMLElement>('.track-file-picker-entry-icon')!.textContent = active ? '✓' : '□'
+        }
         updateSelection()
       })
       row.addEventListener('dblclick', () => {
         if (entry.isDirectory) return
-        selected.set(entry.path, entry.name)
-        finish([...selected.keys()])
+        if (saving) { fileNameInput.value = entry.name; submit(); return }
+        finish(options.multiple ? [...selected.keys(), ...(selected.has(entry.path) ? [] : [entry.path])] : [entry.path])
       })
       list.append(row)
     }
@@ -182,6 +218,11 @@ export async function pickNativeTrackPaths(
   const navigate = async (path?: string, fallback = false): Promise<void> => {
     const request = ++requestNumber
     list.textContent = 'Loading folder…'
+    if (saving) {
+      listing = undefined
+      updateSelection()
+      renderFavorites()
+    }
     try {
       const next = await browse(path)
       if (closed || request !== requestNumber) return
@@ -209,13 +250,20 @@ export async function pickNativeTrackPaths(
       list.textContent = error instanceof Error ? error.message : String(error)
     }
   }
+  const submit = (): void => {
+    if (saving) {
+      const name = fileNameInput.value.trim()
+      if (!listing || nativeSaveFileNameError(name) || !options.fileMatches(name)) return
+      finish([joinNativeFolderFile(listing.path, name)])
+    } else if (selected.size) finish([...selected.keys()])
+  }
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape') {
       event.preventDefault()
       event.stopPropagation()
       finish(null)
     } else if (event.key === 'Tab') {
-      const focusable = [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input')]
+      const focusable = [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not([hidden])')].filter((element) => element.offsetParent !== null)
       if (!focusable.length) return
       const first = focusable[0]
       const last = focusable.at(-1)!
@@ -229,6 +277,7 @@ export async function pickNativeTrackPaths(
     }
   }
   window.addEventListener('keydown', onKeyDown, true)
+  dialog.addEventListener('cancel', (event) => { event.preventDefault(); finish(null) })
   dialog.addEventListener('click', (event) => { if (event.target === dialog) finish(null) })
   dialog.querySelector('[data-action="close"]')!.addEventListener('click', () => finish(null))
   dialog.querySelector('[data-action="cancel"]')!.addEventListener('click', () => finish(null))
@@ -236,6 +285,8 @@ export async function pickNativeTrackPaths(
   dialog.querySelector('[data-action="go"]')!.addEventListener('click', () => void navigate(pathInput.value.trim()))
   dialog.querySelector('[data-action="refresh"]')!.addEventListener('click', () => void navigate(listing?.path ?? pathInput.value.trim()))
   pathInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') void navigate(pathInput.value.trim()) })
+  fileNameInput.addEventListener('input', updateSelection)
+  fileNameInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') submit() })
   searchInput.addEventListener('input', render)
   saveFolderButton.addEventListener('click', () => {
     if (!listing || savedFolders.some((path) => path.toLowerCase() === listing!.path.toLowerCase()) || savedFolders.length >= 16) return
@@ -243,10 +294,25 @@ export async function pickNativeTrackPaths(
     localStorage.setItem(SAVED_TRACK_FOLDERS_KEY, JSON.stringify(savedFolders))
     renderFavorites()
   })
-  openButton.addEventListener('click', () => {
-    if (!selected.size) return
-    finish([...selected.keys()])
-  })
-  void navigate(localStorage.getItem(LAST_TRACK_FOLDER_KEY) || undefined, true)
+  openButton.addEventListener('click', submit)
+  void navigate(options.startFolder, true)
   return result
+}
+
+export function nativeSaveFileNameError(name: string): string | undefined {
+  if (!name) return 'Enter a file name.'
+  if (/[<>:"/\\|?*\x00-\x1f]/.test(name) || /[. ]$/.test(name)) return 'Use a file name without path separators, reserved characters, or a trailing dot/space.'
+  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) return 'That name is reserved by Windows.'
+  return undefined
+}
+
+export function joinNativeFolderFile(folder: string, name: string): string {
+  return `${folder.replace(/[\\/]+$/, '')}${folder.includes('\\') ? '\\' : '/'}${name}`
+}
+
+export async function pickNativeTrackPaths(
+  browse: (path?: string) => Promise<NativeDirectoryListing> = listNativeDirectory,
+  getOpenFiles: () => ReadonlyMap<string, OpenNativeFileRole> = () => new Map(),
+): Promise<string[] | null> {
+  return pickNativeFilePaths({ title: 'Open genomics tracks', category: 'TRACK FILES', fileMatches: isSupportedPickerFile, startFolder: localStorage.getItem(LAST_TRACK_FOLDER_KEY) || undefined, multiple: true, getOpenFiles }, browse)
 }
