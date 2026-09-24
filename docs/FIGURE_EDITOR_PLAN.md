@@ -1,6 +1,6 @@
 # Figure Editor plan
 
-Status: the initial FE workspace merged in PR #170; renderer-fidelity and real-file validation continue under issue #164. The existing [shared track system direction](TRACK_SYSTEM_DIRECTION.md) is the architectural starting point.
+Status: the first usable FE workflow merged in PRs #170 and #171 under issue #164. Browser-based real-file export was checked for BigWig, BED, BEDPE, and BAM; native `.hic`, `.cool`, and `.mcool` sources passed real-file query tests, while FE matrix geometry has synthetic renderer tests. Matrix files require the desktop app, so an end-to-end automated FE matrix export remains future validation. The existing [shared track system direction](TRACK_SYSTEM_DIRECTION.md) is the architectural starting point.
 
 ## Goal
 
