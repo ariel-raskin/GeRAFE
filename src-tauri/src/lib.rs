@@ -404,6 +404,18 @@ fn write_text_file(path: String, contents: String) -> Result<(), String> {
     fs::write(&path, contents).map_err(|error| format!("Could not save {path}: {error}"))
 }
 
+#[tauri::command]
+fn write_binary_file(path: String, base64_contents: String) -> Result<(), String> {
+    use base64::Engine;
+    let contents = base64::engine::general_purpose::STANDARD
+        .decode(base64_contents)
+        .map_err(|error| format!("Could not decode figure export: {error}"))?;
+    if contents.len() > 100 * 1024 * 1024 {
+        return Err("Figure exports cannot exceed 100 MB".to_string());
+    }
+    fs::write(&path, contents).map_err(|error| format!("Could not save {path}: {error}"))
+}
+
 fn cursor_dimension(value: u8) -> u16 {
     if value == 0 {
         256
@@ -683,6 +695,7 @@ pub fn run() {
             read_file_range,
             read_text_file,
             write_text_file,
+            write_binary_file,
             windows_cursor_asset,
             windows_text_scale_percent,
             prepare_bedgraph_cache,

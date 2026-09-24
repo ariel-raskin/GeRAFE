@@ -49,7 +49,7 @@ import type { Region, TrackSource, TrackRuntime } from './types.ts'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { cloudLocalBytes, describeNativeFile, hydrateNativeFile, isDesktopApp, listNativeDirectory, NativeFileHandle, prepareBedGraphCache, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
 import { cloudProgressPercent } from './cloud-file-progress.ts'
-import { pickNativeFilePaths, pickNativeTrackPaths } from './desktop-track-picker.ts'
+import { isSupportedPickerFile, pickNativeFilePaths, pickNativeTrackPaths } from './desktop-track-picker.ts'
 import { openNativeFiles } from './open-track-files.ts'
 import { startIndependentSourceRestores } from './independent-source-restores.ts'
 import { LAST_TRACK_FOLDER_KEY, parentFolderOfFile } from './track-picker-state.ts'
@@ -65,6 +65,8 @@ import { groupSelection } from './track-selection.ts'
 import { buildIgvTrackDocument, igvPathsToCheck, parseIgvSessionXml, previewIgvSession } from './igv-session.ts'
 import type { IgvPreview, IgvSession } from './igv-session.ts'
 import { nativeFilePathKey } from './open-track-files.ts'
+import { createFigureDocument, type FigureDocument } from './figure-document.ts'
+import { FigureEditor } from './figure-editor.ts'
 
 void installWindowsCursorScaleCorrection()
 
@@ -182,6 +184,8 @@ app.innerHTML = `
         <button type="submit" aria-label="Go to locus">Go</button>
       </form>
       <div class="toolbar-spacer"></div>
+      <button class="create-figure-button" id="create-figure" type="button" title="Create an editable figure from the current view">Create figure</button>
+      <button class="create-figure-button" id="new-figure" type="button" title="Start a new figure from this GeR view" hidden>New from view</button>
       <div class="app-menu region-tools-control" id="region-menu-root">
         <button class="menu-trigger region-tools-button" id="region-menu-button" type="button" aria-haspopup="menu" aria-expanded="false" title="Select, save, and revisit genomic regions">Regions <small id="region-menu-count"></small></button>
         <div class="menu-popover region-menu-popover" id="region-menu-popup" role="menu" hidden>
@@ -498,6 +502,8 @@ const actionDialogSubmit = document.querySelector<HTMLButtonElement>('#action-di
 const zoomLevel = document.querySelector<HTMLInputElement>('#zoom-level')!
 const fitTracksAuto = document.querySelector<HTMLButtonElement>('#fit-tracks-auto')!
 const regionMenuButton = document.querySelector<HTMLButtonElement>('#region-menu-button')!
+const createFigureButton = document.querySelector<HTMLButtonElement>('#create-figure')!
+const newFigureButton = document.querySelector<HTMLButtonElement>('#new-figure')!
 const regionMenuCount = document.querySelector<HTMLElement>('#region-menu-count')!
 const regionMenuPopup = document.querySelector<HTMLElement>('#region-menu-popup')!
 const savedRegionItems = document.querySelector<HTMLElement>('#saved-region-items')!
@@ -509,6 +515,7 @@ const regionSnapMatrixBins = document.querySelector<HTMLButtonElement>('#region-
 const regionSnapStatus = document.querySelector<HTMLElement>('#region-snap-status')!
 
 const runtimeSources = new Map<string, TrackSource>()
+let figureEditor: FigureEditor | undefined
 const selectedTrackIds = new Set<string>()
 const contextSubmenuItems = new Map<string, string>()
 let lastSelectedTrackId: string | undefined
@@ -671,6 +678,13 @@ store.subscribe((document, reason) => {
 })
 emptyWorkspace.hidden = store.current.tracks.some((track) => track.kind !== 'genes')
 browser.syncDocument(store.current, runtimeSources)
+createFigureButton.addEventListener('click', () => {
+  if (figureEditor) figureEditor.show()
+  else openNewFigureEditor()
+})
+newFigureButton.addEventListener('click', () => void confirmAction({
+  title: 'Start a new figure?', message: 'The current FE draft will be replaced. Save it first if you want to keep it.', submitLabel: 'Start new figure', danger: true,
+}).then((confirmed) => { if (confirmed) { figureEditor?.dispose(); figureEditor = undefined; openNewFigureEditor() } }))
 if (isDesktopApp()) void restorePersistedSources()
 browser.setSelectedTracks(selectedTrackIds)
 fitBottomPaneToContent()
@@ -678,6 +692,21 @@ window.setTimeout(fitBottomPaneToContent, 0)
 updateUpperAutoFitControl()
 scheduleUpperAutoFit()
 renderRegionMenu()
+
+function openNewFigureEditor(): void {
+  const sourceDocument = structuredClone(store.current)
+  sourceDocument.region = browser.getRegion()
+  figureEditor = new FigureEditor({
+    document: createFigureDocument(sourceDocument),
+    sources: new Map(runtimeSources),
+    genes: () => activeReference.id === figureEditor?.currentDocument.referenceId ? activeGeneSource : undefined,
+    chromosomes: (referenceId) => references.get(referenceId)?.chromosomes,
+    restoreSources: restoreFigureRuntimeSources,
+    relinkSource: relinkFigureSource,
+    onClose: () => { createFigureButton.textContent = 'Continue figure'; newFigureButton.hidden = false },
+  })
+  figureEditor.show()
+}
 
 populateReferences()
 populateChromosomes(activeChromosomes)
@@ -1448,6 +1477,69 @@ function restorePersistedSources(): void {
     if (generation !== sourceRestoreGeneration) return
     console.warn(`Could not start restore for ${sourceSpec.name}`, error)
     showToast(`Could not reopen ${sourceSpec.name}`, true)
+  })
+}
+
+async function restoreFigureRuntimeSources(figure: FigureDocument): Promise<ReadonlyMap<string, TrackSource>> {
+  const restored = new Map<string, TrackSource>()
+  const usedIds = new Set(figure.columns.flatMap((column) => Object.values(column.assignments).flatMap((ids) => ids))
+    .flatMap((trackId) => figure.sourceDocument.tracks.find((track) => track.id === trackId)?.sourceIds ?? []))
+  await Promise.all(figure.sourceDocument.sources.filter((source) => usedIds.has(source.id)).map(async (sourceSpec) => {
+    const active = runtimeSources.get(sourceSpec.id)
+    if (active) { restored.set(sourceSpec.id, active); return }
+    if (!isDesktopApp() || !sourceSpec.files.length || sourceSpec.files.some((file) => !file.path)) return
+    try {
+      const descriptors = await Promise.all(sourceSpec.files.map(async (file) => {
+        const descriptor = await describeNativeFile(file.path!)
+        if (descriptor.size !== file.size) throw new Error(`${file.name} has changed size since the figure was saved.`)
+        return descriptor
+      }))
+      for (const descriptor of descriptors) await prepareCloudFile(descriptor, () => {})
+      const primary = descriptors.find((_, index) => sourceSpec.files[index].role === 'signal')!
+      const source = sourceSpec.format === 'matrix-comparison'
+        ? new MatrixComparisonSource(sourceSpec.name,
+          await NativeMatrixSource.open(descriptors[0].name, descriptors[0].path, matrixFormatForName(descriptors[0].name)!),
+          await NativeMatrixSource.open(descriptors[1].name, descriptors[1].path, matrixFormatForName(descriptors[1].name)!))
+        : sourceSpec.format === 'matrix-derived'
+          ? new NativeMatrixDerivedSource(sourceSpec.name,
+            await NativeMatrixSource.open(primary.name, primary.path, matrixFormatForName(primary.name)!),
+            sourceSpec.matrixDerivedMode!, sourceSpec.matrixDerivedNormalization!, sourceSpec.matrixDerivedResolution)
+          : (await sourceFromNativeFile(primary, descriptors, () => {})).source
+      restored.set(sourceSpec.id, source)
+    } catch (error) {
+      console.warn(`Could not reopen figure source ${sourceSpec.name}`, error)
+    }
+  }))
+  return restored
+}
+
+async function relinkFigureSource(figure: FigureDocument, sourceId: string): Promise<OpenedSource | undefined> {
+  const expected = figure.sourceDocument.sources.find((item) => item.id === sourceId)
+  if (!expected) throw new Error('This source is not in the figure project.')
+  if (expected.format === 'matrix-comparison' || expected.format === 'matrix-derived') throw new Error('Reopen the original matrix files in GeR, then create a new figure for this derived matrix source.')
+  if (isDesktopApp()) {
+    const paths = await pickNativeFilePaths({ title: `Relink ${expected.name}`, category: 'FIGURE SOURCE', fileMatches: isSupportedPickerFile, multiple: true, startFolder: localStorage.getItem(LAST_TRACK_FOLDER_KEY) || undefined })
+    if (!paths?.length) return undefined
+    const selected = await Promise.all(paths.map(describeNativeFile))
+    const primary = selected.find((file) => !/\.(bai|csi)$/i.test(file.name))
+    if (!primary) throw new Error('Select a data file and its index if required.')
+    const opened = await sourceFromNativeFile(primary, selected, () => {})
+    if (opened.sourceSpec.format !== expected.format) throw new Error(`Expected a ${expected.format} source, but selected ${opened.sourceSpec.format}.`)
+    return opened
+  }
+  return new Promise<OpenedSource | undefined>((resolve, reject) => {
+    const input = document.createElement('input')
+    input.type = 'file'; input.multiple = true
+    input.addEventListener('change', () => {
+      const selected = [...(input.files ?? [])]
+      const primary = selected.find((file) => !/\.(bai|csi)$/i.test(file.name))
+      if (!primary) { resolve(undefined); return }
+      void sourceFromFile(primary, selected).then((opened) => {
+        if (opened.sourceSpec.format !== expected.format) throw new Error(`Expected a ${expected.format} source, but selected ${opened.sourceSpec.format}.`)
+        resolve(opened)
+      }).catch(reject)
+    }, { once: true })
+    input.click()
   })
 }
 
