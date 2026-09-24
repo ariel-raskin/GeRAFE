@@ -1185,6 +1185,7 @@ dependencies = [
 name = "gerafe"
 version = "0.2.0"
 dependencies = [
+ "base64 0.22.1",
  "bigtools",
  "dirs",
  "flate2",

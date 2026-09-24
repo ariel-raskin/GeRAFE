@@ -1,6 +1,6 @@
 # Figure Editor plan
 
-Status: design plan, not implemented. The existing [shared track system direction](TRACK_SYSTEM_DIRECTION.md) is the architectural starting point.
+Status: initial Figure Editor implementation in progress under issue #164. The existing [shared track system direction](TRACK_SYSTEM_DIRECTION.md) is the architectural starting point.
 
 ## Goal
 
@@ -10,13 +10,13 @@ FE must render from the same source data and semantic track definitions as GeR. 
 
 ## Handoff and document behavior
 
-1. **Create figure from current view** is available near the GeR view controls. It opens FE with the current reference, exact locus, visible tracks and their ordering, display groups, signal stacks, scale bindings, colors, labels, and saved highlights/outlines relevant to the view.
+1. **Create figure from current view** is available near the GeR view controls. It opens FE with the current reference, exact locus, every loaded track in GeR order (including lower-area tracks below upper-area tracks), display groups, signal stacks, scale bindings, colors, labels, and saved highlights/outlines relevant to the view. FE has one unified row area, not GeR's upper/lower split.
 2. FE starts as an independent snapshot of the GeR document, retaining stable source and track identities. Figure-only edits do not silently change the GeR workspace. **Back to GeR** returns to the browser without losing the draft.
-3. An explicit **Update from GeR** action can refresh source/track content later. It must preview conflicts with FE overrides before replacing them. A new figure can also be made from a later GeR view.
+3. A later **New from view** action can start again from GeR. Automatic update/merge from GeR is deferred; it must preview conflicts with FE overrides before replacing them.
 4. Save FE projects separately from ordinary GeR workspaces, with versioned schema migrations. Save the figure specification and source provenance, not copied genomics data or rasterized plots. Reopening must identify missing or changed files and offer relinking.
 5. Exporting never overwrites the editable FE project. The exported image records enough metadata to reproduce its dimensions and source/region choices.
 
-The first version is one genomic panel. It preserves GeR's visual track order and initial upper/lower arrangement, but FE owns the final spacing and layout. Multiple aligned loci/panels are a later phase, not a prerequisite for a useful first figure.
+The first version supports one or two aligned columns. Each column has its own locus and ruler. Rows are figure track positions, and each column can assign a different loaded GeR track to a row (for example, dTAG versus AGB1 treatment at the same locus, or the same tracks at two distant regions). Adding a second column initially duplicates the first column's assignments. Cross-window interactions are clipped to each window; a discontinuous arc must not be drawn across the gap. Beyond two columns and arbitrary panel layouts are later work.
 
 ## Interface
 
@@ -24,7 +24,7 @@ The first version is one genomic panel. It preserves GeR's visual track order an
 - The center is a page preview with physical page bounds, safe margins, rulers/guides, zoom-to-fit, and export-area indication. Preview zoom does not change exported dimensions.
 - A compact layer list shows page, genomic ruler, groups, tracks, and annotations in figure order. Selecting a layer reveals only its relevant controls in a contextual inspector.
 - Direct manipulation covers track height, gaps, label placement, and boundaries; the inspector provides exact numeric values. Multi-selection supports bulk styling, alignment, and spacing.
-- Coordinates use the same reference and flexible locus input as GeR. Editing the region updates all aligned tracks together. An explicit scale lock prevents accidental changes in quantitative interpretation.
+- A wider context preview shows the current crop with draggable left and right boundaries. Coordinates, gene names, and saved regions are alternate precise inputs. Columns can have independent regions or linked edits. Signal scales are shared across columns by default, with independent and fixed options.
 - Undo/redo spans figure edits. Reset-to-GeR/default controls make experimentation reversible.
 
 The inspector should make every visible text, label, axis, outline, line, fill, and spacing element adjustable, without displaying every option at once. Controls are organized by page, group, track, axis/ruler, and annotation. Values shared across many tracks can be changed in bulk; a selected element can override them locally.
@@ -49,10 +49,10 @@ FE should inherit sensible GeR defaults, so the first preview is already close t
 
 ## Implementation sequence
 
-1. **Shared-render foundation:** separate data querying and domain computation from GeR's screen-size-dependent canvas layout. Define a stable render scene and figure document with tests for genomic coordinate mapping, ordering, source identity, and scale agreement.
-2. **First usable FE:** one-click handoff, independent draft, page preview, region editing, layer selection, physical track sizes/gaps, typography and label controls, save/reopen, undo/redo, and high-resolution PNG/SVG export.
+1. **Source-driven figure foundation:** a separate versioned figure document retains GeR track/source identities; FE queries the same source objects at its own resolution and lays them out in physical units. Test genomic coordinate mapping, ordering, source identity, and scale behavior. Reusing GeR's exact canvas drawing primitives remains a later rendering-fidelity improvement.
+2. **First usable FE:** one-click handoff of all loaded tracks, independent draft, one/two-column preview, per-column assignments/regions, region crop, layer selection, physical track sizes/gaps, typography and graph controls, save/reopen/relink, undo/redo, and high-resolution PNG/SVG export.
 3. **Publication polish:** legends, titles/captions, alignment guides, editable callouts, export preflight/provenance, consistent font handling, and PDF.
-4. **Advanced figures:** multiple aligned panels or loci, reusable templates, explicit refresh from GeR with conflict handling, and more specialized track presentations.
+4. **Advanced figures:** more than two columns/arbitrary panels, reusable templates, explicit refresh from GeR with conflict handling, and more specialized track presentations.
 
 Each phase should include real-file smoke tests for representative signal, interval/gene, BEDPE, BAM, and matrix tracks as they become exportable, plus checks at different page sizes and output resolutions. A track kind is not considered FE-ready merely because its browser canvas can be captured.
 
