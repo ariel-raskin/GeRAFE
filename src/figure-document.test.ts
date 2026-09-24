@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { addFigureColumn, createFigureDocument, FigureDocumentStore, normalizeFigureDocument, setFigureColumnRegion } from './figure-document.ts'
-import { addSignalTrack, createTrackDocument } from './track-document.ts'
+import { addFigureColumn, createFigureDocument, figureRequiredSourceIds, FigureDocumentStore, normalizeFigureDocument, setFigureColumnRegion } from './figure-document.ts'
+import { addInteractionTrack, addMatrixTrack, addSignalTrack, createTrackDocument } from './track-document.ts'
 
 function browserDocument() {
   const document = createTrackDocument('hg38', { chr: 'chr1', start: 100, end: 200 })
@@ -56,5 +56,26 @@ describe('figure document', () => {
     expect(reopened.columns[1].styles?.[rowId]).toMatchObject({ color: '#abcdef', scaleMin: -2, scaleMax: 8 })
     reopened.columns[1].styles![rowId].scaleMax = -3
     expect(() => normalizeFigureDocument(reopened)).toThrow(/fixed figure scale/i)
+  })
+
+  it('requires a linked BEDPE source even when its own figure row is removed', () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 1000 })
+    addInteractionTrack(document, { id: 'arcs', name: 'arcs.bedpe', format: 'bedpe', files: [] }, { id: 'arc-track' })
+    addMatrixTrack(document, { id: 'contacts', name: 'contacts.cool', format: 'cool', files: [] }, { id: 'matrix-track' })
+    document.tracks.find((track) => track.id === 'matrix-track')!.matrixOverlayInteractionTrackId = 'arc-track'
+    const figure = createFigureDocument(document)
+    figure.rows.find((row) => row.trackIds.includes('arc-track'))!.included = false
+    expect([...figureRequiredSourceIds(figure)].sort()).toEqual(['arcs', 'contacts'])
+  })
+
+  it('keeps figure-only annotation line widths through project normalization', () => {
+    const document = browserDocument()
+    document.savedRegions.push({ id: 'focus', label: 'Focus', region: { chr: 'chr1', start: 110, end: 140 }, color: '#ff0000', highlighted: true, boundaryStyle: 'solid', fill: true, shadeOpacity: 0.2 })
+    const figure = createFigureDocument(document)
+    figure.annotationStyles = { 'region:focus': { lineWidthMm: 0.65 } }
+    const restored = normalizeFigureDocument(JSON.parse(JSON.stringify(figure)))
+    expect(restored.annotationStyles?.['region:focus'].lineWidthMm).toBe(0.65)
+    restored.annotationStyles!['region:focus'].lineWidthMm = 10
+    expect(normalizeFigureDocument(restored).annotationStyles?.['region:focus'].lineWidthMm).toBe(3)
   })
 })

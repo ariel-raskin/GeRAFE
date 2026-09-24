@@ -51,6 +51,7 @@ export interface FigureCellStyle {
   scaleMin?: number
   scaleMax?: number
   showScale?: boolean
+  matrixPalette?: 'source' | 'warm' | 'blue-black' | 'single'
 }
 
 export interface FigureDocument {
@@ -63,6 +64,7 @@ export interface FigureDocument {
   rows: FigureRow[]
   columns: FigureColumn[]
   linkedRegions: boolean
+  annotationStyles?: Record<string, { lineWidthMm?: number }>
 }
 
 export function createFigureDocument(source: TrackDocument): FigureDocument {
@@ -93,6 +95,7 @@ export function createFigureDocument(source: TrackDocument): FigureDocument {
     rows,
     columns: [{ id: crypto.randomUUID(), title: '', region: { ...snapshot.region }, assignments: Object.fromEntries(rows.map((row) => [row.id, [...row.trackIds]])), styles: {} }],
     linkedRegions: false,
+    annotationStyles: {},
   }
 }
 
@@ -147,15 +150,26 @@ export function normalizeFigureDocument(value: unknown): FigureDocument {
         scaleMin: typeof style.scaleMin === 'number' && Number.isFinite(style.scaleMin) ? style.scaleMin : undefined,
         scaleMax: typeof style.scaleMax === 'number' && Number.isFinite(style.scaleMax) ? style.scaleMax : undefined,
         showScale: style.showScale === undefined ? undefined : style.showScale === true,
+        matrixPalette: ['source', 'warm', 'blue-black', 'single'].includes(style.matrixPalette ?? '') ? style.matrixPalette : undefined,
       }
       if (styles[rowId].scaleMode === 'fixed' && (!(Number.isFinite(styles[rowId].scaleMin)) || !(Number.isFinite(styles[rowId].scaleMax)) || styles[rowId].scaleMax! <= styles[rowId].scaleMin!)) throw new Error('A fixed figure scale needs a minimum below its maximum.')
     }
     return { id: column.id, title: String(column.title ?? ''), region: { ...column.region }, assignments, styles }
   })
   const page = input.page
+  const annotationIds = new Set([
+    ...sourceDocument.savedRegions.map((item) => `region:${item.id}`),
+    ...sourceDocument.comparisonDividers.map((item) => `divider:${item.id}`),
+    ...sourceDocument.matrixOutlines.map((item) => `outline:${item.id}`),
+  ])
+  const annotationStyles: Record<string, { lineWidthMm?: number }> = {}
+  for (const [id, style] of Object.entries(input.annotationStyles ?? {})) {
+    if (!annotationIds.has(id) || !style || typeof style !== 'object') continue
+    annotationStyles[id] = { lineWidthMm: style.lineWidthMm === undefined ? undefined : boundedNumber(style.lineWidthMm, 0.05, 3, 0.2) }
+  }
   return {
     schemaVersion: FIGURE_DOCUMENT_VERSION, id: String(input.id ?? crypto.randomUUID()), name: String(input.name ?? 'Untitled figure'),
-    referenceId: sourceDocument.referenceId, sourceDocument, rows, columns, linkedRegions: input.linkedRegions === true,
+    referenceId: sourceDocument.referenceId, sourceDocument, rows, columns, linkedRegions: input.linkedRegions === true, annotationStyles,
     page: {
       widthMm: boundedNumber(page.widthMm, 50, 600, 180), heightMm: page.heightMm === 0 ? 0 : boundedNumber(page.heightMm, 50, 600, 0), marginMm: boundedNumber(page.marginMm, 0, 100, 7),
       labelWidthMm: boundedNumber(page.labelWidthMm, 0, 120, 30), columnGapMm: boundedNumber(page.columnGapMm, 0, 100, 8),
@@ -235,4 +249,21 @@ export function setFigureColumnRegion(draft: FigureDocument, columnId: string, r
       other.region = { chr: other.region.chr, start: Math.max(0, other.region.start + startDelta), end: Math.max(1, other.region.end + endDelta) }
     } else other.region = { ...region }
   }
+}
+
+/** Includes BEDPE files used only as overlays on an included matrix row. */
+export function figureRequiredSourceIds(document: FigureDocument): Set<string> {
+  const required = new Set<string>()
+  for (const row of document.rows) {
+    if (!row.included) continue
+    for (const column of document.columns) for (const trackId of column.assignments[row.id] ?? []) {
+      const track = document.sourceDocument.tracks.find((item) => item.id === trackId)
+      for (const sourceId of track?.sourceIds ?? []) required.add(sourceId)
+      if (track?.kind === 'matrix' && track.matrixOverlayInteractionTrackId) {
+        const overlay = document.sourceDocument.tracks.find((item) => item.id === track.matrixOverlayInteractionTrackId)
+        for (const sourceId of overlay?.sourceIds ?? []) required.add(sourceId)
+      }
+    }
+  }
+  return required
 }

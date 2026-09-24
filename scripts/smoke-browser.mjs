@@ -266,6 +266,10 @@ if (dataPaths.length > 0) {
   await page.waitForFunction((count) => {
     try { return JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').sources?.length === count } catch { return false }
   }, expectedSources, { timeout: 5_000 })
+  if (process.env.GERAFE_SMOKE_FIGURE_LOCUS) {
+    await page.locator('#locus-input').fill(process.env.GERAFE_SMOKE_FIGURE_LOCUS)
+    await page.locator('#locus-form').press('Enter')
+  }
   await page.locator('#new-figure').click()
   await page.locator('#action-dialog').waitFor({ state: 'visible' })
   await page.locator('#action-dialog-submit').click()
@@ -274,6 +278,15 @@ if (dataPaths.length > 0) {
   const [realFigureSvgDownload] = await Promise.all([page.waitForEvent('download'), page.locator('.figure-editor [data-action="export-svg"]').click()])
   const realFigureSvg = await readFile(await realFigureSvgDownload.path(), 'utf8')
   if (realFigureRows < expectedSources + 1 || !realFigureSvg.includes('data-fe-row=') || !dataPaths.some((path) => realFigureSvg.includes(path.split(/[\\/]/).at(-1)))) throw new Error('Real-file Figure Editor handoff/export smoke failed')
+  if (process.env.GERAFE_SMOKE_FIGURE_EXPECT_DATA === '1') {
+    const counts = await page.locator('.fe-page svg metadata').evaluate((element) => JSON.parse(element.textContent ?? '{}').queryCounts)
+    if (!counts?.some((cell) => Object.values(cell.featureTypes ?? {}).some((types) => Object.entries(types).some(([type, count]) => type !== 'coverage' && count > 0)))) throw new Error('Real-file figure source returned no non-coverage features at the requested locus')
+  }
+  if (process.env.GERAFE_SMOKE_FIGURE_EXPECT_MARK && !realFigureSvg.includes(process.env.GERAFE_SMOKE_FIGURE_EXPECT_MARK)) {
+    const counts = await page.locator('.fe-page svg metadata').evaluate((element) => JSON.parse(element.textContent ?? '{}').queryCounts)
+    console.error('Figure export query counts:', JSON.stringify(counts))
+    throw new Error(`Real-file figure export is missing ${process.env.GERAFE_SMOKE_FIGURE_EXPECT_MARK}`)
+  }
   await page.locator('.figure-editor [data-action="back"]').click()
   if (process.env.GERAFE_SMOKE_FIGURE_ONLY === '1') {
     console.log(`Figure Editor real-file handoff and SVG export passed for ${expectedSources} sources.`)

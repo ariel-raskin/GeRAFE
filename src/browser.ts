@@ -4066,7 +4066,7 @@ function scoreColor(score: number, minimum: number, maximum: number): string {
   return `hsl(${250 - fraction * 210} 62% 48%)`
 }
 
-function interactionFeatureColor(feature: InteractionFeature, spec: TrackSpec, minimum: number, maximum: number): string {
+export function interactionFeatureColor(feature: InteractionFeature, spec: TrackSpec, minimum: number, maximum: number): string {
   return spec.interactionColorMode === 'item-rgb' ? feature.itemRgb ?? spec.color
     : spec.interactionColorMode === 'score' && feature.score !== undefined ? scoreColor(feature.score, minimum, maximum)
       : spec.color
