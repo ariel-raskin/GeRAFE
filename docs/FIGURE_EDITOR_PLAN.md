@@ -1,6 +1,6 @@
 # Figure Editor plan
 
-Status: initial Figure Editor implementation in progress under issue #164. The existing [shared track system direction](TRACK_SYSTEM_DIRECTION.md) is the architectural starting point.
+Status: the initial FE workspace merged in PR #170; renderer-fidelity and real-file validation continue under issue #164. The existing [shared track system direction](TRACK_SYSTEM_DIRECTION.md) is the architectural starting point.
 
 ## Goal
 
