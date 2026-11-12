@@ -189,9 +189,9 @@ app.innerHTML = `
       <div class="app-menu region-tools-control" id="region-menu-root">
         <button class="menu-trigger region-tools-button" id="region-menu-button" type="button" aria-haspopup="menu" aria-expanded="false" title="Select, save, and revisit genomic regions">Regions <small id="region-menu-count"></small></button>
         <div class="menu-popover region-menu-popover" id="region-menu-popup" role="menu" hidden>
-          <div class="region-menu-heading">Comparison dividers</div>
-          <button class="menu-item" type="button" data-region-action="place-divider"><span>Add comparison divider…</span></button>
-          <button class="menu-item" id="clear-comparison-dividers" type="button" data-region-action="clear-dividers"><span>Clear all comparison dividers</span></button>
+          <div class="region-menu-heading">Scale dividers</div>
+          <button class="menu-item" type="button" data-region-action="place-divider"><span>Add scale divider…</span></button>
+          <button class="menu-item" id="clear-comparison-dividers" type="button" data-region-action="clear-dividers"><span>Clear all scale dividers</span></button>
           <div id="comparison-divider-items"></div>
           <span class="menu-separator"></span>
           <div class="region-menu-heading">Matrix outlines</div>
@@ -340,7 +340,8 @@ app.innerHTML = `
             <h3>Regions and matrices</h3>
             <ul>
               <li><span>Hold <kbd>Ctrl</kbd> and drag</span><small>Add a highlighted genomic region.</small></li>
-              <li><span>Hover a region edge or divider</span><small>Drag the resize cursor to move that boundary.</small></li>
+              <li><span><kbd>Shift</kbd>-click the plot or ruler</span><small>Place a Scale divider.</small></li>
+              <li><span>Hover a region edge or Scale divider</span><small>Drag to move the boundary, or right-click for its controls.</small></li>
               <li><span>Triangular matrix annotations</span><small>Resize regions from their slanted sides and manual outlines from their corners.</small></li>
             </ul>
           </section>
@@ -596,6 +597,9 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
   },
   onComparisonDividerMove(id, position) {
     store.edit((draft) => { const divider = draft.comparisonDividers.find((item) => item.id === id); if (divider) divider.position = position })
+  },
+  onRegionLineContextMenu(kind, id, x, y) {
+    openRegionLineContextMenu(kind, id, x, y)
   },
   onRegionToolModeChange(mode) {
     activeRegionTool = mode
@@ -979,6 +983,13 @@ fileInput.addEventListener('cancel', () => { pendingOpenGroupId = undefined })
 workspaceFileInput.addEventListener('change', () => void openWorkspace(workspaceFileInput.files?.[0]))
 relinkFileInput.addEventListener('change', () => void relinkTrack(relinkFileInput.files))
 trackContextMenu.addEventListener('click', handleTrackContextAction)
+trackContextMenu.addEventListener('click', (event) => {
+  if (!(event.target as Element).closest('[data-line-action]')) return
+  closeTrackContextMenu()
+  void handleRegionMenuAction(event)
+})
+trackContextMenu.addEventListener('input', handleRegionMenuSettingPreview)
+trackContextMenu.addEventListener('change', handleRegionMenuSettingChange)
 trackContextFlyout.addEventListener('click', handleTrackContextAction)
 trackContextMenu.addEventListener('click', (event) => {
   const trigger = (event.target as Element).closest<HTMLButtonElement>('[data-context-submenu]')
@@ -1631,7 +1642,7 @@ function renderRegionMenu(): void {
   const outlines = store.current.matrixOutlines
   regionMenuCount.textContent = regions.length + outlines.length ? String(regions.length + outlines.length) : ''
   regionMenuButton.title = activeRegionTool === 'select' ? 'Drag across the ruler or track area to save a region'
-    : activeRegionTool === 'divider' ? 'Click in the ruler or track area to place the comparison divider'
+    : activeRegionTool === 'divider' ? 'Click in the ruler or track area to place the scale divider'
       : activeRegionTool === 'matrix-outline' ? 'Drag across matrix bins to add an outline'
       : 'Select, save, and revisit genomic regions'
   const dividers = store.current.comparisonDividers
@@ -1643,14 +1654,14 @@ function renderRegionMenu(): void {
   comparisonDividerItems.innerHTML = dividers.length ? dividers.map((divider, index) => {
     const id = encodeURIComponent(divider.id)
     return `<div class="saved-region-row">
-      <button class="saved-region-go" type="button" data-divider-go="${id}" title="Center comparison divider">
+      <button class="saved-region-go" type="button" data-divider-go="${id}" title="Center scale divider">
         <i style="background:${escapeHtml(divider.color)}"></i><span><strong>Divider ${index + 1}</strong><small>${escapeHtml(`${divider.chr}:${(divider.position + 1).toLocaleString()}`)}</small></span>
       </button>
       <button class="saved-region-icon" type="button" data-divider-style="${id}" title="Use ${divider.lineStyle === 'dashed' ? 'solid' : 'dashed'} line" aria-label="Toggle divider ${index + 1} line style">${divider.lineStyle === 'dashed' ? '┄' : '—'}</button>
       <button class="saved-region-icon" type="button" data-divider-color="${id}" title="Set divider color" aria-label="Set divider ${index + 1} color" style="color:${escapeHtml(divider.color)}">●</button>
       <button class="saved-region-icon remove" type="button" data-divider-remove="${id}" title="Remove divider" aria-label="Remove divider ${index + 1}">×</button>
     </div>`
-  }).join('') : '<p class="saved-region-empty">No comparison dividers yet.</p>'
+  }).join('') : '<p class="saved-region-empty">No scale dividers yet.</p>'
   const matrixTracks = store.current.tracks.filter((track) => track.kind === 'matrix')
   matrixOutlineItems.innerHTML = outlines.length ? outlines.map((outline) => {
     const id = encodeURIComponent(outline.id)
@@ -1751,7 +1762,7 @@ async function handleRegionMenuAction(event: Event): Promise<void> {
     } else if (button.dataset.dividerRemove !== undefined) {
       store.edit((draft) => { draft.comparisonDividers = draft.comparisonDividers.filter((item) => item.id !== dividerId) })
     } else {
-      const color = await requestColor('Set comparison divider color', divider.color)
+      const color = await requestColor('Set scale divider color', divider.color)
       if (color) store.edit((draft) => { const item = draft.comparisonDividers.find((candidate) => candidate.id === dividerId); if (item) item.color = color })
     }
     return
@@ -1823,6 +1834,10 @@ function handleRegionMenuSettingChange(event: Event): void {
     else if (element.dataset.regionFill !== undefined && element instanceof HTMLInputElement) region.fill = element.checked
     else if (element.dataset.regionOpacity !== undefined) region.shadeOpacity = Math.max(0.01, Math.min(0.5, Number(element.value) / 100))
   })
+  if (element.dataset.regionFill !== undefined) {
+    const opacity = trackContextMenu.querySelector<HTMLInputElement>('[data-region-opacity]')
+    if (opacity) opacity.disabled = !(element as HTMLInputElement).checked
+  }
 }
 
 function matrixTrackCompatibleWithOutline(track: TrackSpec, outline: Pick<MatrixOutline, 'axis1' | 'axis2'>): boolean {
@@ -1902,7 +1917,7 @@ async function switchReference(id: string): Promise<void> {
   } else browser.setRegion(defaultRegion(reference))
   if (previousReferenceId !== reference.id && (store.current.savedRegions.length || store.current.comparisonDividers.length || store.current.matrixOutlines.length)) {
     store.edit((draft) => { draft.savedRegions = []; draft.comparisonDividers = []; draft.matrixOutlines = [] })
-    showToast('Cleared saved regions and comparison dividers for the new reference.')
+    showToast('Cleared saved regions and scale dividers for the new reference.')
   }
   await activateGeneTrack(reference)
   localStorage.setItem(WORKSPACE_KEY, JSON.stringify(store.current))
@@ -1942,6 +1957,30 @@ function clearTrackSelection(): void {
   selectedTrackIds.clear()
   lastSelectedTrackId = undefined
   browser.setSelectedTracks(selectedTrackIds)
+}
+
+function openRegionLineContextMenu(kind: 'divider' | 'region', id: string, x: number, y: number): void {
+  const divider = kind === 'divider' ? store.current.comparisonDividers.find((item) => item.id === id) : undefined
+  const saved = kind === 'region' ? store.current.savedRegions.find((item) => item.id === id) : undefined
+  if (!divider && !saved) return
+  closeMenus()
+  closeTrackContextMenu()
+  delete trackContextMenu.dataset.trackId
+  delete trackContextMenu.dataset.groupId
+  const encoded = encodeURIComponent(id)
+  const action = (name: string, label: string) => `<button class="context-item" type="button" data-line-action data-${kind}-${name}="${encoded}">${label}</button>`
+  trackContextMenu.innerHTML = divider
+    ? `<div class="context-heading"><strong>Scale divider</strong><span>${escapeHtml(`${divider.chr}:${(divider.position + 1).toLocaleString()}`)}</span></div>
+       ${action('go', 'Center on divider')}${action('style', `Use ${divider.lineStyle === 'dashed' ? 'solid' : 'dashed'} line`)}
+       ${action('color', 'Set color…')}${action('remove', 'Remove scale divider')}`
+    : `<div class="context-heading"><strong>${escapeHtml(saved!.label)}</strong><span>${escapeHtml(formatLocus(saved!.region))}</span></div>
+       ${action('go', 'Go to region')}${action('rename', 'Rename…')}${action('color', 'Set color…')}
+       <div class="saved-region-options">
+         <label><span>Boundary</span><select aria-label="Region boundary style" data-region-boundary="${encoded}"><option value="dashed" ${saved!.boundaryStyle === 'dashed' ? 'selected' : ''}>Dashed</option><option value="solid" ${saved!.boundaryStyle === 'solid' ? 'selected' : ''}>Solid</option><option value="none" ${saved!.boundaryStyle === 'none' ? 'selected' : ''}>None</option></select></label>
+         <label class="saved-region-fill"><input type="checkbox" data-region-fill="${encoded}" ${saved!.fill ? 'checked' : ''}/><span>Fill</span></label>
+         <label class="saved-region-shade"><span>Shade</span><input aria-label="Region shade opacity" type="range" min="1" max="50" step="1" value="${Math.round(saved!.shadeOpacity * 100)}" data-region-opacity="${encoded}" ${saved!.fill ? '' : 'disabled'}/><output>${Math.round(saved!.shadeOpacity * 100)}%</output></label>
+       </div>${action('toggle', 'Hide highlight')}${action('remove', 'Remove region')}`
+  positionContextMenu(x, y)
 }
 
 function openTrackContextMenu(trackId: string, x: number, y: number): void {

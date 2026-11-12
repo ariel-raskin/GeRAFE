@@ -29,6 +29,7 @@ export interface BrowserCallbacks {
   onMatrixOutlineResize(id: string, axis1: Region, axis2: Region): void
   onComparisonDividerCreate(position: number): void
   onComparisonDividerMove(id: string, position: number): void
+  onRegionLineContextMenu(kind: 'divider' | 'region', id: string, x: number, y: number): void
   onRegionToolModeChange(mode?: RegionToolMode): void
   onMatrixAxisChange(trackId: string, region: Region): void
   onPerformance(sample: { renderMs: number; fps: number; visibleFeatures: number }): void
@@ -599,6 +600,10 @@ export class GenomeBrowser {
 
   private beginRegionInteraction(canvas: HTMLCanvasElement, event: PointerEvent, pane?: 'main' | 'bottom'): boolean {
     if (event.offsetX < PLOT_LEFT) return false
+    if (!this.regionToolMode && event.shiftKey && !event.ctrlKey && !event.metaKey) {
+      this.callbacks.onComparisonDividerCreate(Math.round(this.plotCoordinate(canvas, event.offsetX)))
+      return true
+    }
     if (this.regionToolMode === 'matrix-outline') {
       if (!pane) return true
       const hit = this.matrixInspectionAt(canvas, pane, event)
@@ -971,6 +976,7 @@ export class GenomeBrowser {
     })
     canvas.addEventListener('contextmenu', (event) => {
       event.preventDefault()
+      if (this.openRegionLineContextMenu(canvas, event, pane)) return
       if (event.offsetX >= LABEL_WIDTH) return
       const hit = this.itemAt(canvas, pane, event.offsetX, event.offsetY)
       if (hit?.kind === 'track') this.callbacks.onTrackContextMenu(hit.id, event.clientX, event.clientY)
@@ -1028,7 +1034,19 @@ export class GenomeBrowser {
     canvas.addEventListener('dblclick', (event) => {
       if (event.offsetX >= PLOT_LEFT) this.zoom(0.5, (event.offsetX - PLOT_LEFT) / Math.max(1, this.cssWidth(canvas) - PLOT_LEFT))
     })
-    canvas.addEventListener('contextmenu', (event) => event.preventDefault())
+    canvas.addEventListener('contextmenu', (event) => {
+      event.preventDefault()
+      this.openRegionLineContextMenu(canvas, event)
+    })
+  }
+
+  private openRegionLineContextMenu(canvas: HTMLCanvasElement, event: MouseEvent, pane?: 'main' | 'bottom'): boolean {
+    if (this.regionToolMode || event.offsetX < PLOT_LEFT) return false
+    const divider = this.dividerAt(canvas, event.offsetX)
+    const boundary = divider ? undefined : this.savedRegionBoundaryAt(canvas, pane, event.offsetX, event.offsetY)
+    if (!divider && !boundary) return false
+    this.callbacks.onRegionLineContextMenu(divider ? 'divider' : 'region', divider?.id ?? boundary!.saved.id, event.clientX, event.clientY)
+    return true
   }
 
   private panHorizontally(canvas: HTMLCanvasElement, deltaPixels: number): void {
@@ -1484,12 +1502,6 @@ export class GenomeBrowser {
         ctx.beginPath(); ctx.moveTo(x - 5, 0); ctx.lineTo(x + 5, 0); ctx.lineTo(x, 7); ctx.closePath(); ctx.fill()
       }
     }
-    if (header) {
-      ctx.globalAlpha = 0.9
-      ctx.fillStyle = dividers[0]!.color
-      ctx.font = '9px Inter, system-ui, sans-serif'
-      ctx.fillText(dividers.length === 1 ? 'independent scale' : `${dividers.length + 1} scale sections`, Math.min(width - 92, this.plotX(canvas, dividers[0]!.position) + 7), 10)
-    }
     ctx.restore()
   }
 
@@ -1751,12 +1763,11 @@ export class GenomeBrowser {
     const fallbackDomain = resolvedSignalDomain(bins, domain)
     const canvas = this.context === this.bottomContext ? this.bottomCanvas : this.canvas
     const activeDomains = !segments?.length
-      ? [{ domain: fallbackDomain, x1: PLOT_LEFT, x2: width, side: '' }]
-      : segments.map((segment, index) => ({
+      ? [{ domain: fallbackDomain, x1: PLOT_LEFT, x2: width }]
+      : segments.map((segment) => ({
           domain: segment.domain ?? fallbackDomain,
           x1: this.plotX(canvas, segment.start),
           x2: this.plotX(canvas, segment.end),
-          side: segments.length === 2 ? index === 0 ? 'L' : 'R' : String(index + 1),
         }))
     const allNonnegative = activeDomains.every((item) => item.domain.min >= 0)
     const { top: chartTop, bottom: chartBottom } = signalChartBounds(top, bottom, allNonnegative && spec.signalStrand !== 'minus')
@@ -1768,7 +1779,7 @@ export class GenomeBrowser {
         const value = signalDomainScaleValue(item.domain)
         const signedValue = spec.signalStrand === 'minus' ? `−${formatScore(Math.abs(value))}` : formatScore(value)
         const labelY = spec.signalStrand === 'minus' ? chartBottom - 3 : chartTop + 10
-        if (value && item.x2 - item.x1 >= 48) ctx.fillText(`${item.side} ${signedValue}`, item.x1 + 5, labelY)
+        if (value && item.x2 - item.x1 >= 48) ctx.fillText(signedValue, item.x1 + 5, labelY)
       }
     }
     const scaleValue = signalDomainScaleValue(fallbackDomain)
@@ -1974,15 +1985,14 @@ export class GenomeBrowser {
       const canvas = this.context === this.bottomContext ? this.bottomCanvas : this.canvas
       ctx.fillStyle = palette.axisInk
       ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
-      segmentMagnitudes.forEach((segment, index) => {
+      segmentMagnitudes.forEach((segment) => {
         const x1 = this.plotX(canvas, segment.start)
         const x2 = this.plotX(canvas, segment.end)
         paintMagnitudeSide(ctx, plusBins, minusBins, spec, chartTop, zeroY, chartBottom, x1, x2,
           { plus: segment.plusMax, minus: segment.minusMax }, plusBinding?.transform ?? 'linear', minusBinding?.transform ?? 'linear')
         if (x2 - x1 < 64) return
-        const section = segmentMagnitudes.length === 2 ? index === 0 ? 'L' : 'R' : String(index + 1)
-        ctx.fillText(`${section} +${formatScore(segment.plusMax)}`, x1 + 5, chartTop + 10)
-        ctx.fillText(`${section} −${formatScore(segment.minusMax)}`, x1 + 5, chartBottom - 3)
+        ctx.fillText(`+${formatScore(segment.plusMax)}`, x1 + 5, chartTop + 10)
+        ctx.fillText(`−${formatScore(segment.minusMax)}`, x1 + 5, chartBottom - 3)
       })
     }
 
@@ -2653,15 +2663,13 @@ export class GenomeBrowser {
     const overallMax = maximum(features)
     const boundaries = [this.region.start, ...new Set(dividers.map((divider) => divider.position)), this.region.end]
     const sides = !dividers.length
-      ? [{ x1: PLOT_LEFT, x2: width, max: overallMax, label: '' }]
+      ? [{ x1: PLOT_LEFT, x2: width, max: overallMax }]
       : boundaries.slice(0, -1).map((start, index) => {
           const end = boundaries[index + 1]!
-          const label = boundaries.length === 3 ? index === 0 ? 'L ' : 'R ' : `${index + 1} `
           return {
             x1: PLOT_LEFT + (start - this.region.start) * scaleX,
             x2: PLOT_LEFT + (end - this.region.start) * scaleX,
             max: maximum(features.filter((feature) => feature.end > start && feature.start < end)),
-            label,
           }
         })
     for (const side of sides) {
@@ -2687,7 +2695,7 @@ export class GenomeBrowser {
       ctx.fillStyle = palette.axisInk
       ctx.globalAlpha = 1
       ctx.font = '9px ui-monospace, SFMono-Regular, Consolas, monospace'
-      if (side.x2 - side.x1 >= 40) ctx.fillText(`${side.label}${formatScore(side.max)}`, side.x1 + 4, top + 9)
+      if (side.x2 - side.x1 >= 40) ctx.fillText(formatScore(side.max), side.x1 + 4, top + 9)
     }
     ctx.globalAlpha = 1
     ctx.strokeStyle = palette.axisLine
