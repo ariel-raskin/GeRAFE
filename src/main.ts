@@ -348,7 +348,8 @@ app.innerHTML = `
             <h3>Regions and matrices</h3>
             <ul>
               <li><span>Hold <kbd>Ctrl</kbd> and drag</span><small>Add a highlighted genomic region.</small></li>
-              <li><span><kbd>Shift</kbd>-click the plot or ruler</span><small>Place a Scale divider.</small></li>
+              <li><span><kbd>Ctrl</kbd>-click the plot or ruler</span><small>Place a Scale divider.</small></li>
+              <li><span><kbd>Shift</kbd>-drag across the plot or ruler</span><small>Highlight a temporary span; right-click it to save a region, copy coordinates, or zoom.</small></li>
               <li><span>Hover a region edge or Scale divider</span><small>Drag to move the boundary, or right-click for its controls.</small></li>
               <li><span>Triangular matrix annotations</span><small>Resize regions from their slanted sides and manual outlines from their corners.</small></li>
             </ul>
@@ -552,7 +553,6 @@ let activeRegionTool: RegionToolMode | undefined
 let openRegionOptionsId: string | undefined
 let openMatrixOutlineOptionsId: string | undefined
 let pendingMatrixOutlineTargetIds: string[] | undefined
-let ctrlRegionSelectionActive = false
 
 interface OpenedSource {
   source: TrackSource
@@ -581,6 +581,9 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
   },
   onRegionSelected(region) {
     void saveBrowserRegion(region)
+  },
+  onHighlightedSpanContextMenu(region, x, y) {
+    openHighlightedSpanContextMenu(region, x, y)
   },
   onSavedRegionResize(id, region) {
     store.edit((draft) => { const saved = draft.savedRegions.find((item) => item.id === id); if (saved) saved.region = region })
@@ -678,6 +681,7 @@ window.setTimeout(showFirstRunInteractionHint, 450)
 let persistTimer: number | undefined
 let sourceRestoreGeneration = 0
 store.subscribe((document, reason) => {
+  if (reason === 'replace') browser.clearHighlightedSpan()
   window.clearTimeout(persistTimer)
   persistTimer = window.setTimeout(() => localStorage.setItem(WORKSPACE_KEY, JSON.stringify(document)), 180)
   if (reason !== 'viewport') browser.syncDocument(document, runtimeSources)
@@ -906,12 +910,8 @@ document.addEventListener('pointerdown', (event) => {
   if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog, #track-options-dialog, #interaction-guide-dialog, #matrix-settings-dialog, #action-dialog')) clearTrackSelection()
 })
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Control' && !event.repeat && !activeRegionTool
-    && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement) && !(event.target as HTMLElement).isContentEditable) {
-    ctrlRegionSelectionActive = true
-    browser.setRegionToolMode('select')
-  }
-  if (event.key === 'Escape') { ctrlRegionSelectionActive = false; pendingMatrixOutlineTargetIds = undefined; closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeInteractionGuide(); closeMatrixSettingsDialog(); closeActionDialog(undefined); browser.setRegionToolMode(undefined) }
+  if (event.key === 'Control' || event.key === 'Shift') browser.setPlotModifiers(event.ctrlKey, event.shiftKey)
+  if (event.key === 'Escape') { browser.clearHighlightedSpan(); pendingMatrixOutlineTargetIds = undefined; closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeInteractionGuide(); closeMatrixSettingsDialog(); closeActionDialog(undefined); browser.setRegionToolMode(undefined) }
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'o') {
     event.preventDefault()
     closeMenus()
@@ -945,14 +945,11 @@ document.addEventListener('keydown', (event) => {
   }
 })
 document.addEventListener('keyup', (event) => {
-  if (event.key !== 'Control' || !ctrlRegionSelectionActive) return
-  ctrlRegionSelectionActive = false
-  if (activeRegionTool === 'select') browser.setRegionToolMode(undefined)
+  if (event.key === 'Control' || event.key === 'Shift') browser.setPlotModifiers(event.ctrlKey, event.shiftKey)
 })
 window.addEventListener('blur', () => {
-  if (!ctrlRegionSelectionActive) return
-  ctrlRegionSelectionActive = false
-  if (activeRegionTool === 'select') browser.setRegionToolMode(undefined)
+  browser.setPlotModifiers(false, false)
+  browser.cancelSpanGesture()
 })
 
 function switchChromosome(chr: string): void {
@@ -992,6 +989,17 @@ fileInput.addEventListener('cancel', () => { pendingOpenGroupId = undefined })
 workspaceFileInput.addEventListener('change', () => void openWorkspace(workspaceFileInput.files?.[0]))
 relinkFileInput.addEventListener('change', () => void relinkTrack(relinkFileInput.files))
 trackContextMenu.addEventListener('click', handleTrackContextAction)
+trackContextMenu.addEventListener('click', async (event) => {
+  const action = (event.target as Element).closest<HTMLElement>('[data-span-action]')?.dataset.spanAction
+  if (!action) return
+  const span = browser.getHighlightedSpan()
+  closeTrackContextMenu()
+  if (!span) return
+  if (action === 'create') { if (await saveBrowserRegion(span)) browser.clearHighlightedSpan() }
+  else if (action === 'copy' || action === 'copy-bed') await copyRegionCoordinates(span, action === 'copy-bed' ? 'bed' : 'locus')
+  else if (action === 'zoom') browser.setRegion(span)
+  else if (action === 'clear') browser.clearHighlightedSpan()
+})
 trackContextMenu.addEventListener('click', (event) => {
   if (!(event.target as Element).closest('[data-line-action]')) return
   closeTrackContextMenu()
@@ -1952,11 +1960,11 @@ async function saveMatrixOutline(selection: { sourceTrackId: string; axis1: Regi
   showToast(`Added ${label} to ${targetTrackIds.length} matrix track${targetTrackIds.length === 1 ? '' : 's'}`)
 }
 
-async function saveBrowserRegion(region: Region): Promise<void> {
+async function saveBrowserRegion(region: Region): Promise<boolean> {
   const sequence = store.current.savedRegions.length + 1
   const label = (await requestText({ title: 'Save genomic region', label: 'Region name', initial: `Region ${sequence}`, submitLabel: 'Save region',
     message: formatLocus(region), validate: requiredName }))?.trim()
-  if (!label) return
+  if (!label) return false
   const color = TRACK_COLORS[store.current.savedRegions.length % TRACK_COLORS.length]
   store.edit((draft) => {
     draft.savedRegions.push({
@@ -1965,6 +1973,7 @@ async function saveBrowserRegion(region: Region): Promise<void> {
     })
   })
   showToast(`Saved ${label} · ${formatLocus(region)}`)
+  return true
 }
 
 async function switchReference(id: string): Promise<void> {
@@ -2040,6 +2049,18 @@ async function copyRegionCoordinates(region: Region, format: 'locus' | 'bed' = '
   const value = copyableRegion(region, format)
   try { await navigator.clipboard.writeText(value); showToast(`Copied ${format === 'bed' ? 'BED coordinates (0-based, end exclusive)' : value}`) }
   catch { await requestText({ title: 'Copy coordinates', label: format === 'bed' ? 'BED: 0-based, end exclusive' : 'Coordinates: 1-based inclusive', initial: value, submitLabel: 'Done', message: 'Automatic copying is unavailable. Select and copy the coordinates below.' }) }
+}
+
+function openHighlightedSpanContextMenu(region: Region, x: number, y: number): void {
+  closeMenus()
+  closeTrackContextMenu()
+  delete trackContextMenu.dataset.trackId
+  delete trackContextMenu.dataset.groupId
+  const action = (id: string, label: string) => `<button class="context-item" type="button" data-span-action="${id}">${label}</button>`
+  trackContextMenu.innerHTML = `<div class="context-heading"><strong>Selected span</strong><span>${escapeHtml(formatLocus(region))}</span></div>
+    ${action('create', 'Create region…')}${action('copy', 'Copy coordinates · 1-based inclusive')}${action('copy-bed', 'Copy as BED · 0-based, end exclusive')}
+    <span class="context-separator"></span>${action('zoom', 'Zoom to selected span')}${action('clear', 'Clear selection')}`
+  positionContextMenu(x, y)
 }
 
 function openRegionLineContextMenu(kind: 'divider' | 'region', id: string, x: number, y: number): void {
