@@ -55,6 +55,7 @@ GeRAFE is currently developed and tested as a Windows desktop application.
 | bedGraph | `.bedGraph`, `.bedGraph.gz` | Quantitative signal; the desktop app creates and reuses an indexed local cache for compressed or large files |
 | TDF | `.tdf` | Indexed IGV signal tiles, including compressed and uncompressed fixed-step, variable-step, BED, and BED-with-name tiles |
 | BAM | `.bam` with `.bai` or `.csi` | Coverage and packed read alignments with CIGAR geometry, pairing, mismatches, indels, and splice gaps |
+| Gene annotations | `.gtf`, `.gff`, `.gff3`, `.genepred`, `.gp` (also `.gz`) | Gene symbols, transcript isoforms, exons, and coding regions from local or downloaded annotation files |
 | BED | `.bed` | BED3–BED12 intervals, blocks, thick regions, strand, labels, scores, and item colors |
 | BEDPE | `.bedpe` | Paired genomic interactions as arcs and anchor blocks; interchromosomal contacts use labeled markers |
 | Hi-C | `.hic` | Indexed sparse cis contact matrices with source resolutions and KR/VC-family normalizations when present |
@@ -156,7 +157,19 @@ GeRAFE** to see the installed version.
 - Drag the slider between the zoom buttons for direct chromosome-scale zoom control; its left edge shows the full chromosome and its right edge reaches base-level detail.
 - Use the normal mouse wheel to scroll through tracks or an overflowing gene track.
 
+### Gene annotation sources
+
+Choose **File → Gene annotations…** (also available from a gene track’s right-click menu). **Import local annotation…** adds GTF, GFF/GFF3, or genePred files, including gzip-compressed files, as independent gene tracks. The usual Open tracks and drag-and-drop flows accept these formats too. Each track has its own source, display mode, transcript selection, TSS indicators, color, and label. Imported tracks can be relinked or removed through their Source/menu controls. Gene search accepts imported gene symbols, gene IDs, and transcript IDs, with imported annotations searched before the bundled index.
+
+The download catalog offers NCBI RefSeq and UCSC-aligned RefSeq from UCSC for hg38, hg19, mm39, and mm10; hg38 also offers pinned GENCODE v49 Basic and Ensembl release 115. Choose **Download and add track**, **Download file…**, or **Copy download URL**. Adding is enabled only when the selected assembly matches the active reference’s chromosome sizes. For another assembly, import its chromosome-size index first. UCSC genePred files are saved with a `.genepred.gz` extension so GeRAFE recognizes them on import; their contents remain the original UCSC table. UCSC tables are mutable snapshots, while the GENCODE/Ensembl entries identify a fixed release.
+
+Public downloads are cached on this computer, and workspaces record the URL, download date, assembly/reference identity, and file size. Cached annotations reopen without a network request. If the cache is absent on another computer, download the source again or relink a saved local file. Browser-imported local files need relinking after a page reload; desktop files reopen from their saved paths. Gene tracks and their source provenance carry into Figure Editor projects and exports. Genomic records themselves are not embedded in workspace or figure-project JSON.
+
+Annotation files must match the active assembly. Import converts GTF/GFF coordinates from 1-based inclusive to internal 0-based bounds, and keeps genePred coordinates unchanged. Common `chr` prefixes and mitochondrial names are matched to the active reference; contigs absent from that reference are skipped. Unsupported strandless gene models, malformed coordinates, or unresolved GFF3 exon/CDS parents produce an error. GFF3 gene/transcript/exon/CDS models are supported; arbitrary feature hierarchies and biotype filtering are not yet supported. Large files are read in chunks, but decoded gene models remain in memory. Catalog downloads are limited to 256 MB compressed; larger files can be downloaded separately and imported locally.
+
 ### Saved regions and scale dividers
+
+To copy a coordinate range, choose **Regions → Copy current coordinates** for `chr:start-end` text (1-based inclusive), or **Copy current view as BED** for tab-separated chromosome/start/end (0-based, end exclusive). Saved regions have a copy button in the Regions menu, and their boundary right-click menus provide both formats.
 
 Use the compact **Regions** menu beside **Fit tracks** to **Add region…** by dragging across the ruler or track area, or **Add current view as region…** directly. Holding `Ctrl` temporarily enables selection for the next left-button drag in the genomic plot. Saved regions keep a name, highlight color, genomic interval, and show/hide state. Their appearance panel chooses dashed, solid, or no boundary; fill on/off; and shade intensity, with the existing highlight updating live as the shade slider moves. This supports outline-only, fill-only, combined, or fully hidden interiors without drawing horizontal edges along track boundaries. Click a saved region to return to it; the adjacent controls toggle its highlight, show and edit its current color, rename it, or remove it. On ordinary tracks, hover either visible vertical boundary for the horizontal-resize cursor, then drag it to resize the saved interval. On a triangular cis matrix, the same cursor and drag action are available only on the two visible slanted sides of the region triangle. Panning translates region highlights and manual matrix outlines in genomic coordinates; annotations pass beneath the viewport edge and are clipped instead of being resized to the visible window. A matrix outline's upper geometry remains visible after either anchor leaves the base axis, until that geometry exits the rendered depth band. Manual matrix outlines also remain visible while an assigned matrix source is loading or offline.
 
@@ -270,6 +283,7 @@ Useful commands:
 | `npm run version:set -- 0.2.0` | Set all application version fields together |
 | `npm test` | Run the Vitest unit suite |
 | `npm run build` | Type-check and build the production frontend |
+| `node scripts/run-smoke.mjs --annotations` | Run only the annotation-library and coordinate-copy browser smoke checks |
 | `npm run smoke` | Start an isolated temporary development server, run the general browser smoke test, then stop it |
 | `npm run benchmark:data -- "C:\path\to\signal.bw"` | Benchmark indexed BigWig reads |
 
@@ -287,7 +301,7 @@ This is an early figure-rendering preview, not pixel-identical browser-renderer 
 
 ## Privacy
 
-GeRAFE reads genomic files locally. It does not upload tracks, workspaces, loci, or usage data, and it currently contains no telemetry. A saved workspace may contain absolute source paths, so inspect it before sharing it publicly.
+GeRAFE reads genomic files locally. The Gene annotations catalog downloads public files only when requested and reuses its local cache on reopening; it does not send the current locus or local genomic data to providers. It does not upload tracks, workspaces, loci, or usage data, and it currently contains no telemetry. A saved workspace may contain absolute source paths, so inspect it before sharing it publicly.
 
 ## Beta testing and feedback
 

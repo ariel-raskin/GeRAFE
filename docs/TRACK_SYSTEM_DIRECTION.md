@@ -171,3 +171,9 @@ The interactive browser can continue using Canvas for speed. Publication export 
 7. **Core implemented ahead of figure composition:** add indexed `.hic`, `.cool`, and `.mcool` cis matrix tracks, zoom-aware/manual resolutions, source normalizations, and a persisted triangular heatmap presentation. Extend this to interchromosomal two-axis views, expected/observed transforms, and richer matrix-derived annotations later.
 
 This ordering keeps Goal A moving while preventing browser-only decisions from becoming migration problems for Goal B.
+
+## Workspace schema 33: imported and downloaded gene annotations
+
+Schema 32 workspaces migrate by normalization to schema 33 without changing existing track source bindings. The bundled reference gene track continues to use `sourceIds: []`. Imported annotation tracks use `kind: 'genes'` and one source ID whose format is `gtf`, `gff3`, or `genepred`. `annotationReferenceId` binds the annotation to the reference under which it was read. Downloaded sources additionally store `annotationUrl` and `annotationDownloadedAt`; `files` retains the original/downloaded file name and byte size. Public file bytes are cached outside document JSON in the `gerafe-public-annotations` IndexedDB database. Cache misses leave an unavailable source for download or relinking; restoration does not make a network request.
+
+Each gene track renders from its own GeneSource, including in Figure Editor. Missing imported sources must not fall back to the bundled annotation. An annotation with a mismatched reference is unavailable and is reported in figure export preflight. Source IDs, provenance, and existing figure-required-source traversal preserve the annotation identity across GeR/FE handoff and project save/reopen. Source readers normalize GTF/GFF coordinates and chromosome aliases before constructing gene/transcript models. genePred uses native 0-based, half-open coordinates.

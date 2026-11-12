@@ -34,18 +34,18 @@ export interface TranscriptFeature {
 
 export class GeneSource {
   readonly name: string
+  readonly chromosomes = new Map<string, number>()
   private readonly byChromosome = new Map<string, GeneFeature[]>()
   private readonly byName = new Map<string, GeneFeature[]>()
 
   constructor(name: string, features: readonly GeneFeature[]) {
     this.name = name
     for (const feature of features) {
+      this.chromosomes.set(feature.chr, Math.max(this.chromosomes.get(feature.chr) ?? 0, feature.end))
       const chromosomeFeatures = this.byChromosome.get(feature.chr) ?? []
       chromosomeFeatures.push(feature)
       this.byChromosome.set(feature.chr, chromosomeFeatures)
-      const matches = this.byName.get(feature.name.toLocaleUpperCase()) ?? []
-      matches.push(feature)
-      this.byName.set(feature.name.toLocaleUpperCase(), matches)
+      this.indexFeature(feature)
     }
     for (const chromosomeFeatures of this.byChromosome.values()) chromosomeFeatures.sort((a, b) => a.start - b.start)
   }
@@ -99,6 +99,17 @@ export class GeneSource {
     return result
   }
 
+  async getFeatures(region: Region): Promise<GeneFeature[]> { return this.featuresFor(region) }
+
+  private indexFeature(feature: GeneFeature): void {
+    const names = new Set([feature.name, feature.id, ...feature.transcriptModels.map((model) => model.id)].map((name) => name.toLocaleUpperCase()))
+    for (const name of names) {
+      const matches = this.byName.get(name) ?? []
+      matches.push(feature)
+      this.byName.set(name, matches)
+    }
+  }
+
   find(name: string): GeneFeature | undefined {
     return this.byName.get(name.trim().toLocaleUpperCase())?.[0]
   }
@@ -109,9 +120,7 @@ export class GeneSource {
     this.byChromosome.set(chromosome, detailed)
     this.byName.clear()
     for (const features of this.byChromosome.values()) for (const feature of features) {
-      const matches = this.byName.get(feature.name.toLocaleUpperCase()) ?? []
-      matches.push(feature)
-      this.byName.set(feature.name.toLocaleUpperCase(), matches)
+      this.indexFeature(feature)
     }
   }
 }

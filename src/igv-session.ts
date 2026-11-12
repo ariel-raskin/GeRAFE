@@ -1,7 +1,7 @@
 import { clampRegion, parseLocus, resolveChromosome } from './genome.ts'
 import { nativeFilePathKey } from './open-track-files.ts'
 import {
-  addAlignmentTrack, addInteractionTrack, addIntervalTrack, addMatrixTrack, addSignalTrack,
+  addAlignmentTrack, addInteractionTrack, addIntervalTrack, addMatrixTrack, addSignalTrack, addGeneTrack,
   createTrackDocument, linkScales,
   type SourceFormat, type TrackDocument, type TrackSourceSpec, type TrackSpec,
 } from './track-document.ts'
@@ -34,7 +34,7 @@ export interface IgvSession {
   notes: string[]
 }
 
-export type IgvSourceKind = 'signal' | 'interval' | 'interaction' | 'matrix' | 'alignment'
+export type IgvSourceKind = 'signal' | 'interval' | 'interaction' | 'matrix' | 'alignment' | 'genes'
 export type IgvSourceCapability = { kind: IgvSourceKind; format: SourceFormat }
 export type IgvImportStatus = 'ready' | 'checking' | 'needs-reference' | 'missing' | 'missing-index' | 'unsupported'
 
@@ -229,7 +229,7 @@ export function buildIgvTrackDocument(preview: IgvPreview, session: IgvSession, 
       : capability.kind === 'interval' ? addIntervalTrack(draft, sourceSpec, options)
         : capability.kind === 'interaction' ? addInteractionTrack(draft, sourceSpec, options)
           : capability.kind === 'matrix' ? addMatrixTrack(draft, sourceSpec, options)
-            : addAlignmentTrack(draft, sourceSpec, options)
+            : capability.kind === 'genes' ? addGeneTrack(draft, sourceSpec, options) : addAlignmentTrack(draft, sourceSpec, options)
     applyIgvTrackStyle(draft, track, resource.track)
     if (capability.kind === 'signal' && style.autoscaleGroup) {
       autoscaleGroups.set(style.autoscaleGroup, [...autoscaleGroups.get(style.autoscaleGroup) ?? [], track.id])

@@ -1050,3 +1050,16 @@ html[data-theme='dark'] .toast.is-error { color: white; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+.annotation-library { width: min(820px, calc(100vw - 48px)); max-height: calc(100vh - 64px); overflow: auto; padding: 20px; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
+.annotation-library::backdrop { background: #0008; }
+.annotation-library header, .annotation-library-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.annotation-library header { justify-content: space-between; }
+.annotation-library header strong { font-size: 17px; }
+.annotation-library p { font-size: 12px; line-height: 1.5; }
+.annotation-library-tools select { padding: 6px; color: var(--ink); background: var(--field); border: 1px solid var(--line); border-radius: 4px; }
+.annotation-library-hint, .annotation-library article small { color: var(--muted); }
+.annotation-library article { display: grid; grid-template-columns: 1fr 195px; gap: 16px; border-top: 1px solid var(--line); padding: 14px 0; }
+.annotation-library article small { display: block; margin-top: 5px; font-size: 11px; }
+.annotation-library-actions { display: flex; flex-direction: column; gap: 5px; }
+.annotation-library-status { min-height: 18px; position: sticky; bottom: -20px; padding: 10px 0; background: var(--paper); }

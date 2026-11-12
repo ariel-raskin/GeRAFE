@@ -70,6 +70,13 @@ export async function writeNativeTextFile(path: string, contents: string): Promi
   await invoke('write_text_file', { path, contents })
 }
 
+export async function writeNativeBlob(path: string, blob: Blob): Promise<void> {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  const chunks: string[] = []
+  for (let index = 0; index < bytes.length; index += 16_384) chunks.push(String.fromCharCode(...bytes.subarray(index, index + 16_384)))
+  await invoke('write_binary_file', { path, base64Contents: btoa(chunks.join('')) })
+}
+
 export async function prepareBedGraphCache(path: string, chromosomes: ReadonlyMap<string, number>): Promise<PreparedBedGraphCache> {
   const chromosomeSizes = cacheChromosomeSizes(chromosomes)
   const cache = await invoke<Omit<PreparedBedGraphCache, 'name'>>('prepare_bedgraph_cache', { path, chromosomeSizes })

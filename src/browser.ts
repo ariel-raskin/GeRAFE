@@ -1,7 +1,7 @@
 import { clampRegion, formatBases, formatLocus } from './genome.ts'
 import { MatrixTileRenderer, matrixTileCacheKey } from './matrix-tiles.ts'
 import type { Cytoband } from './cytoband.ts'
-import type { GeneFeature, GeneSource, TranscriptFeature } from './reference.ts'
+import { GeneSource, type GeneFeature, type TranscriptFeature } from './reference.ts'
 import { computeScaleDomains, computeSegmentScaleDomains, createTrackDocument, signalFeatureKey } from './track-document.ts'
 import type { ComparisonDivider, DisplayGroup, MatrixOutline, SavedRegion, ScaleDomainSegment, SignalStackDifferentiation, TrackDocument, TrackSpec } from './track-document.ts'
 import type { AlignmentCoverageFeature, AlignmentFeature, InteractionFeature, IntervalFeature, MatrixCellPosition, MatrixFeature, Region, SignalFeature, TrackSource, TrackRuntime } from './types.ts'
@@ -2167,14 +2167,14 @@ export class GenomeBrowser {
 
     const filterMode = spec.interactionFilterMode ?? 'all'
     const geneTargets: InteractionGeneTarget[] = filterMode === 'genes'
-      ? (spec.interactionFilterGenes ?? []).map((name) => ({ name, gene: this.geneSource?.find(name) }))
+      ? (spec.interactionFilterGenes ?? []).map((name) => ({ name, gene: this.findAnnotationGene(name) }))
       : filterMode === 'visible-genes'
-        ? (this.geneSource?.featuresFor(this.region) ?? []).map((gene) => ({ name: gene.name, gene }))
+        ? (this.annotationSources().flatMap((source) => source.featuresFor(this.region))).map((gene) => ({ name: gene.name, gene }))
         : []
     const geneFiltered = filterMode === 'all' ? inWindow : filterInteractionsForGenes(inWindow, geneTargets)
     const visible = filterInteractionFeatures(geneFiltered, spec.interactionMinScore, spec.interactionMaxDistance)
     if (!visible.length) {
-      const unavailable = filterMode === 'visible-genes' && !this.geneSource
+      const unavailable = filterMode === 'visible-genes' && !this.annotationSources().length
       if (unavailable) {
         ctx.fillStyle = palette.error
         ctx.font = '12px Inter, system-ui, sans-serif'
@@ -2518,14 +2518,14 @@ export class GenomeBrowser {
     const sourceFeatures = runtime.features.filter((feature): feature is InteractionFeature => 'featureType' in feature && feature.featureType === 'interaction')
     const filterMode = interactionSpec.interactionFilterMode ?? 'all'
     const geneTargets: InteractionGeneTarget[] = filterMode === 'genes'
-      ? (interactionSpec.interactionFilterGenes ?? []).map((name) => ({ name, gene: this.geneSource?.find(name) }))
+      ? (interactionSpec.interactionFilterGenes ?? []).map((name) => ({ name, gene: this.findAnnotationGene(name) }))
       : filterMode === 'visible-genes'
-        ? (this.geneSource?.featuresFor(this.region) ?? []).map((gene) => ({ name: gene.name, gene }))
+        ? (this.annotationSources().flatMap((source) => source.featuresFor(this.region))).map((gene) => ({ name: gene.name, gene }))
         : []
     let filtered = filterMode === 'all' ? sourceFeatures : filterInteractionsForGenes(sourceFeatures, geneTargets)
     filtered = filterInteractionFeatures(filtered, interactionSpec.interactionMinScore, interactionSpec.interactionMaxDistance)
     if (spec.matrixOverlayFocusMode === 'genes') {
-      const targets = (spec.matrixOverlayFocusGenes ?? []).map((name) => ({ name, gene: this.geneSource?.find(name) }))
+      const targets = (spec.matrixOverlayFocusGenes ?? []).map((name) => ({ name, gene: this.findAnnotationGene(name) }))
       filtered = filterInteractionsForGenes(filtered, targets)
     } else if (spec.matrixOverlayFocusMode === 'region' && spec.matrixOverlayFocusRegion) {
       filtered = filtered.filter((feature) => interactionTouchesRegion(feature, spec.matrixOverlayFocusRegion!))
@@ -2828,7 +2828,7 @@ export class GenomeBrowser {
   }
 
   private drawGeneTrack(spec: TrackSpec, width: number, top: number, height: number, palette: CanvasPalette): number {
-    const source = this.geneSource
+    const source = this.geneSourceForTrack(spec)
     const ctx = this.context
     const bottom = top + height
     const plotWidth = width - PLOT_LEFT
@@ -2857,7 +2857,7 @@ export class GenomeBrowser {
     ctx.fillStyle = palette.muted
     ctx.font = '8px Inter, system-ui, sans-serif'
     ctx.textAlign = 'center'
-    ctx.fillText(ellipsize(ctx, source ? this.geneAssembly : 'No annotation source for this reference', labelBounds.width), labelBounds.center, bottom - 5)
+    ctx.fillText(ellipsize(ctx, source ? spec.sourceIds.length ? source.name : this.geneAssembly : spec.sourceIds.length ? 'Source needs reopening' : 'No annotation source for this reference', labelBounds.width), labelBounds.center, bottom - 5)
     ctx.textAlign = 'start'
     if (!source) return 0
 
@@ -2960,7 +2960,7 @@ export class GenomeBrowser {
   private buildGeneLayout(spec: TrackSpec, width: number, ctx: CanvasRenderingContext2D): GeneRenderLayout {
     const mode = spec.geneDisplayMode ?? 'collapsed'
     const slotHeight = mode === 'squished' ? 9 : mode === 'expanded' ? 15 : 15
-    const genes = this.geneSource?.featuresFor(this.region) ?? []
+    const genes = this.geneSourceForTrack(spec)?.featuresFor(this.region) ?? []
     const transcriptCount = genes.reduce((sum, gene) => sum + (spec.geneTranscriptMode === 'all' ? gene.transcriptModels.length : (preferredTranscript(gene) ? 1 : 0)), 0)
     const plotWidth = width - PLOT_LEFT
     const scale = plotWidth / (this.region.end - this.region.start)
@@ -3176,8 +3176,25 @@ export class GenomeBrowser {
     if (preview !== undefined) return preview
     if (track.kind !== 'genes' || track.pane !== 'bottom') return trackSpecHeight(track)
     const width = this.bottomCanvas.parentElement?.clientWidth || this.cssWidth(this.bottomCanvas)
-    const layoutHeight = this.geneSource ? this.buildGeneLayout(track, width, this.bottomContext).contentHeight : 0
+    const layoutHeight = this.geneSourceForTrack(track) ? this.buildGeneLayout(track, width, this.bottomContext).contentHeight : 0
     return Math.max(MIN_BOTTOM_GENE_HEIGHT, Math.ceil(layoutHeight))
+  }
+
+  private annotationSources(): GeneSource[] {
+    const imported = this.document.tracks.filter((track) => track.kind === 'genes' && track.enabled && track.sourceIds.length).map((track) => this.geneSourceForTrack(track)).filter((source): source is GeneSource => Boolean(source))
+    return this.geneSource ? [...imported, this.geneSource] : imported
+  }
+
+  private findAnnotationGene(name: string): GeneFeature | undefined {
+    return this.annotationSources().map((source) => source.find(name)).find(Boolean)
+  }
+
+  private geneSourceForTrack(track: TrackSpec): GeneSource | undefined {
+    if (!track.sourceIds.length) return this.geneSource
+    const referenceId = this.document.sources.find((source) => source.id === track.sourceIds[0])?.annotationReferenceId
+    if (referenceId && referenceId !== this.document.referenceId) return undefined
+    const source = this.runtimes.get(track.id)?.source
+    return source instanceof GeneSource ? source : undefined
   }
 
   private resizeBoundaryAt(pane: 'main' | 'bottom', pointerY: number): { trackIds: string[]; y: number } | undefined {
@@ -3325,7 +3342,7 @@ interface CanvasPalette {
 }
 
 function runtimeDescriptors(track: TrackSpec): Array<Pick<TrackRuntime, 'id' | 'trackId' | 'sourceId' | 'channel'>> {
-  if (track.kind === 'genes') return []
+  if (track.kind === 'genes' && !track.sourceIds.length) return []
   if (track.kind === 'stranded') return [
     { id: signalFeatureKey(track.id, 'plus'), trackId: track.id, sourceId: track.sourceIds[0], channel: 'plus' },
     { id: signalFeatureKey(track.id, 'minus'), trackId: track.id, sourceId: track.sourceIds[1], channel: 'minus' },
