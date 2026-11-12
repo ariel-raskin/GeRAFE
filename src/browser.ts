@@ -1,5 +1,6 @@
 import { clampRegion, formatBases, formatLocus } from './genome.ts'
 import { MatrixTileRenderer, matrixTileCacheKey } from './matrix-tiles.ts'
+import { trackDropPosition } from './track-drop.ts'
 import type { Cytoband } from './cytoband.ts'
 import { GeneSource, type GeneFeature, type TranscriptFeature } from './reference.ts'
 import { computeScaleDomains, computeSegmentScaleDomains, createTrackDocument, signalFeatureKey } from './track-document.ts'
@@ -174,7 +175,9 @@ export class GenomeBrowser {
     withinGroupId?: string
     targetPane?: 'main' | 'bottom'
     insertionIndex?: number
+    guideY?: number
   }
+  private trackDragScrollFrame?: number
   private trackResize?: {
     canvas: HTMLCanvasElement
     pane: 'main' | 'bottom'
@@ -256,6 +259,7 @@ export class GenomeBrowser {
     this.mainResizeObserver.disconnect()
     this.bottomResizeObserver.disconnect()
     if (this.frame) cancelAnimationFrame(this.frame)
+    if (this.trackDragScrollFrame) cancelAnimationFrame(this.trackDragScrollFrame)
     for (const controller of this.abortControllers.values()) controller.abort()
     document.body.classList.remove('is-track-dragging')
     document.body.classList.remove('is-track-resizing')
@@ -819,7 +823,9 @@ export class GenomeBrowser {
         const draggedIds = hit.kind === 'group'
           ? this.document.tracks.filter((track) => track.displayGroupId === hit.id).map((track) => track.id)
           : this.selectedTrackIds.has(hit.id) ? [...this.selectedTrackIds] : [hit.id]
-        const withinGroupId = hit.kind === 'track' && draggedIds.every((id) => this.document.tracks.find((track) => track.id === id)?.displayGroupId === targetTrack?.displayGroupId)
+        const withinGroupId = hit.kind === 'track' && targetTrack?.displayGroupId
+          && this.visibleSpecs(pane).some((track) => track.displayGroupId === targetTrack.displayGroupId && !draggedIds.includes(track.id))
+          && draggedIds.every((id) => this.document.tracks.find((track) => track.id === id)?.displayGroupId === targetTrack.displayGroupId)
           ? targetTrack?.displayGroupId
           : undefined
         canvas.setPointerCapture(event.pointerId)
@@ -873,10 +879,7 @@ export class GenomeBrowser {
         }
         if (this.trackDrag.active) {
           this.positionTrackDragGhost(event.clientX, event.clientY)
-          const target = this.dropTarget(event.clientX, event.clientY, this.trackDrag.draggedIds)
-          this.trackDrag.targetPane = target?.pane
-          this.trackDrag.insertionIndex = target?.insertionIndex
-          this.scheduleRender()
+          this.updateTrackDropTarget()
         }
         return
       }
@@ -930,11 +933,14 @@ export class GenomeBrowser {
       }
       if (this.trackDrag?.sourceCanvas === canvas) {
         const drag = this.trackDrag
+        const target = drag.active && event.type === 'pointerup' ? this.dropTarget(event.clientX, event.clientY, drag.draggedIds) : undefined
         this.trackDrag = undefined
+        if (this.trackDragScrollFrame) cancelAnimationFrame(this.trackDragScrollFrame)
+        this.trackDragScrollFrame = undefined
         canvas.classList.remove('is-track-dragging')
         document.body.classList.remove('is-track-dragging')
         this.trackDragGhost.hidden = true
-        if (drag.active && drag.targetPane && drag.insertionIndex !== undefined) this.callbacks.onTracksReorder(drag.draggedIds, drag.targetPane, drag.insertionIndex, drag.withinGroupId)
+        if (target) this.callbacks.onTracksReorder(drag.draggedIds, target.pane, target.insertionIndex, drag.withinGroupId)
         this.scheduleRender()
         return
       }
@@ -1228,10 +1234,13 @@ export class GenomeBrowser {
 
   private resize(): void {
     const sharedWidth = this.sharedCanvasWidth()
-    this.resizeHeaderCanvas(sharedWidth)
-    this.resizeCanvas(this.canvas, this.mainContext, 'main', sharedWidth)
-    this.resizeCanvas(this.bottomCanvas, this.bottomContext, 'bottom', sharedWidth)
-    this.scheduleRender()
+    const headerChanged = this.resizeHeaderCanvas(sharedWidth)
+    const mainChanged = this.resizeCanvas(this.canvas, this.mainContext, 'main', sharedWidth)
+    const bottomChanged = this.resizeCanvas(this.bottomCanvas, this.bottomContext, 'bottom', sharedWidth)
+    // ResizeObserver runs after animation callbacks. Paint cleared opaque buffers
+    // here so the browser cannot present a black frame before the next callback.
+    if (headerChanged || mainChanged || bottomChanged) this.render()
+    else this.scheduleRender()
     void this.ensureData()
   }
 
@@ -1241,26 +1250,32 @@ export class GenomeBrowser {
     return widths.length ? Math.min(...widths) : 900
   }
 
-  private resizeHeaderCanvas(parentWidth: number): void {
+  private resizeHeaderCanvas(parentWidth: number): boolean {
     const ratio = Math.min(window.devicePixelRatio || 1, 2)
-    this.headerCanvas.width = Math.floor(parentWidth * ratio)
-    this.headerCanvas.height = Math.floor(RULER_HEIGHT * ratio)
+    const width = Math.floor(parentWidth * ratio), height = Math.floor(RULER_HEIGHT * ratio)
+    const changed = this.headerCanvas.width !== width || this.headerCanvas.height !== height
+    if (this.headerCanvas.width !== width) this.headerCanvas.width = width
+    if (this.headerCanvas.height !== height) this.headerCanvas.height = height
     this.headerCanvas.style.width = `${parentWidth}px`
     this.headerCanvas.style.height = `${RULER_HEIGHT}px`
     this.headerContext.setTransform(ratio, 0, 0, ratio, 0, 0)
+    return changed
   }
 
-  private resizeCanvas(canvas: HTMLCanvasElement, context: CanvasRenderingContext2D, pane: 'main' | 'bottom', parentWidth = this.sharedCanvasWidth()): void {
+  private resizeCanvas(canvas: HTMLCanvasElement, context: CanvasRenderingContext2D, pane: 'main' | 'bottom', parentWidth = this.sharedCanvasWidth()): boolean {
     const minimum = pane === 'main' ? TRACK_HEIGHT : MIN_BOTTOM_GENE_HEIGHT
     const contentHeight = this.paneStackHeight(pane)
     const availableHeight = Math.max(0, (canvas.parentElement?.clientHeight ?? 0) - (pane === 'main' ? RULER_HEIGHT : 0))
     const cssHeight = Math.max(minimum, contentHeight, availableHeight)
     const ratio = Math.min(window.devicePixelRatio || 1, 2)
-    canvas.width = Math.floor(parentWidth * ratio)
-    canvas.height = Math.floor(cssHeight * ratio)
+    const width = Math.floor(parentWidth * ratio), height = Math.floor(cssHeight * ratio)
+    const changed = canvas.width !== width || canvas.height !== height
+    if (canvas.width !== width) canvas.width = width
+    if (canvas.height !== height) canvas.height = height
     canvas.style.width = `${parentWidth}px`
     canvas.style.height = `${cssHeight}px`
     context.setTransform(ratio, 0, 0, ratio, 0, 0)
+    return changed
   }
 
   private cssWidth(canvas = this.canvas): number {
@@ -1315,9 +1330,9 @@ export class GenomeBrowser {
     const height = this.cssHeight(canvas)
     ctx.fillStyle = palette.background
     ctx.fillRect(0, 0, width, height)
-    const specs = this.visibleSpecs(pane)
-    const matrixMaximums = this.matrixMaximums(specs)
     const movingIds = this.trackDrag?.active ? this.movingIds(this.trackDrag.draggedIds) : undefined
+    const specs = this.visibleSpecs(pane).filter((spec) => !movingIds?.has(spec.id))
+    const matrixMaximums = this.matrixMaximums(specs)
     let visibleFeatures = 0
     let top = 0
     let groupRun: { id: string; top: number; bottom: number } | undefined
@@ -1358,21 +1373,13 @@ export class GenomeBrowser {
       } else if (spec.kind === 'alignment') {
         visibleFeatures += this.drawAlignmentTrack(spec, this.runtimes.get(spec.id)!, index, top, rowHeight, width, palette)
       } else visibleFeatures += this.drawGeneTrack(spec, width, top, rowHeight, palette)
-      if (movingIds?.has(spec.id)) {
-        ctx.fillStyle = palette.dragFill
-        ctx.fillRect(0, top, width, rowHeight)
-        ctx.strokeStyle = palette.selection
-        ctx.setLineDash([6, 4])
-        ctx.strokeRect(3.5, top + 3.5, width - 7, rowHeight - 7)
-        ctx.setLineDash([])
-      }
       if (spec.displayGroupId) groupRun ??= { id: spec.displayGroupId, top, bottom: top + rowHeight }
       if (groupRun) groupRun.bottom = top + rowHeight
       top += rowHeight
     })
     if (groupRun) this.drawGroupRail(groupRun.id, groupRun.top, groupRun.bottom, palette)
-    if (this.trackDrag?.active && this.trackDrag.targetPane === pane && this.trackDrag.insertionIndex !== undefined) {
-      const y = this.insertionY(pane, this.trackDrag.insertionIndex)
+    if (this.trackDrag?.active && this.trackDrag.targetPane === pane && this.trackDrag.guideY !== undefined) {
+      const y = Math.max(1, Math.min(height - 2, this.trackDrag.guideY))
       ctx.fillStyle = palette.selectionFill
       ctx.fillRect(0, Math.max(0, y - 6), width, 12)
       ctx.strokeStyle = palette.selection
@@ -3226,66 +3233,54 @@ export class GenomeBrowser {
     return this.visibleSpecs(pane).reduce((height, track) => height + this.trackHeight(track), 0)
   }
 
-  private dropTarget(clientX: number, clientY: number, draggedIds: readonly string[]): { pane: 'main' | 'bottom'; insertionIndex: number } | undefined {
-    const panes: Array<{ pane: 'main' | 'bottom'; canvas: HTMLCanvasElement }> = [
-      { pane: 'bottom', canvas: this.bottomCanvas },
-      { pane: 'main', canvas: this.canvas },
-    ]
-    const movingIds = this.movingIds(draggedIds)
+  private dropTarget(clientX: number, clientY: number, draggedIds: readonly string[]): { pane: 'main' | 'bottom'; insertionIndex: number; guideY: number } | undefined {
+    const panes = [{ pane: 'bottom' as const, canvas: this.bottomCanvas }, { pane: 'main' as const, canvas: this.canvas }]
     for (const entry of panes) {
-      if (this.trackDrag?.withinGroupId) {
-        const groupPane = this.document.tracks.find((track) => track.displayGroupId === this.trackDrag?.withinGroupId)?.pane
-        if (entry.pane !== groupPane) {
-          const viewport = entry.canvas.parentElement?.getBoundingClientRect()
-          if (!viewport || clientX < viewport.left || clientX > viewport.right || clientY < viewport.top || clientY > viewport.bottom) continue
-          const localY = clientY - entry.canvas.getBoundingClientRect().top
-          const specs = this.visibleSpecs(entry.pane).filter((track) => !movingIds.has(track.id))
-          let y = 0
-          let index = 0
-          for (const block of trackBlocks(specs)) {
-            const height = block.reduce((sum, track) => sum + this.trackHeight(track), 0)
-            if (localY < y + height / 2) return { pane: entry.pane, insertionIndex: index }
-            y += height
-            index += block.length
-          }
-          return { pane: entry.pane, insertionIndex: specs.length }
-        }
-      }
       const viewport = entry.canvas.parentElement?.getBoundingClientRect()
       if (!viewport || clientX < viewport.left || clientX > viewport.right || clientY < viewport.top || clientY > viewport.bottom) continue
-      const localY = clientY - entry.canvas.getBoundingClientRect().top
-      const specs = this.visibleSpecs(entry.pane).filter((track) => !movingIds.has(track.id))
-      let y = 0
-      let index = 0
-      if (this.trackDrag?.withinGroupId) {
-        for (const spec of specs) {
-          const rowHeight = this.trackHeight(spec)
-          if (spec.displayGroupId === this.trackDrag.withinGroupId && localY < y + rowHeight / 2) return { pane: entry.pane, insertionIndex: index }
-          y += rowHeight
-          index += 1
-          if (spec.displayGroupId === this.trackDrag.withinGroupId && specs[index]?.displayGroupId !== this.trackDrag.withinGroupId) return { pane: entry.pane, insertionIndex: index }
-        }
-        return undefined
-      }
-      for (const block of trackBlocks(specs)) {
-        const height = block.reduce((sum, track) => sum + this.trackHeight(track), 0)
-        if (localY < y + height / 2) return { pane: entry.pane, insertionIndex: index }
-        y += height
-        index += block.length
-      }
-      return { pane: entry.pane, insertionIndex: specs.length }
+      const groupPane = this.trackDrag?.withinGroupId ? this.document.tracks.find((track) => track.displayGroupId === this.trackDrag?.withinGroupId)?.pane : undefined
+      const withinGroupId = groupPane === entry.pane ? this.trackDrag?.withinGroupId : undefined
+      const position = trackDropPosition(
+        this.visibleSpecs(entry.pane).map((track) => ({ id: track.id, displayGroupId: track.displayGroupId, height: this.trackHeight(track) })),
+        this.document.tracks.filter((track) => track.pane === entry.pane),
+        this.movingIds(draggedIds), clientY - entry.canvas.getBoundingClientRect().top, withinGroupId,
+      )
+      return { pane: entry.pane, ...position }
     }
     return undefined
   }
 
-  private insertionY(pane: 'main' | 'bottom', insertionIndex: number): number {
-    const movingIds = this.movingIds(this.trackDrag?.draggedIds ?? [])
-    const fullSpecs = this.visibleSpecs(pane)
-    const remainingSpecs = fullSpecs.filter((track) => !movingIds.has(track.id))
-    const trackAfterInsertion = remainingSpecs[insertionIndex]
-    if (!trackAfterInsertion) return fullSpecs.reduce((sum, track) => sum + this.trackHeight(track), 0)
-    const originalIndex = fullSpecs.findIndex((track) => track.id === trackAfterInsertion.id)
-    return fullSpecs.slice(0, originalIndex).reduce((sum, track) => sum + this.trackHeight(track), 0)
+  private updateTrackDropTarget(): void {
+    const drag = this.trackDrag
+    if (!drag?.active) return
+    const target = this.dropTarget(drag.clientX, drag.clientY, drag.draggedIds)
+    drag.targetPane = target?.pane
+    drag.insertionIndex = target?.insertionIndex
+    drag.guideY = target?.guideY
+    this.scheduleRender()
+    if (this.trackDragScrollFrame) return
+    this.trackDragScrollFrame = requestAnimationFrame(() => {
+      this.trackDragScrollFrame = undefined
+      if (this.scrollTrackDragAtEdge()) this.updateTrackDropTarget()
+    })
+  }
+
+  private scrollTrackDragAtEdge(): boolean {
+    const drag = this.trackDrag
+    if (!drag?.active) return false
+    for (const canvas of [this.bottomCanvas, this.canvas]) {
+      const scroll = canvas.parentElement
+      const box = scroll?.getBoundingClientRect()
+      if (!scroll || !box || drag.clientX < box.left || drag.clientX > box.right || drag.clientY < box.top || drag.clientY > box.bottom) continue
+      const top = box.top + (canvas === this.canvas ? RULER_HEIGHT : 0)
+      const edge = Math.min(36, (box.bottom - top) / 3)
+      const speed = drag.clientY < top + edge ? -Math.ceil(12 * Math.min(1, (top + edge - drag.clientY) / edge))
+        : drag.clientY > box.bottom - edge ? Math.ceil(12 * Math.min(1, (drag.clientY - box.bottom + edge) / edge)) : 0
+      const previous = scroll.scrollTop
+      scroll.scrollTop += speed
+      return scroll.scrollTop !== previous
+    }
+    return false
   }
 
   private movingIds(trackIds: readonly string[]): Set<string> {
@@ -4698,16 +4693,6 @@ export function distributeFittedPixels(minimums: readonly number[], weights: rea
     remainder -= 1
   }
   return result
-}
-
-function trackBlocks(tracks: readonly TrackSpec[]): TrackSpec[][] {
-  const blocks: TrackSpec[][] = []
-  for (const track of tracks) {
-    const previous = blocks[blocks.length - 1]
-    if (track.displayGroupId && previous?.[0].displayGroupId === track.displayGroupId) previous.push(track)
-    else blocks.push([track])
-  }
-  return blocks
 }
 
 function ellipsize(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {

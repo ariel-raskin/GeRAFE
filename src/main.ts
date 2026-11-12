@@ -1071,6 +1071,7 @@ updateDialog.addEventListener('pointerdown', (event) => { if (event.target === u
 updatePrimaryAction.addEventListener('click', () => void handleUpdatePrimaryAction())
 app.addEventListener('contextmenu', (event) => event.preventDefault())
 paneResizer.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return
   event.preventDefault()
   bottomPaneAutoFit = false
   paneResizer.setPointerCapture(event.pointerId)
@@ -1082,13 +1083,14 @@ paneResizer.addEventListener('pointermove', (event) => {
   setBottomPaneHeight(body.bottom - event.clientY)
 })
 const finishPaneResize = (event: PointerEvent) => {
-  if (!paneResizer.hasPointerCapture(event.pointerId)) return
-  paneResizer.releasePointerCapture(event.pointerId)
+  if (!bottomPane.classList.contains('is-resizing')) return
   bottomPane.classList.remove('is-resizing')
+  if (paneResizer.hasPointerCapture(event.pointerId)) paneResizer.releasePointerCapture(event.pointerId)
   scheduleUpperAutoFit()
 }
 paneResizer.addEventListener('pointerup', finishPaneResize)
 paneResizer.addEventListener('pointercancel', finishPaneResize)
+paneResizer.addEventListener('lostpointercapture', finishPaneResize)
 window.addEventListener('resize', () => {
   bottomPaneAutoFit ? fitBottomPaneToContent() : setBottomPaneHeight(bottomPane.getBoundingClientRect().height)
   scheduleUpperAutoFit()
@@ -1221,6 +1223,7 @@ async function openTrackPicker(): Promise<void> {
 function showGeneAnnotationLibrary(): void {
   closeMenus()
   openAnnotationLibrary({
+    anchor: document.querySelector<HTMLElement>('#file-menu-button')!,
     reference: activeReference,
     add(source, entry, size, downloadedAt) {
       const sourceSpec: TrackSourceSpec = { id: crypto.randomUUID(), name: `${entry.label} · ${entry.assembly}`, format: entry.format, annotationUrl: entry.url, annotationDownloadedAt: downloadedAt, annotationReferenceId: activeReference.id, files: [{ name: entry.fileName, size, lastModified: Date.parse(downloadedAt), role: 'signal' }] }

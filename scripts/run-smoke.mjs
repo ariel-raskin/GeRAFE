@@ -6,7 +6,8 @@ const port = 5174
 const appUrl = `http://127.0.0.1:${port}`
 const vitePath = fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url))
 const annotationsOnly = process.argv[2] === '--annotations'
-const smokePath = fileURLToPath(new URL(annotationsOnly ? './smoke-annotations.mjs' : './smoke-browser.mjs', import.meta.url))
+const editingOnly = process.argv[2] === '--editing'
+const smokePath = fileURLToPath(new URL(editingOnly ? './smoke-viewer-editing.mjs' : annotationsOnly ? './smoke-annotations.mjs' : './smoke-browser.mjs', import.meta.url))
 
 const vite = spawn(process.execPath, [vitePath, '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
   cwd: fileURLToPath(new URL('..', import.meta.url)),
@@ -42,13 +43,18 @@ async function stopVite() {
 
 try {
   await waitForServer()
-  const smoke = spawn(process.execPath, [smokePath, appUrl, ...process.argv.slice(annotationsOnly ? 3 : 2)], { stdio: 'inherit' })
+  const smoke = spawn(process.execPath, [smokePath, appUrl, ...process.argv.slice(annotationsOnly || editingOnly ? 3 : 2)], { stdio: 'inherit' })
   const [code] = await once(smoke, 'exit')
   process.exitCode = code ?? 1
-  if (code === 0 && !annotationsOnly) {
+  if (code === 0 && !annotationsOnly && !editingOnly) {
     const annotationSmoke = spawn(process.execPath, [fileURLToPath(new URL('./smoke-annotations.mjs', import.meta.url)), appUrl], { stdio: 'inherit' })
     const [annotationCode] = await once(annotationSmoke, 'exit')
     process.exitCode = annotationCode ?? 1
+    if (annotationCode === 0) {
+      const editingSmoke = spawn(process.execPath, [fileURLToPath(new URL('./smoke-viewer-editing.mjs', import.meta.url)), appUrl], { stdio: 'inherit' })
+      const [editingCode] = await once(editingSmoke, 'exit')
+      process.exitCode = editingCode ?? 1
+    }
   }
 } finally {
   await stopVite()

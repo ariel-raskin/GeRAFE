@@ -49,26 +49,50 @@ export async function restoreCachedAnnotation(url: string, format: AnnotationFor
 const escape = (value: string) => value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 
 export function openAnnotationLibrary(options: {
+  anchor?: HTMLElement
   reference: ReferenceGenome
   add(source: GeneSource, entry: AnnotationCatalogEntry, size: number, downloadedAt: string): void
   importLocal(): void
   bundled(): void
 }): void {
   const modal = document.createElement('dialog')
-  modal.className = 'annotation-library'
+  modal.className = 'menu-popover annotation-library'
+  modal.setAttribute('aria-label', 'Gene annotations')
+  modal.setAttribute('aria-modal', 'false')
   const assembly = referenceAssembly(options.reference)
-  modal.innerHTML = `<header><strong>Gene annotations</strong><button class="dialog-button secondary" data-action="close">Close</button></header>
+  modal.innerHTML = `<header><strong>Gene annotations</strong><button class="menu-item annotation-library-close" data-action="close" aria-label="Close gene annotations">×</button></header>
     <p>Add independent gene tracks from local files or download a public annotation. Active reference: <strong>${escape(options.reference.name)}</strong>.</p>
-    <div class="annotation-library-tools"><button class="dialog-button" data-action="import">Import local annotation…</button>${assembly === 'hg38' ? '<button class="dialog-button secondary" data-action="bundled">Show bundled RefSeq</button>' : ''}<label>Assembly <select data-role="assembly">${['hg38', 'hg19', 'mm39', 'mm10'].map((id) => `<option ${id === assembly ? 'selected' : ''}>${id}</option>`).join('')}</select></label></div>
+    <div class="annotation-library-tools"><button class="menu-item" data-action="import">Import local annotation…</button>${assembly === 'hg38' ? '<button class="menu-item" data-action="bundled">Show bundled RefSeq</button>' : ''}<label>Assembly <select data-role="assembly">${['hg38', 'hg19', 'mm39', 'mm10'].map((id) => `<option ${id === assembly ? 'selected' : ''}>${id}</option>`).join('')}</select></label></div>
     <p class="annotation-library-hint">Local files: GTF, GFF3, or genePred (including gzip). Files must match the active reference. UCSC genePred downloads use the .genepred.gz extension for importing later.</p>
     <div class="annotation-library-list"></div><p role="status" class="annotation-library-status"></p>`
   const list = modal.querySelector<HTMLElement>('.annotation-library-list')!
   const status = modal.querySelector<HTMLElement>('[role="status"]')!
   let controller: AbortController | undefined
-  const close = () => { controller?.abort(); modal.close(); modal.remove() }
+  const close = () => {
+    controller?.abort()
+    document.removeEventListener('pointerdown', dismissOutside)
+    document.removeEventListener('keydown', dismissWithEscape)
+    window.removeEventListener('resize', position)
+    modal.close(); modal.remove()
+  }
+  const dismissOutside = (event: PointerEvent) => {
+    const target = event.target as Element
+    if (!modal.contains(target) && !target.closest('.track-file-picker')) close()
+  }
+  const dismissWithEscape = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || event.defaultPrevented || document.querySelector('.track-file-picker')) return
+    close(); options.anchor?.focus()
+  }
+  const position = () => {
+    const anchor = options.anchor?.getBoundingClientRect()
+    const top = Math.max(8, Math.min(anchor?.bottom ?? 46, window.innerHeight - 100))
+    modal.style.left = `${Math.max(8, Math.min(anchor?.left ?? 12, window.innerWidth - modal.offsetWidth - 8))}px`
+    modal.style.top = `${top}px`
+    modal.style.maxHeight = `${window.innerHeight - top - 8}px`
+  }
   const render = () => {
     const selected = modal.querySelector<HTMLSelectElement>('select')!.value
-    list.innerHTML = ANNOTATION_CATALOG.filter((entry) => entry.assembly === selected).map((entry) => `<article><div><strong>${escape(entry.label)}</strong><small>${escape(entry.provider)} · ${escape(entry.assembly)} · ${entry.format === 'genepred' ? 'genePred' : entry.format.toUpperCase()}</small><p>${escape(entry.details)}</p></div><div class="annotation-library-actions"><button class="dialog-button" data-add="${entry.id}" ${entry.assembly !== assembly ? 'disabled title="Switch to this assembly before adding tracks"' : ''}>Download and add track</button><button class="dialog-button secondary" data-save="${entry.id}">Download file…</button><button class="dialog-button secondary" data-copy="${entry.id}">Copy download URL</button></div></article>`).join('')
+    list.innerHTML = ANNOTATION_CATALOG.filter((entry) => entry.assembly === selected).map((entry) => `<article><div><strong>${escape(entry.label)}</strong><small>${escape(entry.provider)} · ${escape(entry.assembly)} · ${entry.format === 'genepred' ? 'genePred' : entry.format.toUpperCase()}</small><p>${escape(entry.details)}</p></div><div class="annotation-library-actions"><button class="menu-item" data-add="${entry.id}" ${entry.assembly !== assembly ? 'disabled title="Switch to this assembly before adding tracks"' : ''}>Download and add track</button><button class="menu-item" data-save="${entry.id}">Download file…</button><button class="menu-item" data-copy="${entry.id}">Copy download URL</button></div></article>`).join('')
   }
   modal.addEventListener('cancel', (event) => { event.preventDefault(); close() })
   modal.querySelector('select')!.addEventListener('change', render)
@@ -118,7 +142,7 @@ export function openAnnotationLibrary(options: {
         status.textContent = `Downloaded ${entry.fileName}.`
       } else {
         status.textContent = `Reading ${entry.label}…`
-        const source = await readGeneAnnotation(cached.blob.stream(), true, entry.format, entry.label, options.reference.chromosomes, (lines) => { status.textContent = `Reading ${entry.label}: ${lines.toLocaleString()} records…` })
+        const source = await readGeneAnnotation(cached.blob.stream(), true, entry.format, entry.label, options.reference.chromosomes, (lines) => { status.textContent = `Reading ${entry.label}: ${lines.toLocaleString()} records…` }, controller.signal)
         if (!modal.isConnected || controller.signal.aborted) return
         options.add(source, entry, cached.blob.size, cached.downloadedAt)
         status.textContent = `Added ${entry.label}.${cacheSaved ? ' Download cached for reopening.' : ' Cache unavailable; save a local copy for reopening.'}`
@@ -126,5 +150,8 @@ export function openAnnotationLibrary(options: {
     } catch (error) { if (modal.isConnected) status.textContent = error instanceof Error ? error.message : String(error) }
     finally { controller = undefined; if (modal.isConnected) render() }
   })
-  document.body.append(modal); render(); modal.showModal()
+  document.body.append(modal); render(); modal.show(); position()
+  document.addEventListener('pointerdown', dismissOutside)
+  document.addEventListener('keydown', dismissWithEscape)
+  window.addEventListener('resize', position)
 }
