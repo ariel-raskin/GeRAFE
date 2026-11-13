@@ -5,8 +5,92 @@ import { matrixWarmPaletteColor } from './browser.ts'
 import { GeneSource } from './reference.ts'
 import { addAlignmentTrack, addInteractionTrack, addIntervalTrack, addMatrixTrack, addSignalTrack, createTrackDocument } from './track-document.ts'
 import type { TrackSource } from './types.ts'
+import { createManuscriptFixture } from '../scripts/fixtures/manuscript-figure.ts'
 
 describe('figure rendering', () => {
+  it('renders a compact three-condition panel with one reserved color bar and an attached editable recipe', async () => {
+    const fixture = createManuscriptFixture()
+    fixture.document.sourceDocument.sources[0].files = [{ name: 'example.cool', path: 'C:/private/example.cool', role: 'signal', size: 100, lastModified: 0 }]
+    const layout = layoutFigure(fixture.document)
+    const result = await new FigureRenderSession().render(fixture.document, fixture.sources, fixture.genes, 300)
+    expect(result.issues).toEqual([])
+    expect(result.widthMm).toBe(145)
+    expect(result.heightMm).toBeLessThan(66)
+    expect((result.svg.match(/data-fe-legend="matrix"/g) ?? []).length).toBe(1)
+    expect(result.svg).toContain('GENE_A')
+    expect(result.svg).toContain('GENE_B')
+    expect(result.svg).toContain('50 kb')
+    expect(result.svg).toContain('&quot;figure&quot;:')
+    expect(result.svg).not.toContain('C:/private/')
+    expect(fixture.document.sourceDocument.sources[0].files[0].path).toBe('C:/private/example.cool')
+    const columns = [...layout.columns.values()]
+    expect(columns[0].width).toBeCloseTo(columns[2].width)
+    fixture.document.columns[1].widthWeight = 2
+    const unequal = [...layoutFigure(fixture.document).columns.values()]
+    expect(unequal[1].width).toBeCloseTo(unequal[0].width * 2)
+  })
+
+  it('lets observed shared scaling override source caps and pools different genomic windows', async () => {
+    const document = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 1000 })
+    const track = addSignalTrack(document, { id: 'signal', name: 'signal.bw', format: 'bigwig', files: [] }, { id: 'track', autoPair: false })
+    const binding = document.scales.find((scale) => scale.id === track.scaleBindingId)!
+    binding.mode = 'fixed'; binding.limits = { min: 0, max: 50 }
+    const figure = createFigureDocument(document)
+    const row = figure.rows.find((row) => row.trackIds[0] === track.id)!
+    figure.rows.forEach((candidate) => { candidate.included = candidate === row })
+    figure.columns.push({ ...structuredClone(figure.columns[0]), id: 'second', region: { chr: 'chr1', start: 2000, end: 3000 } })
+    const source: TrackSource = { name: 'signal', chromosomes: new Map(), async getFeatures(region) { return [{ start: region.start, end: region.start + 100, score: region.start ? 10 : 5 }] } }
+    const session = new FigureRenderSession()
+    const inherited = await session.render(figure, new Map([['signal', source]]))
+    expect((inherited.svg.match(/data-scale-max="50"/g) ?? []).length).toBe(2)
+    for (const column of figure.columns) column.styles = { [row.id]: { scaleMode: 'shared' } }
+    const shared = await session.render(figure, new Map([['signal', source]]))
+    expect((shared.svg.match(/data-scale-max="10"/g) ?? []).length).toBe(2)
+  })
+
+  it('pools independent positive/negative maxima per section', async () => {
+    const fixture = createManuscriptFixture()
+    const row = fixture.document.rows.find((row) => row.trackIds[0] === 'pro-0')!
+    for (const candidate of fixture.document.rows) candidate.included = candidate.id === row.id
+    const scores = [[5, 2, 7, 3], [8, 4, 6, 9], [3, 6, 10, 2]]
+    for (const [condition, values] of scores.entries()) for (const [strand, offset] of [['plus', 0], ['minus', 2]] as const) {
+      fixture.sources.set(`pro-${condition}-${strand}`, { name: strand, chromosomes: new Map(), async getFeatures(_region, _pixels, _signal, options) {
+        expect(options?.signalResolution).toBe('full')
+        return [{ start: 1000000, end: 1100000, score: values[offset] }, { start: 1100000, end: 1200000, score: values[offset + 1] }]
+      } })
+    }
+    const session = new FigureRenderSession()
+    const result = await session.render(fixture.document, fixture.sources, fixture.genes)
+    expect((result.svg.match(/data-scale-start="1000000" data-scale-min="-10" data-scale-max="8"/g) ?? []).length).toBe(3)
+    expect((result.svg.match(/data-scale-start="1100000" data-scale-min="-9" data-scale-max="6"/g) ?? []).length).toBe(3)
+    fixture.document.columns[0].styles![row.id].scaleMode = 'independent'
+    const independent = await session.render(fixture.document, fixture.sources, fixture.genes)
+    expect(independent.svg).toContain('data-scale-start="1000000" data-scale-min="-7" data-scale-max="5"')
+    fixture.document.columns[0].styles![row.id] = { scaleMode: 'fixed', scaleMin: -20, scaleMax: 20, segmentLimits: { '1100000': { min: -12, max: 13 } } }
+    const fixed = await session.render(fixture.document, fixture.sources, fixture.genes)
+    expect(fixed.svg).toContain('data-scale-start="1100000" data-scale-min="-12" data-scale-max="13"')
+  })
+
+  it('applies cell matrix query settings and gene filtering without editing the source workspace', async () => {
+    const fixture = createManuscriptFixture()
+    const matrixRow = fixture.document.rows.find((row) => row.trackIds[0] === 'matrix-0')!
+    const geneRow = fixture.document.rows.find((row) => row.trackIds[0] === 'reference-genes')!
+    const cell = fixture.document.columns[0].styles![matrixRow.id]
+    Object.assign(cell.appearance!, { matrixResolutionBp: 10000, matrixNormalization: 'raw', matrixMaxDistanceBp: 50000 })
+    for (const column of fixture.document.columns) column.styles![geneRow.id].appearance!.geneNames = 'GENE_B'
+    const source = fixture.sources.get('matrix-0')!
+    let queried = false
+    fixture.sources.set('matrix-0', { ...source, async getFeatures(region, pixels, signal, options) {
+      queried = true
+      expect(options).toMatchObject({ matrixResolution: 10000, matrixNormalization: 'raw', matrixMaxDistance: 50000 })
+      return source.getFeatures(region, pixels, signal, options)
+    } })
+    const result = await new FigureRenderSession().render(fixture.document, fixture.sources, fixture.genes)
+    expect(queried).toBe(true)
+    expect(result.svg).not.toContain('>GENE_A</text>')
+    expect(result.svg).toContain('>GENE_B</text>')
+    expect(fixture.document.sourceDocument.tracks.find((track) => track.id === 'matrix-0')?.matrixResolution).toBeUndefined()
+  })
   it('records physical PNG output resolution without changing pixel data', () => {
     const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, ...Array(17).fill(0), 0, 0, 0, 0, 73, 68, 65, 84, 0, 0, 0, 0])
     const output = embedPngDpi(png, 300)

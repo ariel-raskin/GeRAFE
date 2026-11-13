@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addFigureColumn, createFigureDocument, figureRequiredSourceIds, FigureDocumentStore, normalizeFigureDocument, setFigureColumnRegion } from './figure-document.ts'
+import { addFigureColumn, applyManuscriptPreset, createFigureDocument, figureRequiredSourceIds, FigureDocumentStore, normalizeFigureDocument, setFigureColumnRegion } from './figure-document.ts'
 import { addInteractionTrack, addMatrixTrack, addSignalTrack, createTrackDocument } from './track-document.ts'
 
 function browserDocument() {
@@ -10,6 +10,39 @@ function browserDocument() {
 }
 
 describe('figure document', () => {
+  it('migrates version 1 projects and round-trips manuscript settings through undo and JSON', () => {
+    const source = browserDocument()
+    const old = { ...createFigureDocument(source), schemaVersion: 1 }
+    const store = new FigureDocumentStore(normalizeFigureDocument(old))
+    expect(store.current.schemaVersion).toBe(2)
+    const normalizedSource = structuredClone(store.current.sourceDocument)
+    store.edit((draft) => { addFigureColumn(draft); addFigureColumn(draft); applyManuscriptPreset(draft); draft.columns[1].widthWeight = 2 })
+    const reopened = normalizeFigureDocument(JSON.parse(JSON.stringify(store.current)))
+    expect(reopened.columns).toHaveLength(3)
+    expect(reopened.columns[1].widthWeight).toBe(2)
+    expect(reopened.page.appearance?.rulerStyle).toBe('endpoints')
+    expect(reopened.rows[0].appearance?.segmentedScales).toBe(true)
+    expect(reopened.sourceDocument).toEqual(normalizedSource)
+    store.undo()
+    expect(store.current.columns).toHaveLength(1)
+    store.redo()
+    expect(store.current).toEqual(reopened)
+  })
+
+  it('validates column identity, limits the column count, and rejects malformed palettes and section limits', () => {
+    const figure = createFigureDocument(browserDocument())
+    addFigureColumn(figure)
+    const duplicate = structuredClone(figure)
+    duplicate.columns[1].id = duplicate.columns[0].id
+    expect(() => normalizeFigureDocument(duplicate)).toThrow(/column/)
+    while (figure.columns.length < 8) addFigureColumn(figure)
+    expect(() => addFigureColumn(figure)).toThrow(/eight/)
+    const row = figure.rows[0]
+    figure.columns[0].styles = { [row.id]: { appearance: { matrixColors: '#ff0000,broken' } } }
+    expect(() => normalizeFigureDocument(figure)).toThrow(/palette/)
+    figure.columns[0].styles![row.id] = { segmentLimits: { '100': { min: 5, max: 2 } } }
+    expect(() => normalizeFigureDocument(figure)).toThrow(/section scale/)
+  })
   it('hands off fractional browser viewports as complete bases without changing GeR', () => {
     const source = browserDocument()
     source.region = { chr: 'chr1', start: 100.25, end: 200.75 }

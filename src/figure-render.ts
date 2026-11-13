@@ -1,3 +1,4 @@
+import { pageFields, rowFields, cellFields, resolveAppearance, type RowAppearance } from './figure-appearance.ts'
 import type { FigureCellStyle, FigureDocument, FigureRow } from './figure-document.ts'
 import { filterInteractionFeatures, filterInteractionsForGenes, interactionFeatureColor, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryMaximumDistance, matrixSignedColor, matrixValueIntensity, matrixWarmPaletteColor, selectInteractionFeatures } from './browser.ts'
 import { GeneSource } from './reference.ts'
@@ -16,16 +17,26 @@ export interface FigureLayout {
 
 export function layoutFigure(document: FigureDocument): FigureLayout {
   const page = document.page
-  const columnWidthMm = (page.widthMm - page.marginMm * 2 - page.labelWidthMm - page.columnGapMm * (document.columns.length - 1)) / document.columns.length
-  if (columnWidthMm < 15) throw new Error('The page is too narrow for its columns, labels, and margins.')
+  const appearance = resolveAppearance(pageFields, page.appearance)
+  const gutters = document.columns.map((column, index) => Math.max(0, ...document.rows.filter((row) => row.included).map((row) => {
+    const style = column.styles?.[row.id]
+    const cell = resolveAppearance(cellFields, style?.appearance)
+    const matrix = (column.assignments[row.id] ?? []).some((id) => document.sourceDocument.tracks.find((track) => track.id === id)?.kind === 'matrix')
+    return matrix && style?.showScale !== false && (cell.matrixLegend === 'right' || cell.matrixLegend === 'last-column' && index === document.columns.length - 1) ? cell.legendGapMm + cell.legendWidthMm + 1.5 : 0
+  })))
+  const available = page.widthMm - page.marginMm * 2 - page.labelWidthMm - page.columnGapMm * (document.columns.length - 1) - gutters.reduce((a, b) => a + b, 0)
+  const totalWeight = document.columns.reduce((sum, column) => sum + (column.widthWeight ?? 1), 0)
+  const columnWidthMm = available / document.columns.length
   const columns = new Map<string, { x: number; width: number; rulerY: number }>()
-  document.columns.forEach((column, index) => columns.set(column.id, {
-    x: page.marginMm + page.labelWidthMm + index * (columnWidthMm + page.columnGapMm),
-    width: columnWidthMm,
-    rulerY: page.marginMm + (page.title ? 12 : 0) + (document.columns.some((item) => item.title) ? 8 : 0),
-  }))
+  let x = page.marginMm + page.labelWidthMm
+  document.columns.forEach((column, index) => {
+    const width = available * (column.widthWeight ?? 1) / totalWeight
+    if (width < 10) throw new Error('The page is too narrow for its columns, labels, and legends. Increase width or reduce gaps / label area.')
+    columns.set(column.id, { x, width, rulerY: page.marginMm + (page.title ? appearance.titleHeightMm : 0) + (document.columns.some((item) => item.title) ? appearance.headingHeightMm : 0) })
+    x += width + page.columnGapMm + gutters[index]
+  })
   const rulerY = columns.values().next().value?.rulerY ?? page.marginMm
-  let y = rulerY + page.rulerHeightMm + 2
+  let y = rulerY + page.rulerHeightMm + appearance.rulerGapMm
   const rows = new Map<string, { y: number; height: number }>()
   for (const row of document.rows) {
     if (!row.included) continue
@@ -59,7 +70,8 @@ export class FigureRenderSession {
       const features = new Map<string, TrackFeature[]>()
       cells.set(cellKey(column.id, row.id), features)
       for (const trackId of column.assignments[row.id] ?? []) {
-        const spec = document.sourceDocument.tracks.find((track) => track.id === trackId)
+        const sourceSpec = document.sourceDocument.tracks.find((track) => track.id === trackId)
+        const spec = sourceSpec && figureTrackSpec(sourceSpec, column.styles?.[row.id])
         if (!spec) { issues.push(`${column.title || 'Column'} / ${row.label}: track is missing from the figure project.`); continue }
         if (spec.kind === 'genes') {
           const referenceId = document.sourceDocument.sources.find((source) => source.id === spec.sourceIds[0])?.annotationReferenceId
@@ -74,7 +86,7 @@ export class FigureRenderSession {
           const options = queryOptions(spec, row.heightMm, column.region, dpi)
           // Matrix readers have bounded rectangular queries; export resolution must not
           // increase the genomic bin count beyond what the interactive viewer supports.
-          const pixelWidth = Math.max(1, Math.min(spec.kind === 'matrix' ? 1_100 : 8_000, Math.ceil(layout.columnWidthMm * dpi / 25.4)))
+          const pixelWidth = Math.max(1, Math.min(spec.kind === 'matrix' ? 1_100 : 8_000, Math.ceil(layout.columns.get(column.id)!.width * dpi / 25.4)))
           const key = JSON.stringify([sourceId, column.region, pixelWidth, options])
           let request = this.cache.get(key)
           if (!request) {
@@ -96,7 +108,7 @@ export class FigureRenderSession {
           const source = sourceId && sources.get(sourceId)
           if (overlaySpec && !source) issues.push(`${column.title || 'Column'} / ${row.label}: linked BEDPE overlay source needs reopening.`)
           if (overlaySpec && source && sourceId) {
-            const pixelWidth = Math.max(1, Math.min(8_000, Math.ceil(layout.columnWidthMm * dpi / 25.4)))
+            const pixelWidth = Math.max(1, Math.min(8_000, Math.ceil(layout.columns.get(column.id)!.width * dpi / 25.4)))
             const key = JSON.stringify([sourceId, column.region, pixelWidth, undefined])
             let request = this.cache.get(key)
             if (!request) { request = source.getFeatures(column.region, pixelWidth); this.cache.set(key, request) }
@@ -111,6 +123,7 @@ export class FigureRenderSession {
 }
 
 function queryOptions(spec: TrackSpec, heightMm: number, region: Region, dpi: number): TrackQueryOptions | undefined {
+  if (spec.kind === 'signal' || spec.kind === 'stranded') return { signalResolution: 'full' }
   if (spec.kind === 'alignment') return {
     bamViewMode: spec.bamViewMode, bamViewAsPairs: spec.bamViewAsPairs, bamMinMapq: spec.bamMinMapq,
     bamIncludeDuplicates: spec.bamIncludeDuplicates, bamIncludeSecondary: spec.bamIncludeSecondary,
@@ -145,6 +158,7 @@ function px(region: Region, bounds: FigureCellBounds, coordinate: number): numbe
 function buildSvg(document: FigureDocument, layout: FigureLayout, cells: Map<string, QueryCell>, genes: GeneSource | undefined, issues: string[], sources: ReadonlyMap<string, TrackSource>): string {
   const page = document.page
   const fontMm = page.fontSizePt * 25.4 / 72
+  const appearance = resolveAppearance(pageFields, page.appearance)
   const queryCounts = document.columns.flatMap((column) => document.rows.filter((row) => row.included).map((row) => {
     const cell = cells.get(cellKey(column.id, row.id)) ?? new Map<string, TrackFeature[]>()
     return {
@@ -153,18 +167,21 @@ function buildSvg(document: FigureDocument, layout: FigureLayout, cells: Map<str
       featureTypes: Object.fromEntries([...cell].map(([id, features]) => [id, Object.fromEntries([...new Set(features.map((feature) => 'featureType' in feature ? feature.featureType : 'signal'))].map((type) => [type, features.filter((feature) => ('featureType' in feature ? feature.featureType : 'signal') === type).length]))])),
     }
   }))
+  const recipe = structuredClone(document)
+  for (const source of recipe.sourceDocument.sources) for (const file of source.files) delete file.path
   const parts = [`<svg xmlns="http://www.w3.org/2000/svg" width="${n(layout.widthMm)}mm" height="${n(layout.heightMm)}mm" viewBox="0 0 ${n(layout.widthMm)} ${n(layout.heightMm)}" role="img" aria-label="${escapeXml(document.name)}">`,
-    `<metadata>${escapeXml(JSON.stringify({ application: 'GeRAFE', figureVersion: document.schemaVersion, referenceId: document.referenceId, widthMm: layout.widthMm, heightMm: layout.heightMm, columns: document.columns.map((column) => ({ title: column.title, region: column.region })), sources: document.sourceDocument.sources.map((source) => ({ id: source.id, name: source.name, format: source.format, files: source.files.map((file) => ({ name: file.name, size: file.size })) })), queryCounts }))}</metadata>`,
+    `<metadata>${escapeXml(JSON.stringify({ application: 'GeRAFE', figure: recipe, figureVersion: document.schemaVersion, referenceId: document.referenceId, widthMm: layout.widthMm, heightMm: layout.heightMm, columns: document.columns.map((column) => ({ title: column.title, region: column.region })), sources: document.sourceDocument.sources.map((source) => ({ id: source.id, name: source.name, format: source.format, files: source.files.map((file) => ({ name: file.name, size: file.size })) })), queryCounts }))}</metadata>`,
     rect(0, 0, layout.widthMm, layout.heightMm, page.background),
     `<g font-family="${escapeXml(page.fontFamily)}">`]
-  if (page.title) parts.push(text(layout.widthMm / 2, page.marginMm + fontMm * 1.2, page.title, fontMm * 1.45, '#111111', 'text-anchor="middle" font-weight="700"'))
+  if (page.title) parts.push(text(layout.widthMm / 2, page.marginMm + fontMm * 1.2, page.title, (appearance.titleSizePt || page.fontSizePt * 1.45) * 25.4 / 72, appearance.headingColor, 'text-anchor="middle" font-weight="700"'))
   for (const column of document.columns) {
     const columnLayout = layout.columns.get(column.id)!
-    if (column.title) parts.push(text(columnLayout.x + columnLayout.width / 2, columnLayout.rulerY - 2, column.title, fontMm * 1.25, '#111111', 'text-anchor="middle" font-weight="700"'))
-    parts.push(drawRuler(column.region, { x: columnLayout.x, y: columnLayout.rulerY, width: columnLayout.width, height: page.rulerHeightMm }, fontMm))
+    if (column.title) parts.push(text(columnLayout.x + columnLayout.width / 2, columnLayout.rulerY - 2, column.title, (appearance.headingSizePt || page.fontSizePt * 1.25) * 25.4 / 72, appearance.headingColor, `text-anchor="middle" font-weight="${appearance.headingWeight}"`))
+    parts.push(drawRuler(column.region, { x: columnLayout.x, y: columnLayout.rulerY, width: columnLayout.width, height: page.rulerHeightMm }, document))
   }
   const visibleRows = document.rows.filter((row) => row.included)
   const sharedMatrixMaxima = new Map<string, number>()
+  const sharedMatrixObservedMaxima = new Map<string, number>()
   for (const row of visibleRows) for (const column of document.columns) for (const trackId of column.assignments[row.id] ?? []) {
     const spec = document.sourceDocument.tracks.find((track) => track.id === trackId)
     if (spec?.kind !== 'matrix') continue
@@ -172,6 +189,7 @@ function buildSvg(document: FigureDocument, layout: FigureLayout, cells: Map<str
     if (!matrix) continue
     const key = `${row.id}\u0000${spec.matrixValueMode}\u0000${spec.matrixComparisonMode}`
     sharedMatrixMaxima.set(key, Math.max(sharedMatrixMaxima.get(key) ?? 0, matrixSourceMaximum(matrix, spec)))
+    sharedMatrixObservedMaxima.set(key, Math.max(sharedMatrixObservedMaxima.get(key) ?? 0, matrixSourceMaximum(matrix, spec, false)))
   }
   for (let index = 0; index < visibleRows.length;) {
     const label = visibleRows[index].groupLabel
@@ -181,40 +199,48 @@ function buildSvg(document: FigureDocument, layout: FigureLayout, cells: Map<str
     const first = layout.rows.get(visibleRows[index].id)!
     const last = layout.rows.get(visibleRows[end - 1].id)!
     const middle = (first.y + last.y + last.height) / 2
-    parts.push(line(page.marginMm + 7, first.y, page.marginMm + 7, last.y + last.height, '#6b7280', 0.2))
-    parts.push(`<text x="${n(page.marginMm + 5)}" y="${n(middle)}" transform="rotate(-90 ${n(page.marginMm + 5)} ${n(middle)})" text-anchor="middle" font-size="${n(fontMm * 1.15)}" font-weight="700" fill="#111111">${escapeXml(label)}</text>`)
+    const group = resolveAppearance(rowFields, visibleRows[index].appearance)
+    parts.push(line(page.marginMm + group.groupBracketXmm, first.y, page.marginMm + group.groupBracketXmm, last.y + last.height, group.groupColor, group.groupLinePt * 25.4 / 72))
+    parts.push(`<text x="${n(page.marginMm + group.groupLabelXmm)}" y="${n(middle)}" transform="rotate(-90 ${n(page.marginMm + group.groupLabelXmm)} ${n(middle)})" text-anchor="middle" font-size="${n((group.groupFontPt || page.fontSizePt * 1.15) * 25.4 / 72)}" font-weight="700" fill="${group.groupColor}">${escapeXml(label)}</text>`)
     index = end
   }
   for (const row of document.rows) {
     const rowLayout = layout.rows.get(row.id)
     if (!rowLayout) continue
     const firstColumn = layout.columns.get(document.columns[0].id)!
-    parts.push(text(firstColumn.x - 2, rowLayout.y + rowLayout.height / 2 + fontMm * 0.3, row.label, (row.labelFontSizePt ?? page.fontSizePt) * 25.4 / 72, row.labelColor ?? '#111111', 'text-anchor="end" font-weight="600"'))
+    const rowAppearance = resolveAppearance(rowFields, row.appearance)
+    const labelX = firstColumn.x - rowAppearance.labelGapMm + rowAppearance.labelOffsetXmm
+    const labelY = rowLayout.y + rowLayout.height / 2 + rowAppearance.labelOffsetYmm
+    const vertical = rowAppearance.labelOrientation === 'vertical'
+    parts.push(text(labelX, labelY, row.label, (row.labelFontSizePt ?? page.fontSizePt) * 25.4 / 72, row.labelColor ?? '#111111', `text-anchor="${vertical ? 'middle' : 'end'}" dominant-baseline="middle" font-weight="${rowAppearance.labelWeight}" ${vertical ? `transform="rotate(-90 ${n(labelX)} ${n(labelY)})"` : ''}`))
     for (const column of document.columns) {
-      const bounds = figureCellBounds(layout, row.id, column.id)!
+      const frame = figureCellBounds(layout, row.id, column.id)!
+      const padding = Math.min(rowAppearance.paddingMm, (frame.height - 0.5) / 2)
+      const bounds = { ...frame, y: frame.y + padding, height: frame.height - padding * 2 }
       const clipId = `clip-${safeId(column.id)}-${safeId(row.id)}`
       parts.push(`<defs><clipPath id="${clipId}">${rect(bounds.x, bounds.y, bounds.width, bounds.height, '#ffffff')}</clipPath></defs>`)
       parts.push(`<g data-fe-row="${escapeXml(row.id)}" data-fe-column="${escapeXml(column.id)}">`)
+      parts.push(rect(frame.x, frame.y, frame.width, frame.height, rowAppearance.background))
       parts.push(`<g clip-path="url(#${clipId})">`)
       const trackIds = column.assignments[row.id] ?? []
-      const cell = cells.get(cellKey(column.id, row.id)) ?? new Map()
+      const cell: QueryCell = cells.get(cellKey(column.id, row.id)) ?? new Map()
       const specs = trackIds.map((id) => document.sourceDocument.tracks.find((track) => track.id === id)).filter((item): item is TrackSpec => Boolean(item))
       const style = column.styles?.[row.id]
       if (!specs.length) parts.push(text(bounds.x + 2, bounds.y + bounds.height / 2, 'No track assigned', fontMm * 0.8, '#888888'))
-      else if (specs.length > 1 && specs.every((spec) => spec.kind === 'signal')) parts.push(drawSignalStack(specs, cell, column.region, bounds, document, style))
+      else if (specs.length > 1 && specs.every((spec) => spec.kind === 'signal')) parts.push(drawSignalStack(specs, cell, column.region, bounds, document, cells, row, style))
       else for (const spec of specs) {
-        const renderSpec = style?.color ? { ...spec, color: style.color } : spec
+        const renderSpec = figureTrackSpec(spec, style)
         const features = cell.get(spec.id) ?? []
-        if (spec.kind === 'signal') parts.push(drawSignal(features as SignalFeature[], renderSpec, column.region, bounds, document, cells, row, style))
+        if (spec.kind === 'signal') parts.push(drawSignal(features as SignalFeature[], renderSpec, column.region, bounds, document, cells, row, style, cell))
         else if (spec.kind === 'stranded') parts.push(drawStranded(renderSpec, features as SignalFeature[], cell, column.region, bounds, style, document, row, cells))
         else if (spec.kind === 'interval') parts.push(drawIntervals(features as IntervalFeature[], renderSpec, column.region, bounds, fontMm))
-        else if (spec.kind === 'interaction') parts.push(drawInteractions(features as InteractionFeature[], renderSpec, column.region, bounds, genes))
+        else if (spec.kind === 'interaction') parts.push(drawInteractions(features as InteractionFeature[], renderSpec, column.region, bounds, genes, style))
         else if (spec.kind === 'matrix') {
           parts.push(`<g opacity="${n((style?.opacity ?? 100) / 100)}">`)
           parts.push(drawMatrix(features as MatrixFeature[], renderSpec, column.region, bounds, document.page.background, style,
-            sharedMatrixMaxima.get(`${row.id}\u0000${spec.matrixValueMode}\u0000${spec.matrixComparisonMode}`), issues, `${column.title || 'Column'} / ${row.label}`))
+            (style?.scaleMode === 'shared' ? sharedMatrixObservedMaxima : sharedMatrixMaxima).get(`${row.id}\u0000${spec.matrixValueMode}\u0000${spec.matrixComparisonMode}`), issues, `${column.title || 'Column'} / ${row.label}`))
           parts.push(drawMatrixBedpeOverlay(document, renderSpec, cell, column.region, bounds, genes))
-          parts.push(drawMatrixOutlines(document, spec.id, renderSpec, column.region, bounds))
+          if (rowAppearance.showAnnotations && rowAppearance.showOutlines) parts.push(drawMatrixOutlines(document, spec.id, renderSpec, column.region, bounds))
           parts.push('</g>')
         }
         else if (spec.kind === 'alignment') parts.push(drawAlignments(features, renderSpec, column.region, bounds))
@@ -222,12 +248,16 @@ function buildSvg(document: FigureDocument, layout: FigureLayout, cells: Map<str
           const referenceId = document.sourceDocument.sources.find((source) => source.id === spec.sourceIds[0])?.annotationReferenceId
           if (referenceId && referenceId !== document.referenceId) continue
           const source = spec.sourceIds[0] ? sources.get(spec.sourceIds[0]) : genes
-          if (source instanceof GeneSource) parts.push(drawGenes(source, renderSpec, column.region, bounds, fontMm))
+          if (source instanceof GeneSource) parts.push(`<g opacity="${n((style?.opacity ?? 100) / 100)}">${drawGenes(source, renderSpec, column.region, bounds, fontMm, style)}</g>`)
         }
       }
-      parts.push(drawAnnotations(document, column.region, bounds, specs.find((spec) => spec.kind === 'matrix')))
+      if (rowAppearance.showAnnotations) parts.push(drawAnnotations(document, column.region, bounds, specs.find((spec) => spec.kind === 'matrix') ? figureTrackSpec(specs.find((spec) => spec.kind === 'matrix')!, style) : undefined, rowAppearance))
       parts.push('</g>')
-      parts.push(`<rect x="${n(bounds.x)}" y="${n(bounds.y)}" width="${n(bounds.width)}" height="${n(bounds.height)}" fill="none" stroke="${escapeXml(row.frameColor ?? '#444444')}" stroke-width="${n((row.frameWidthPt ?? 0.5) * 25.4 / 72)}"/>`)
+      for (const spec of specs.filter((item) => item.kind === 'matrix')) {
+        const matrix = (cell.get(spec.id) ?? []).find((item): item is MatrixFeature => 'featureType' in item && item.featureType === 'matrix')
+        if (matrix) parts.push(drawMatrixLegend(matrix, figureTrackSpec(spec, style), bounds, style, (style?.scaleMode === 'shared' ? sharedMatrixObservedMaxima : sharedMatrixMaxima).get(`${row.id}\u0000${spec.matrixValueMode}\u0000${spec.matrixComparisonMode}`), column.id === document.columns.at(-1)!.id))
+      }
+      parts.push(`<rect x="${n(frame.x)}" y="${n(frame.y)}" width="${n(frame.width)}" height="${n(frame.height)}" fill="none" stroke="${escapeXml(row.frameColor ?? '#444444')}" stroke-width="${n((row.frameWidthPt ?? 0.5) * 25.4 / 72)}"/>`)
       parts.push('</g>')
     }
   }
@@ -238,98 +268,143 @@ function buildSvg(document: FigureDocument, layout: FigureLayout, cells: Map<str
 
 function safeId(value: string): string { return value.replace(/[^a-z0-9_-]/gi, '_') }
 
-function drawRuler(region: Region, bounds: FigureCellBounds, fontMm: number): string {
-  const y = bounds.y + bounds.height - 1
+function drawRuler(region: Region, bounds: FigureCellBounds, document: FigureDocument): string {
+  const a = resolveAppearance(pageFields, document.page.appearance)
+  if (bounds.height <= 0 || a.rulerStyle === 'none') return ''
+  const font = (a.rulerFontPt || document.page.fontSizePt * 0.7) * 25.4 / 72
+  const chromosomeFont = (a.chromosomeFontPt || document.page.fontSizePt * 0.8) * 25.4 / 72
   const span = region.end - region.start
-  const roughStep = span / 4
-  const power = Math.pow(10, Math.floor(Math.log10(roughStep)))
-  const step = [1, 2, 5, 10].map((value) => value * power).find((value) => value >= roughStep) ?? power * 10
-  const ticks: string[] = [line(bounds.x, y, bounds.x + bounds.width, y, '#667085', 0.2), text(bounds.x, bounds.y + fontMm, region.chr, fontMm * 0.8, '#475467', 'font-weight="700"')]
-  for (let pos = Math.ceil(region.start / step) * step; pos < region.end; pos += step) {
-    const x = px(region, bounds, pos)
-    ticks.push(line(x, y - 1, x, y + 1, '#667085', 0.2))
-    ticks.push(text(x, y - 1.8, `${(pos / 1_000_000).toFixed(3)} Mb`, fontMm * 0.7, '#475467', 'text-anchor="middle"'))
+  const nice = (value: number) => {
+    const power = Math.pow(10, Math.floor(Math.log10(value)))
+    return [1, 2, 5, 10].map((multiple) => multiple * power).find((step) => step >= value) ?? power * 10
   }
-  return ticks.join('')
+  const units = a.rulerUnits === 'Mb' ? 1e6 : a.rulerUnits === 'kb' ? 1e3 : 1
+  const coordinate = (value: number) => `${(value / units).toFixed(a.rulerDecimals)} ${a.rulerUnits}`
+  const y = bounds.y + bounds.height - 0.5
+  const stroke = a.rulerLinePt * 25.4 / 72
+  const parts = [a.shadeRuler ? rect(bounds.x, bounds.y, bounds.width, bounds.height, a.rulerBackground) : '']
+  if (a.showChromosome) parts.push(text(bounds.x + 0.4, bounds.y + chromosomeFont, region.chr, chromosomeFont, a.rulerColor, 'font-weight="700"'))
+  if (a.rulerStyle === 'endpoints') {
+    parts.push(text(bounds.x + 0.4, y, coordinate(region.start), font, a.rulerColor), text(bounds.x + bounds.width - 0.4, y, coordinate(region.end), font, a.rulerColor, 'text-anchor="end"'))
+    const length = Math.min(span, a.scaleBarBp || nice(span / 5))
+    const width = length / span * bounds.width
+    const x = bounds.x + (bounds.width - width) / 2
+    const barY = bounds.y + bounds.height * 0.38
+    const barFont = (a.scaleBarFontPt || document.page.fontSizePt * 0.65) * 25.4 / 72
+    parts.push(line(x, barY, x + width, barY, a.rulerColor, stroke), line(x, barY - 0.5, x, barY + 0.5, a.rulerColor, stroke), line(x + width, barY - 0.5, x + width, barY + 0.5, a.rulerColor, stroke), text(x + width / 2, barY + barFont + 0.5, length >= 1e6 ? `${length / 1e6} Mb` : length >= 1e3 ? `${length / 1e3} kb` : `${length} bp`, barFont, a.rulerColor, 'text-anchor="middle"'))
+  } else {
+    const step = nice(span / 4)
+    parts.push(line(bounds.x, y, bounds.x + bounds.width, y, a.rulerColor, stroke))
+    for (let pos = Math.ceil(region.start / step) * step; pos < region.end; pos += step) {
+      const x = px(region, bounds, pos)
+      parts.push(line(x, y - 0.7, x, y + 0.5, a.rulerColor, stroke), text(x, y - 1.2, coordinate(pos), font, a.rulerColor, 'text-anchor="middle"'))
+    }
+  }
+  return parts.join('')
 }
 
-function signalDomain(features: readonly SignalFeature[], spec: TrackSpec, document: FigureDocument): { min: number; max: number } {
+function signalDomain(features: readonly SignalFeature[], spec: TrackSpec, document: FigureDocument, respectSource = true): { min: number; max: number } {
   const binding = document.sourceDocument.scales.find((item) => item.id === spec.scaleBindingId)
-  if (binding?.mode === 'fixed' && binding.limits) return binding.limits
+  if (respectSource && binding?.mode === 'fixed' && binding.limits) return binding.limits
   let min = 0; let max = 0
   for (const feature of features) { if (Number.isFinite(feature.score)) { min = Math.min(min, feature.score); max = Math.max(max, feature.score) } }
   if (spec.allowNegativeValues === false) min = 0
-  return { min, max: max > min ? max : min + 1 }
+  return { min, max }
 }
 
-function drawSignal(features: SignalFeature[], spec: TrackSpec, region: Region, bounds: FigureCellBounds, document: FigureDocument, allCells: Map<string, QueryCell>, row: FigureRow, style?: FigureCellStyle): string {
-  const values = features.filter((feature) => feature.end > region.start && feature.start < region.end && Number.isFinite(feature.score))
-  if (!values.length) return ''
-  const shared = document.columns.flatMap((column) => (column.assignments[row.id] ?? []).flatMap((trackId) => allCells.get(cellKey(column.id, row.id))?.get(trackId) ?? []).filter((feature): feature is SignalFeature => 'score' in feature && !('featureType' in feature)))
-  const domain = style?.scaleMode === 'fixed' && style.scaleMin !== undefined && style.scaleMax !== undefined
-    ? { min: style.scaleMin, max: style.scaleMax }
-    : signalDomain(style?.scaleMode === 'independent' ? values : shared.length ? shared : values, spec, document)
-  const innerTop = bounds.y + 0.8; const innerHeight = bounds.height - 1.6
-  const y = (score: number) => innerTop + innerHeight * (1 - (Math.max(domain.min, Math.min(domain.max, score)) - domain.min) / (domain.max - domain.min))
-  const zero = y(0)
-  const color = style?.color ?? spec.color
-  const opacity = (style?.opacity ?? spec.signalOpacity ?? 100) / 100
-  const scale = style?.showScale === false ? '' : drawScaleLabels(bounds, domain)
-  if ((style?.renderStyle === 'source' || !style?.renderStyle ? spec.signalRenderStyle : style.renderStyle) === 'line') {
-    const path = values.map((feature, index) => `${index ? 'L' : 'M'}${n(px(region, bounds, (feature.start + feature.end) / 2))} ${n(y(feature.score))}`).join(' ')
-    return `<path d="${path}" fill="none" stroke="${escapeXml(color)}" stroke-width="0.28" opacity="${n(opacity)}"/>${line(bounds.x, zero, bounds.x + bounds.width, zero, '#666666', 0.12)}${scale}`
+/** Sections are genomic intervals, never numbered display labels. */
+export function figureScaleSections(document: FigureDocument, row: FigureRow, region: Region): Region[] {
+  const cuts = resolveAppearance(rowFields, row.appearance).segmentedScales
+    ? document.sourceDocument.comparisonDividers.filter((divider) => divider.chr === region.chr && divider.position > region.start && divider.position < region.end).map((divider) => divider.position) : []
+  const positions = [...new Set([region.start, ...cuts, region.end])].sort((a, b) => a - b)
+  return positions.slice(0, -1).map((start, index) => ({ chr: region.chr, start, end: positions[index + 1] }))
+}
+
+function sectionDomain(document: FigureDocument, row: FigureRow, allCells: Map<string, QueryCell>, cell: QueryCell, region: Region, spec: TrackSpec, style?: FigureCellStyle, stranded = false, viewport = region): { min: number; max: number } {
+  if (style?.scaleMode === 'fixed') return style.segmentLimits?.[String(region.start)] ?? { min: style.scaleMin ?? 0, max: style.scaleMax ?? 1 }
+  const sectionIndex = figureScaleSections(document, row, viewport).findIndex((section) => section.start === region.start)
+  const values: SignalFeature[] = []
+  const negatives: SignalFeature[] = []
+  for (const column of document.columns) {
+    const candidate = allCells.get(cellKey(column.id, row.id))
+    if (!candidate || style?.scaleMode === 'independent' && candidate !== cell) continue
+    for (const id of column.assignments[row.id] ?? []) {
+      const assigned = document.sourceDocument.tracks.find((track) => track.id === id)
+      if (!assigned || (stranded ? assigned.kind !== 'stranded' : assigned.kind !== 'signal')) continue
+      const pooledSection = figureScaleSections(document, row, column.region)[sectionIndex] ?? column.region
+      const overlap = (feature: SignalFeature) => Number.isFinite(feature.score) && feature.start < pooledSection.end && feature.end > pooledSection.start
+      values.push(...((candidate.get(id) ?? []) as SignalFeature[]).filter(overlap))
+      if (stranded) negatives.push(...((candidate.get(assigned.sourceIds[1]) ?? []) as SignalFeature[]).filter(overlap))
+    }
   }
-  const bars = values.map((feature) => {
-    const left = Math.max(bounds.x, px(region, bounds, feature.start))
-    const right = Math.min(bounds.x + bounds.width, px(region, bounds, feature.end))
-    const pointY = y(spec.allowNegativeValues === false ? Math.max(0, feature.score) : feature.score)
-    return rect(left, Math.min(zero, pointY), Math.max(0.05, right - left), Math.max(0.03, Math.abs(zero - pointY)), color)
+  if (stranded) {
+    let max = values.reduce((limit, feature) => Math.max(limit, Math.abs(feature.score)), 0)
+    let min = negatives.reduce((limit, feature) => Math.max(limit, Math.abs(feature.score)), 0)
+    if (!style?.scaleMode || style.scaleMode === 'source') {
+      const positive = document.sourceDocument.scales.find((binding) => binding.id === spec.scaleBindingId)
+      const negative = document.sourceDocument.scales.find((binding) => binding.id === spec.negativeScaleBindingId)
+      if (positive?.mode === 'fixed' && positive.limits) max = Math.max(Math.abs(positive.limits.min), Math.abs(positive.limits.max))
+      if (negative?.mode === 'fixed' && negative.limits) min = Math.max(Math.abs(negative.limits.min), Math.abs(negative.limits.max))
+    }
+    return { min: -min, max }
+  }
+  return signalDomain(values, spec, document, !style?.scaleMode || style.scaleMode === 'source')
+}
+
+function scaleLabel(value: number, appearance: RowAppearance): string { return Number(value.toPrecision(appearance.scalePrecision)).toString() }
+function drawScaleLabels(bounds: FigureCellBounds, domain: { min: number; max: number }, appearance = resolveAppearance(rowFields), showZeroMinimum = false): string {
+  const font = appearance.scaleFontPt * 25.4 / 72
+  const label = (value: number, y: number) => {
+    const formatted = scaleLabel(value, appearance)
+    const x = bounds.x + appearance.scaleInsetMm
+    return (appearance.scaleLabelBackground ? rect(x - 0.2, y - font * 0.85, formatted.length * font * 0.58 + 0.4, font * 1.05, appearance.scaleBackgroundColor) : '') + text(x, y, formatted, font, appearance.scaleColor)
+  }
+  return label(domain.max, bounds.y + font + 0.3) + ((domain.min !== 0 || showZeroMinimum) ? label(domain.min, bounds.y + bounds.height - 0.3) : '')
+}
+
+function drawSignal(features: SignalFeature[], spec: TrackSpec, region: Region, bounds: FigureCellBounds, document: FigureDocument, allCells: Map<string, QueryCell>, row: FigureRow, style?: FigureCellStyle, queryCell?: QueryCell): string {
+  const a = resolveAppearance(rowFields, row.appearance)
+  const cell = queryCell ?? new Map()
+  const c = resolveAppearance(cellFields, style?.appearance)
+  return figureScaleSections(document, row, region).map((section) => {
+    const left = px(region, bounds, section.start), right = px(region, bounds, section.end)
+    const b = { ...bounds, x: left, width: right - left }
+    const domain = sectionDomain(document, row, allCells, cell, section, spec, style, false, region)
+    const inset = Math.min(0.8, bounds.height * 0.1)
+    const y = (score: number) => bounds.y + inset + (bounds.height - inset * 2) * (1 - (Math.max(domain.min, Math.min(domain.max, score)) - domain.min) / Math.max(1e-12, domain.max - domain.min))
+    const zero = y(0)
+    const values = features.filter((feature) => feature.end > section.start && feature.start < section.end && Number.isFinite(feature.score))
+    const color = style?.color ?? spec.color
+    const lineStyle = (style?.renderStyle === 'source' || !style?.renderStyle ? spec.signalRenderStyle : style.renderStyle) === 'line'
+    const marks = lineStyle ? `<path d="${values.map((feature, index) => `${index ? 'L' : 'M'}${n(px(region, bounds, (Math.max(section.start, feature.start) + Math.min(section.end, feature.end)) / 2))} ${n(y(feature.score))}`).join(' ')}" fill="none" stroke="${color}" stroke-width="${n(c.lineWidthPt * 25.4 / 72)}"/>`
+      : values.map((feature) => { const x1 = Math.max(left, px(region, bounds, feature.start)), x2 = Math.min(right, px(region, bounds, feature.end)), point = y(feature.score); return rect(x1, Math.min(zero, point), x2 - x1, Math.abs(zero - point), color) }).join('')
+    return `<g data-scale-start="${section.start}" data-scale-min="${n(domain.min)}" data-scale-max="${n(domain.max)}"><g opacity="${n((style?.opacity ?? spec.signalOpacity ?? 100) / 100)}">${marks}</g>${line(left, zero, right, zero, a.baselineColor, a.baselineWidthPt * 25.4 / 72)}${style?.showScale === false ? '' : drawScaleLabels(b, domain, a)}</g>`
   }).join('')
-  return `<g opacity="${n(opacity)}">${bars}</g>${line(bounds.x, zero, bounds.x + bounds.width, zero, '#666666', 0.12)}${scale}`
 }
 
-function drawScaleLabels(bounds: FigureCellBounds, domain: { min: number; max: number }): string {
-  const label = (value: number) => Number(value.toPrecision(3)).toString()
-  return text(bounds.x + 0.8, bounds.y + 2.5, label(domain.max), 1.9, '#222222')
-    + (domain.min < 0 ? text(bounds.x + 0.8, bounds.y + bounds.height - 0.8, label(domain.min), 1.9, '#222222') : '')
-}
-
-function drawSignalStack(specs: TrackSpec[], cell: QueryCell, region: Region, bounds: FigureCellBounds, document: FigureDocument, style?: FigureCellStyle): string {
-  const all = specs.flatMap((spec) => cell.get(spec.id) ?? []).filter((feature): feature is SignalFeature => 'score' in feature && !('featureType' in feature))
-  const domain = style?.scaleMode === 'fixed' && style.scaleMin !== undefined && style.scaleMax !== undefined
-    ? { min: style.scaleMin, max: style.scaleMax } : signalDomain(all, specs[0], document)
-  return specs.map((spec, index) => {
-    const features = (cell.get(spec.id) ?? []) as SignalFeature[]
-    const y = (score: number) => bounds.y + bounds.height - 1 - (score - domain.min) / (domain.max - domain.min) * (bounds.height - 2)
-    const path = features.filter((feature) => feature.end > region.start && feature.start < region.end).map((feature, offset) => `${offset ? 'L' : 'M'}${n(px(region, bounds, (feature.start + feature.end) / 2))} ${n(y(feature.score))}`).join(' ')
-    return path ? `<path d="${path}" fill="none" stroke="${escapeXml(spec.color)}" stroke-width="0.3" opacity="${n((style?.opacity ?? 100) / 100)}" ${index % 2 ? 'stroke-dasharray="1.2 0.55"' : ''}/>` : ''
-  }).join('') + (style?.showScale === false ? '' : drawScaleLabels(bounds, domain))
+function drawSignalStack(specs: TrackSpec[], cell: QueryCell, region: Region, bounds: FigureCellBounds, document: FigureDocument, allCells: Map<string, QueryCell>, row: FigureRow, style?: FigureCellStyle): string {
+  // Render each member against the same pooled domain; only the first draws axis labels.
+  return specs.map((spec, index) => drawSignal((cell.get(spec.id) ?? []) as SignalFeature[], spec, region, bounds, document, allCells, row, { ...style, color: spec.color, showScale: index === 0 && style?.showScale !== false, renderStyle: 'line' }, cell)).join('')
 }
 
 function drawStranded(spec: TrackSpec, plus: SignalFeature[], cell: QueryCell, region: Region, bounds: FigureCellBounds, style: FigureCellStyle | undefined, document: FigureDocument, row: FigureRow, allCells: Map<string, QueryCell>): string {
   const minus = (cell.get(spec.sourceIds[1]) ?? []) as SignalFeature[]
-  const midpoint = bounds.y + bounds.height / 2
-  let positiveMaximum = 1
-  let negativeMaximum = 1
-  const sourceCells = style?.scaleMode === 'independent' ? [cell] : document.columns.map((column) => allCells.get(cellKey(column.id, row.id)) ?? new Map())
-  for (const sourceCell of sourceCells) for (const trackId of document.columns.flatMap((column) => column.assignments[row.id] ?? [])) {
-    const assigned = document.sourceDocument.tracks.find((track) => track.id === trackId)
-    if (assigned?.kind !== 'stranded') continue
-    for (const feature of (sourceCell.get(assigned.id) ?? []) as SignalFeature[]) positiveMaximum = Math.max(positiveMaximum, Math.abs(feature.score))
-    for (const feature of (sourceCell.get(assigned.sourceIds[1]) ?? []) as SignalFeature[]) negativeMaximum = Math.max(negativeMaximum, Math.abs(feature.score))
-  }
-  if (style?.scaleMode === 'fixed') {
-    if (style.scaleMax !== undefined) positiveMaximum = Math.max(1, style.scaleMax)
-    if (style.scaleMin !== undefined) negativeMaximum = Math.max(1, -style.scaleMin)
-  }
-  const render = (features: SignalFeature[], color: string, direction: -1 | 1, maximum: number) => features.map((feature) => {
-    const x1 = Math.max(bounds.x, px(region, bounds, feature.start))
-    const x2 = Math.min(bounds.x + bounds.width, px(region, bounds, feature.end))
-    const height = Math.min(bounds.height / 2 - 0.7, Math.abs(feature.score) / maximum * (bounds.height / 2 - 0.7))
-    return rect(x1, direction < 0 ? midpoint - height : midpoint, Math.max(0.04, x2 - x1), height, color)
+  const a = resolveAppearance(rowFields, row.appearance), c = resolveAppearance(cellFields, style?.appearance)
+  const fraction = c.positiveFraction / 100
+  const midpoint = bounds.y + bounds.height * fraction
+  return figureScaleSections(document, row, region).map((section) => {
+    const domain = sectionDomain(document, row, allCells, cell, section, spec, style, true, region)
+    const left = px(region, bounds, section.start), right = px(region, bounds, section.end)
+    const render = (features: SignalFeature[], color: string, positive: boolean) => {
+      const maximum = Math.max(1e-12, positive ? domain.max : -domain.min)
+      const available = Math.max(0.1, bounds.height * (positive ? fraction : 1 - fraction) - 0.3)
+      const values = features.filter((feature) => feature.end > section.start && feature.start < section.end && Number.isFinite(feature.score))
+      const point = (score: number) => midpoint + (positive ? -1 : 1) * Math.min(1, Math.abs(score) / maximum) * available
+      if (style?.renderStyle === 'line') return `<path d="${values.map((feature, index) => `${index ? 'L' : 'M'}${n(px(region, bounds, (Math.max(section.start, feature.start) + Math.min(section.end, feature.end)) / 2))} ${n(point(feature.score))}`).join(' ')}" fill="none" stroke="${color}" stroke-width="${n(c.lineWidthPt * 25.4 / 72)}"/>`
+      return values.map((feature) => { const x1 = Math.max(left, px(region, bounds, feature.start)), x2 = Math.min(right, px(region, bounds, feature.end)), y = point(feature.score); return rect(x1, Math.min(midpoint, y), x2 - x1, Math.abs(midpoint - y), color) }).join('')
+    }
+    return `<g data-scale-start="${section.start}" data-scale-min="${n(domain.min)}" data-scale-max="${n(domain.max)}"><g opacity="${n((style?.opacity ?? 100) / 100)}">${render(plus, style?.color ?? spec.color, true)}${render(minus, style?.negativeColor ?? spec.negativeColor ?? '#2878d4', false)}</g>${line(left, midpoint, right, midpoint, a.baselineColor, a.baselineWidthPt * 25.4 / 72)}${style?.showScale === false ? '' : drawScaleLabels({ ...bounds, x: left, width: right - left }, domain, a, true)}</g>`
   }).join('')
-  return `<g opacity="${n((style?.opacity ?? 100) / 100)}">${render(plus, style?.color ?? spec.color, -1, positiveMaximum)}${render(minus, style?.negativeColor ?? spec.negativeColor ?? '#2878d4', 1, negativeMaximum)}</g>` + line(bounds.x, midpoint, bounds.x + bounds.width, midpoint, '#555555', 0.14)
-    + (style?.showScale === false ? '' : text(bounds.x + 0.8, bounds.y + 2.5, Number(positiveMaximum.toPrecision(3)).toString(), 1.9) + text(bounds.x + 0.8, bounds.y + bounds.height - 0.8, `-${Number(negativeMaximum.toPrecision(3))}`, 1.9))
 }
 
 function drawIntervals(features: IntervalFeature[], spec: TrackSpec, region: Region, bounds: FigureCellBounds, fontMm: number): string {
@@ -359,7 +434,32 @@ function drawIntervals(features: IntervalFeature[], spec: TrackSpec, region: Reg
   return parts.join('')
 }
 
-function drawInteractions(features: InteractionFeature[], spec: TrackSpec, region: Region, bounds: FigureCellBounds, genes?: GeneSource): string {
+function figureTrackSpec(spec: TrackSpec, style?: FigureCellStyle): TrackSpec {
+  const a = resolveAppearance(cellFields, style?.appearance)
+  const colors = a.matrixColors.split(',').map((color) => color.trim()).filter((color) => /^#[0-9a-f]{6}$/i.test(color))
+  const focus = a.arcGenes.split(',').map((name) => name.trim()).filter(Boolean)
+  return { ...spec, color: style?.color ?? spec.color,
+    geneDisplayMode: a.geneMode === 'source' ? spec.geneDisplayMode : a.geneMode as TrackSpec['geneDisplayMode'],
+    geneTranscriptMode: a.geneTranscripts === 'source' ? spec.geneTranscriptMode : a.geneTranscripts as TrackSpec['geneTranscriptMode'],
+    matrixResolution: a.matrixResolutionBp || spec.matrixResolution,
+    matrixNormalization: a.matrixNormalization.trim() || spec.matrixNormalization,
+    matrixDirection: a.matrixDirection === 'source' ? spec.matrixDirection : a.matrixDirection as TrackSpec['matrixDirection'],
+    matrixDepthMode: a.matrixMaxDistanceBp ? 'fixed' : spec.matrixDepthMode,
+    matrixMaxDistance: a.matrixMaxDistanceBp || spec.matrixMaxDistance,
+    interactionMaxDistance: a.arcMaxDistanceBp || spec.interactionMaxDistance,
+    interactionMaxFeatures: a.arcMaxFeatures || spec.interactionMaxFeatures,
+    matrixTransform: a.matrixTransform === 'source' ? spec.matrixTransform : a.matrixTransform as TrackSpec['matrixTransform'],
+    matrixPalette: colors.length >= 2 ? 'custom' : spec.matrixPalette,
+    matrixPaletteColors: colors.length >= 2 ? colors : spec.matrixPaletteColors,
+    matrixPaletteReversed: a.matrixReverse === 'source' ? spec.matrixPaletteReversed : a.matrixReverse === 'reverse',
+    interactionFilterMode: focus.length ? 'genes' : spec.interactionFilterMode,
+    interactionFilterGenes: focus.length ? focus : spec.interactionFilterGenes,
+    interactionDirection: a.arcDirection === 'source' ? spec.interactionDirection : a.arcDirection as TrackSpec['interactionDirection'],
+  }
+}
+
+function drawInteractions(features: InteractionFeature[], spec: TrackSpec, region: Region, bounds: FigureCellBounds, genes?: GeneSource, style?: FigureCellStyle): string {
+  const appearance = resolveAppearance(cellFields, style?.appearance)
   const direction = spec.interactionDirection === 'down' ? 1 : -1
   const baseline = direction < 0 ? bounds.y + bounds.height - 0.8 : bounds.y + 0.8
   const span = region.end - region.start
@@ -373,20 +473,61 @@ function drawInteractions(features: InteractionFeature[], spec: TrackSpec, regio
   const maximum = scores.length ? Math.max(...scores) : 0
   return selected.map((feature) => {
     if (feature.chrom1 !== region.chr || feature.chrom2 !== region.chr) return ''
-    const x1 = px(region, bounds, (feature.start1 + feature.end1) / 2)
-    const x2 = px(region, bounds, (feature.start2 + feature.end2) / 2)
+    const x1 = px(region, bounds, Math.max(region.start, Math.min(region.end, (feature.start1 + feature.end1) / 2)))
+    const x2 = px(region, bounds, Math.max(region.start, Math.min(region.end, (feature.start2 + feature.end2) / 2)))
     if (Math.abs(x2 - x1) > (spec.interactionMaxDistance ?? Infinity) / span * bounds.width) return ''
     const height = Math.min(bounds.height - 1.5, spec.interactionArcHeightMode === 'fixed' ? bounds.height * 0.65 : Math.sqrt(Math.abs(x2 - x1) / bounds.width) * bounds.height)
-    const cy = baseline + direction * height * 1.35
-    return `<path d="M ${n(x1)} ${n(baseline)} C ${n(x1)} ${n(cy)} ${n(x2)} ${n(cy)} ${n(x2)} ${n(baseline)}" fill="none" stroke="${escapeXml(interactionFeatureColor(feature, spec, minimum, maximum))}" stroke-width="${n((spec.interactionLineWidth ?? 1) * 0.2)}" opacity="${n((spec.interactionOpacity ?? 92) / 100)}"/>`
+    const cy = baseline + direction * Math.min(bounds.height - 0.8, height * appearance.arcHeight) * 1.25
+    const color = interactionFeatureColor(feature, spec, minimum, maximum)
+    const opacity = (style?.opacity ?? spec.interactionOpacity ?? 92) / 100
+    if (appearance.arcGeometry === 'ribbon') {
+      const anchor = (coordinate: number) => px(region, bounds, Math.max(region.start, Math.min(region.end, coordinate)))
+      const a = anchor(feature.start1), b = anchor(feature.end1), c = anchor(feature.start2), d = anchor(feature.end2)
+      return `<path d="M ${n(a)} ${n(baseline)} C ${n(a)} ${n(cy)} ${n(d)} ${n(cy)} ${n(d)} ${n(baseline)} L ${n(c)} ${n(baseline)} C ${n(c)} ${n(cy)} ${n(b)} ${n(cy)} ${n(b)} ${n(baseline)} Z" fill="${escapeXml(color)}" opacity="${n(opacity)}"/>`
+    }
+    return `<path d="M ${n(x1)} ${n(baseline)} C ${n(x1)} ${n(cy)} ${n(x2)} ${n(cy)} ${n(x2)} ${n(baseline)}" fill="none" stroke="${escapeXml(interactionFeatureColor(feature, spec, minimum, maximum))}" stroke-width="${n(appearance.arcWidthPt ? appearance.arcWidthPt * 25.4 / 72 : (spec.interactionLineWidth ?? 1) * 0.2)}" opacity="${n(opacity)}"/>`
   }).join('')
 }
 
-function matrixSourceMaximum(matrix: MatrixFeature, spec: TrackSpec): number {
-  if (spec.matrixScaleMode === 'fixed' && spec.matrixScaleMax !== undefined) return spec.matrixScaleMax
+function matrixSourceMaximum(matrix: MatrixFeature, spec: TrackSpec, respectSource = true): number {
+  if (respectSource && spec.matrixScaleMode === 'fixed' && spec.matrixScaleMax !== undefined) return spec.matrixScaleMax
   const percentile = spec.matrixScaleMode === 'maximum' ? 1 : spec.matrixScalePercentile ?? 0.99
   const signed = spec.matrixValueMode === 'log2-observed-expected' || spec.matrixComparisonMode === 'difference' || spec.matrixComparisonMode === 'log2-ratio'
   return signed ? matrixAutomaticMagnitude(matrix, percentile, spec.matrixIgnoreDiagonals ?? 3) : matrixAutomaticMaximum(matrix, percentile, spec.matrixIgnoreDiagonals ?? 3)
+}
+
+function matrixDomain(matrix: MatrixFeature, spec: TrackSpec, style?: FigureCellStyle, sharedMaximum?: number) {
+  const signed = spec.matrixValueMode === 'log2-observed-expected' || spec.matrixComparisonMode === 'difference' || spec.matrixComparisonMode === 'log2-ratio'
+  const minimum = signed ? 0 : Math.max(0, style?.scaleMode === 'fixed' ? style.scaleMin ?? 0 : spec.matrixScaleMin ?? 0)
+  const maximum = Math.max(minimum + 1e-9, style?.scaleMode === 'fixed' && style.scaleMax !== undefined ? style.scaleMax
+    : style?.scaleMode === 'independent' ? matrixSourceMaximum(matrix, spec, false) : sharedMaximum ?? matrixSourceMaximum(matrix, spec))
+  return { signed, minimum, maximum }
+}
+
+function matrixFill(value: number, minimum: number, maximum: number, signed: boolean, spec: TrackSpec, style?: FigureCellStyle): { color: string; alpha: number } {
+  if (signed) return { color: matrixSignedColor(value / maximum), alpha: 1 }
+  const intensity = matrixPaletteIntensity(matrixValueIntensity(value, minimum, maximum, spec.matrixTransform ?? 'log1p'), spec.matrixPaletteReversed === true)
+  const palette = resolveAppearance(cellFields, style?.appearance).matrixColors.trim() ? 'custom' : style?.matrixPalette && style.matrixPalette !== 'source' ? style.matrixPalette : spec.matrixPalette
+  if (palette === 'warm') return { color: matrixWarmPaletteColor(intensity), alpha: 1 }
+  if (palette === 'blue-black') return { color: matrixBlueBlackPaletteColor(intensity), alpha: 1 }
+  if (palette === 'custom' && (spec.matrixPaletteColors?.length ?? 0) >= 2) return { color: matrixGradientColor(spec.matrixPaletteColors!, intensity), alpha: 1 }
+  return { color: spec.color, alpha: 0.08 + Math.pow(intensity, 0.72) * 0.92 }
+}
+
+function drawMatrixLegend(matrix: MatrixFeature, spec: TrackSpec, bounds: FigureCellBounds, style: FigureCellStyle | undefined, sharedMaximum: number | undefined, lastColumn: boolean): string {
+  const a = resolveAppearance(cellFields, style?.appearance)
+  if (style?.showScale === false || a.matrixLegend !== 'right' && !(a.matrixLegend === 'last-column' && lastColumn)) return ''
+  const { signed, minimum, maximum } = matrixDomain(matrix, spec, style, sharedMaximum)
+  const x = bounds.x + bounds.width + a.legendGapMm
+  const height = Math.max(1, bounds.height - 3), y = bounds.y + 1.5
+  const min = signed ? -maximum : minimum
+  const strips = Array.from({ length: 96 }, (_, index) => {
+    const value = maximum - index / 95 * (maximum - min)
+    const fill = matrixFill(value, minimum, maximum, signed, spec, style)
+    return rect(x, y + index / 96 * height, a.legendWidthMm, height / 96 + 0.01, fill.color, `opacity="${n(fill.alpha)}"`)
+  }).join('')
+  const font = a.legendFontPt * 25.4 / 72
+  return `<g data-fe-legend="matrix">${strips}${text(x + a.legendWidthMm / 2, y - 0.5, Number(maximum.toPrecision(3)).toString(), font, '#222222', 'text-anchor="middle"')}${text(x + a.legendWidthMm / 2, y + height + font, Number(min.toPrecision(3)).toString(), font, '#222222', 'text-anchor="middle"')}</g>`
 }
 
 function drawMatrix(features: MatrixFeature[], spec: TrackSpec, region: Region, bounds: FigureCellBounds, pageBackground: string, cellStyle: FigureCellStyle | undefined, sharedMaximum: number | undefined, issues: string[], label: string): string {
@@ -396,21 +537,10 @@ function drawMatrix(features: MatrixFeature[], spec: TrackSpec, region: Region, 
     issues.push(`${label}: ${matrix.cells.length.toLocaleString()} matrix cells exceed the 80,000-cell SVG safety limit; choose a coarser resolution or narrower region.`)
     return ''
   }
-  const signed = spec.matrixValueMode === 'log2-observed-expected' || spec.matrixComparisonMode === 'difference' || spec.matrixComparisonMode === 'log2-ratio'
-  const minimum = signed ? 0 : Math.max(0, cellStyle?.scaleMode === 'fixed' ? cellStyle.scaleMin ?? 0 : spec.matrixScaleMin ?? 0)
-  const maximum = Math.max(minimum + 1e-9, cellStyle?.scaleMode === 'fixed' && cellStyle.scaleMax !== undefined ? cellStyle.scaleMax
-    : cellStyle?.scaleMode === 'independent' ? matrixSourceMaximum(matrix, spec) : sharedMaximum ?? matrixSourceMaximum(matrix, spec))
-  const paletteMode = cellStyle?.matrixPalette && cellStyle.matrixPalette !== 'source' ? cellStyle.matrixPalette : spec.matrixPalette
-  const style = (value: number): { color: string; alpha: number } => {
-    if (signed) return { color: matrixSignedColor(value / maximum), alpha: 1 }
-    const intensity = matrixPaletteIntensity(matrixValueIntensity(value, minimum, maximum, spec.matrixTransform ?? 'log1p'), spec.matrixPaletteReversed === true)
-    if (paletteMode === 'warm') return { color: matrixWarmPaletteColor(intensity), alpha: 1 }
-    if (paletteMode === 'blue-black') return { color: matrixBlueBlackPaletteColor(intensity), alpha: 1 }
-    if (paletteMode === 'custom' && (spec.matrixPaletteColors?.length ?? 0) >= 2) return { color: matrixGradientColor(spec.matrixPaletteColors!, intensity), alpha: 1 }
-    return { color: spec.color, alpha: 0.08 + Math.pow(intensity, 0.72) * 0.92 }
-  }
-  const legend = cellStyle?.showScale === false ? '' : rect(bounds.x + 0.7, bounds.y + 0.7, 1.4, 1.4, style(maximum).color)
-    + text(bounds.x + 2.6, bounds.y + 2.1, signed ? `±${Number(maximum.toPrecision(3))}` : `0–${Number(maximum.toPrecision(3))}`, 1.9, '#222222')
+  const { signed, minimum, maximum } = matrixDomain(matrix, spec, cellStyle, sharedMaximum)
+  const style = (value: number) => matrixFill(value, minimum, maximum, signed, spec, cellStyle)
+  const legend = cellStyle?.showScale === false || resolveAppearance(cellFields, cellStyle?.appearance).matrixLegend !== 'inline' ? '' : rect(bounds.x + 0.7, bounds.y + 0.7, 1.4, 1.4, style(maximum).color)
+    + text(bounds.x + 2.6, bounds.y + 2.1, signed ? `±${Number(maximum.toPrecision(3))}` : `${Number(minimum.toPrecision(3))}–${Number(maximum.toPrecision(3))}`, resolveAppearance(cellFields, cellStyle?.appearance).legendFontPt * 25.4 / 72, '#222222')
   const resolution = matrix.resolution
   if (matrix.axis2) {
     const axis = matrix.axis2
@@ -633,47 +763,50 @@ function bamFigureReadColor(read: AlignmentFeature, spec: TrackSpec): string {
   return spec.color
 }
 
-function drawGenes(genes: GeneSource, spec: TrackSpec, region: Region, bounds: FigureCellBounds, fontMm: number): string {
-  const visible = genes.featuresFor(region).slice(0, 100)
+function drawGenes(genes: GeneSource, spec: TrackSpec, region: Region, bounds: FigureCellBounds, fontMm: number, style?: FigureCellStyle): string {
+  const a = resolveAppearance(cellFields, style?.appearance)
+  const names = a.geneNames.split(',').map((name) => name.trim().toLowerCase()).filter(Boolean)
+  const visible = genes.featuresFor(region).filter((gene) => !names.length || names.includes(gene.name.toLowerCase()) || names.includes(gene.id.toLowerCase())).slice(0, 100)
   const laneEnds: number[] = []
   const mode = spec.geneDisplayMode ?? 'collapsed'
-  const laneHeight = mode === 'squished' ? 1.5 : mode === 'expanded' ? 3.1 : 3.5
+  const laneHeight = a.geneLaneMm || (mode === 'squished' ? 1.5 : mode === 'expanded' ? 3.1 : 3.5)
   const color = spec.color || '#164a91'
+  const labelFont = a.geneFontPt ? a.geneFontPt * 25.4 / 72 : fontMm * 0.7
   return visible.map((gene) => {
-    const x1 = px(region, bounds, gene.start); const x2 = px(region, bounds, gene.end)
+    const x1 = Math.max(bounds.x, px(region, bounds, gene.start)), x2 = Math.min(bounds.x + bounds.width, px(region, bounds, gene.end))
+    const models = mode === 'expanded' && spec.geneTranscriptMode === 'all' ? gene.transcriptModels : gene.transcriptModels.slice(0, 1)
+    const showLabel = a.geneLabels && mode !== 'squished'
+    const occupied = models.length + (showLabel ? Math.ceil((labelFont + a.geneLabelGapMm) / laneHeight) : 0)
+    const labelHalfWidth = gene.name.length * labelFont * 0.3
+    const labelX = Math.max(bounds.x + labelHalfWidth, Math.min(bounds.x + bounds.width - labelHalfWidth, (x1 + x2) / 2))
+    const occupiedStart = showLabel ? Math.min(x1, labelX - labelHalfWidth) : x1
+    const occupiedEnd = showLabel ? Math.max(x2, labelX + labelHalfWidth) : x2
     let lane = 0
-    while ((laneEnds[lane] ?? -Infinity) > x1) lane++
-    laneEnds[lane] = x2 + 1
-    const models = mode === 'expanded' && spec.geneTranscriptMode === 'all' ? gene.transcriptModels.slice(0, 8) : gene.transcriptModels.slice(0, 1)
-    const top = bounds.y + 1.6 + lane * (models.length * laneHeight + (mode === 'squished' ? 0 : 2))
-    if (top > bounds.y + bounds.height - 1) return ''
+    while (Array.from({ length: occupied }, (_, index) => laneEnds[lane + index] ?? -Infinity).some((end) => end > occupiedStart)) lane++
+    for (let index = 0; index < occupied; index++) laneEnds[lane + index] = occupiedEnd + 0.5
+    const top = bounds.y + a.geneTopMm + lane * laneHeight
     const marks = models.map((model, index) => {
       const y = top + index * laneHeight
-      if (y > bounds.y + bounds.height - 1) return ''
-      const start = Math.max(bounds.x, px(region, bounds, model.start))
-      const end = Math.min(bounds.x + bounds.width, px(region, bounds, model.end))
-      const exons = model.exons.map((exon) => {
-        const left = Math.max(bounds.x, px(region, bounds, exon.start))
-        const right = Math.min(bounds.x + bounds.width, px(region, bounds, exon.end))
-        return rect(left, y - (mode === 'squished' ? 0.3 : 0.5), Math.max(0, right - left), mode === 'squished' ? 0.6 : 1, color)
+      if (y > bounds.y + bounds.height - 0.3) return ''
+      const start = Math.max(bounds.x, px(region, bounds, model.start)), end = Math.min(bounds.x + bounds.width, px(region, bounds, model.end))
+      const blocks = (features: { start: number; end: number }[], height: number) => features.map((block) => {
+        const left = Math.max(bounds.x, px(region, bounds, block.start)), right = Math.min(bounds.x + bounds.width, px(region, bounds, block.end))
+        return rect(left, y - height / 2, right - left, height, color)
       }).join('')
-      const cds = mode === 'squished' ? '' : model.cds.map((block) => {
-        const left = Math.max(bounds.x, px(region, bounds, block.start))
-        const right = Math.min(bounds.x + bounds.width, px(region, bounds, block.end))
-        return rect(left, y - 0.8, Math.max(0, right - left), 1.6, color)
-      }).join('')
+      const exonHeight = mode === 'squished' ? a.exonHeightMm * 0.6 : a.exonHeightMm
       const arrowX = gene.strand === '+' ? Math.min(end - 0.3, bounds.x + bounds.width - 0.5) : Math.max(start + 0.3, bounds.x + 0.5)
-      const arrow = gene.strand === '+' ? `<path d="M ${n(arrowX - 0.7)} ${n(y - 0.5)} L ${n(arrowX)} ${n(y)} L ${n(arrowX - 0.7)} ${n(y + 0.5)}" fill="none" stroke="${escapeXml(color)}" stroke-width="0.15"/>`
-        : `<path d="M ${n(arrowX + 0.7)} ${n(y - 0.5)} L ${n(arrowX)} ${n(y)} L ${n(arrowX + 0.7)} ${n(y + 0.5)}" fill="none" stroke="${escapeXml(color)}" stroke-width="0.15"/>`
-      return line(start, y, end, y, color, 0.18) + exons + cds + arrow
+      const arrowSize = a.arrowSizeMm, direction = gene.strand === '+' ? -1 : 1
+      const arrow = arrowSize ? `<path d="M ${n(arrowX + direction * arrowSize)} ${n(y - arrowSize * 0.7)} L ${n(arrowX)} ${n(y)} L ${n(arrowX + direction * arrowSize)} ${n(y + arrowSize * 0.7)}" fill="none" stroke="${escapeXml(color)}" stroke-width="${n(a.intronWidthPt * 25.4 / 72)}"/>` : ''
+      return line(start, y, end, y, color, a.intronWidthPt * 25.4 / 72) + blocks(model.exons, exonHeight) + (mode === 'squished' ? '' : blocks(model.cds, a.cdsHeightMm)) + arrow
     }).join('')
-    return marks + (mode === 'squished' ? '' : text(Math.max(bounds.x + 0.3, Math.min(bounds.x + bounds.width - 1, (x1 + x2) / 2)), Math.min(bounds.y + bounds.height - 0.4, top + models.length * laneHeight + 0.6), gene.name, fontMm * 0.7, '#1f2937', 'text-anchor="middle"'))
+    const labelY = a.geneLabelPosition === 'above' ? top - Math.max(a.exonHeightMm, a.cdsHeightMm) / 2 - a.geneLabelGapMm : top + (models.length - 1) * laneHeight + Math.max(a.exonHeightMm, a.cdsHeightMm) / 2 + a.geneLabelGapMm + labelFont
+    return marks + (showLabel && labelY >= bounds.y + labelFont && labelY <= bounds.y + bounds.height ? text(labelX, labelY, gene.name, labelFont, a.geneLabelColor, `text-anchor="middle" ${a.geneItalic ? 'font-style="italic"' : ''}`) : '')
   }).join('')
 }
 
-function drawAnnotations(document: FigureDocument, region: Region, bounds: FigureCellBounds, matrixSpec?: TrackSpec): string {
+function drawAnnotations(document: FigureDocument, region: Region, bounds: FigureCellBounds, matrixSpec?: TrackSpec, appearance = resolveAppearance(rowFields)): string {
   const parts: string[] = []
-  for (const saved of document.sourceDocument.savedRegions) {
+  for (const saved of appearance.showRegions ? document.sourceDocument.savedRegions : []) {
     if (saved.region.chr !== region.chr || saved.region.end <= region.start || saved.region.start >= region.end || !saved.highlighted) continue
     const x1 = px(region, bounds, saved.region.start)
     const x2 = px(region, bounds, saved.region.end)
@@ -698,7 +831,7 @@ function drawAnnotations(document: FigureDocument, region: Region, bounds: Figur
       }
     }
   }
-  for (const divider of document.sourceDocument.comparisonDividers) {
+  for (const divider of appearance.showDividers ? document.sourceDocument.comparisonDividers : []) {
     if (divider.chr !== region.chr || divider.position < region.start || divider.position > region.end) continue
     const x = px(region, bounds, divider.position)
     parts.push(line(x, bounds.y, x, bounds.y + bounds.height, divider.color, document.annotationStyles?.[`divider:${divider.id}`]?.lineWidthMm ?? 0.2, divider.lineStyle === 'dashed' ? 'stroke-dasharray="1 0.6"' : ''))

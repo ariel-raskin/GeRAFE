@@ -1,9 +1,11 @@
+import { pageFields, rowFields, cellFields, normalizeAppearance, type PageAppearance, type RowAppearance, type CellAppearance } from './figure-appearance.ts'
 import { cloneDocument, normalizeTrackDocument, type TrackDocument, type TrackSpec } from './track-document.ts'
 import type { Region } from './types.ts'
 
-export const FIGURE_DOCUMENT_VERSION = 1 as const
+export const FIGURE_DOCUMENT_VERSION = 2 as const
 
 export interface FigurePage {
+  appearance?: Partial<PageAppearance>
   widthMm: number
   /** Zero fits the page to its contents. */
   heightMm: number
@@ -19,6 +21,7 @@ export interface FigurePage {
 }
 
 export interface FigureRow {
+  appearance?: Partial<RowAppearance>
   id: string
   label: string
   groupLabel?: string
@@ -33,6 +36,8 @@ export interface FigureRow {
 }
 
 export interface FigureColumn {
+  /** Relative share of the available plot width. */
+  widthWeight?: number
   id: string
   title: string
   region: Region
@@ -43,11 +48,14 @@ export interface FigureColumn {
 }
 
 export interface FigureCellStyle {
+  appearance?: Partial<CellAppearance>
+  /** Fixed limits per section, keyed by its genomic start. */
+  segmentLimits?: Record<string, { min: number; max: number }>
   color?: string
   negativeColor?: string
   opacity?: number
   renderStyle?: 'source' | 'fill' | 'line'
-  scaleMode?: 'shared' | 'independent' | 'fixed'
+  scaleMode?: 'source' | 'shared' | 'independent' | 'fixed'
   scaleMin?: number
   scaleMax?: number
   showScale?: boolean
@@ -116,26 +124,29 @@ export function cloneFigureDocument(document: FigureDocument): FigureDocument {
 
 export function normalizeFigureDocument(value: unknown): FigureDocument {
   if (!value || typeof value !== 'object') throw new Error('This is not a GeRAFE figure project.')
-  const input = value as Partial<FigureDocument>
-  if (input.schemaVersion !== FIGURE_DOCUMENT_VERSION) throw new Error(`Unsupported figure project version: ${String(input.schemaVersion)}.`)
+  const input = value as Partial<Omit<FigureDocument, 'schemaVersion'>> & { schemaVersion?: number }
+  if (input.schemaVersion !== 1 && input.schemaVersion !== FIGURE_DOCUMENT_VERSION) throw new Error(`Unsupported figure project version: ${String(input.schemaVersion)}.`)
   const sourceDocument = normalizeTrackDocument(input.sourceDocument)
   if (input.referenceId !== sourceDocument.referenceId || !Array.isArray(input.rows) || !Array.isArray(input.columns) || !input.page) throw new Error('The figure project is incomplete or inconsistent.')
-  if (input.columns.length < 1 || input.columns.length > 2) throw new Error('A figure must have one or two columns.')
+  if (input.columns.length < 1 || input.columns.length > 8) throw new Error('A figure must have between one and eight columns.')
   const trackIds = new Set(sourceDocument.tracks.map((track) => track.id))
   const rowIds = new Set<string>()
   const rows = input.rows.map((row) => {
     if (!row || typeof row.id !== 'string' || rowIds.has(row.id) || !Array.isArray(row.trackIds) || row.trackIds.some((id) => !trackIds.has(id))) throw new Error('A figure row refers to an unavailable track.')
     rowIds.add(row.id)
     return {
+      appearance: normalizeAppearance(rowFields, row.appearance),
       id: row.id, label: String(row.label ?? ''), groupLabel: row.groupLabel === undefined ? undefined : String(row.groupLabel), trackIds: [...row.trackIds], included: row.included !== false,
-      heightMm: boundedNumber(row.heightMm, 2, 100, 13), gapAfterMm: boundedNumber(row.gapAfterMm, 0, 100, 0),
+      heightMm: boundedNumber(row.heightMm, 1, 150, 13), gapAfterMm: boundedNumber(row.gapAfterMm, 0, 100, 0),
       labelFontSizePt: row.labelFontSizePt === undefined ? undefined : boundedNumber(row.labelFontSizePt, 4, 40, 9),
       labelColor: colorOrUndefined(row.labelColor), frameColor: colorOrUndefined(row.frameColor),
       frameWidthPt: row.frameWidthPt === undefined ? undefined : boundedNumber(row.frameWidthPt, 0, 8, 0.5),
     }
   })
+  const columnIds = new Set<string>()
   const columns = input.columns.map((column) => {
-    if (!column || typeof column.id !== 'string' || !validRegion(column.region)) throw new Error('A figure column has an invalid genomic region.')
+    if (!column || typeof column.id !== 'string' || columnIds.has(column.id) || !validRegion(column.region)) throw new Error('A figure column has an invalid genomic region.')
+    columnIds.add(column.id)
     const assignments: Record<string, string[]> = {}
     for (const row of rows) {
       const assigned = column.assignments?.[row.id] ?? row.trackIds
@@ -145,19 +156,31 @@ export function normalizeFigureDocument(value: unknown): FigureDocument {
     const styles: Record<string, FigureCellStyle> = {}
     for (const [rowId, style] of Object.entries(column.styles ?? {})) {
       if (!rowIds.has(rowId) || !style || typeof style !== 'object') continue
+      const segmentLimits: Record<string, { min: number; max: number }> = {}
+      for (const [start, limits] of Object.entries(style.segmentLimits ?? {})) {
+        if (!Number.isSafeInteger(Number(start)) || Number(start) < 0 || !limits || !Number.isFinite(limits.min) || !Number.isFinite(limits.max) || limits.max <= limits.min) throw new Error('Invalid fixed section scale.')
+        segmentLimits[start] = { min: limits.min, max: limits.max }
+      }
       styles[rowId] = {
+        appearance: normalizeAppearance(cellFields, style.appearance), segmentLimits,
         color: colorOrUndefined(style.color), negativeColor: colorOrUndefined(style.negativeColor),
         opacity: style.opacity === undefined ? undefined : boundedNumber(style.opacity, 0, 100, 100),
         renderStyle: ['source', 'fill', 'line'].includes(style.renderStyle ?? '') ? style.renderStyle : undefined,
-        scaleMode: ['shared', 'independent', 'fixed'].includes(style.scaleMode ?? '') ? style.scaleMode : undefined,
+        scaleMode: ['source', 'shared', 'independent', 'fixed'].includes(style.scaleMode ?? '') ? style.scaleMode : undefined,
         scaleMin: typeof style.scaleMin === 'number' && Number.isFinite(style.scaleMin) ? style.scaleMin : undefined,
         scaleMax: typeof style.scaleMax === 'number' && Number.isFinite(style.scaleMax) ? style.scaleMax : undefined,
         showScale: style.showScale === undefined ? undefined : style.showScale === true,
         matrixPalette: ['source', 'warm', 'blue-black', 'single'].includes(style.matrixPalette ?? '') ? style.matrixPalette : undefined,
       }
+      const appearance = styles[rowId].appearance
+      if (appearance?.matrixColors?.trim() && (appearance.matrixColors.split(',').length < 2 || appearance.matrixColors.split(',').some((color) => !/^#[0-9a-f]{6}$/i.test(color.trim())))) throw new Error('A custom matrix palette needs at least two comma-separated hex colors.')
+      if (styles[rowId].scaleMode === 'fixed' && assignments[rowId].some((id) => sourceDocument.tracks.find((track) => track.id === id)?.kind === 'stranded')) {
+        const domains = [{ min: styles[rowId].scaleMin ?? 0, max: styles[rowId].scaleMax ?? 1 }, ...Object.values(segmentLimits)]
+        if (domains.some((limits) => limits.min >= 0 || limits.max <= 0)) throw new Error('Stranded scales need a negative minimum and a positive maximum.')
+      }
       if (styles[rowId].scaleMode === 'fixed' && (!(Number.isFinite(styles[rowId].scaleMin)) || !(Number.isFinite(styles[rowId].scaleMax)) || styles[rowId].scaleMax! <= styles[rowId].scaleMin!)) throw new Error('A fixed figure scale needs a minimum below its maximum.')
     }
-    return { id: column.id, title: String(column.title ?? ''), region: { ...column.region }, assignments, styles }
+    return { widthWeight: boundedNumber(column.widthWeight, 0.1, 10, 1), id: column.id, title: String(column.title ?? ''), region: { ...column.region }, assignments, styles }
   })
   const page = input.page
   const annotationIds = new Set([
@@ -174,7 +197,8 @@ export function normalizeFigureDocument(value: unknown): FigureDocument {
     schemaVersion: FIGURE_DOCUMENT_VERSION, id: String(input.id ?? crypto.randomUUID()), name: String(input.name ?? 'Untitled figure'),
     referenceId: sourceDocument.referenceId, sourceDocument, rows, columns, linkedRegions: input.linkedRegions === true, annotationStyles,
     page: {
-      widthMm: boundedNumber(page.widthMm, 50, 600, 180), heightMm: page.heightMm === 0 ? 0 : boundedNumber(page.heightMm, 50, 600, 0), marginMm: boundedNumber(page.marginMm, 0, 100, 7),
+      appearance: normalizeAppearance(pageFields, page.appearance),
+      widthMm: boundedNumber(page.widthMm, 50, 600, 180), heightMm: page.heightMm === 0 ? 0 : boundedNumber(page.heightMm, 1, 600, 0), marginMm: boundedNumber(page.marginMm, 0, 100, 7),
       labelWidthMm: boundedNumber(page.labelWidthMm, 0, 120, 30), columnGapMm: boundedNumber(page.columnGapMm, 0, 100, 8),
       rowGapMm: boundedNumber(page.rowGapMm, 0, 50, 1.5), rulerHeightMm: boundedNumber(page.rulerHeightMm, 0, 50, 9),
       title: String(page.title ?? ''), fontFamily: String(page.fontFamily ?? 'Arial, sans-serif'),
@@ -234,9 +258,9 @@ export class FigureDocumentStore {
 }
 
 export function addFigureColumn(draft: FigureDocument, title = ''): void {
-  if (draft.columns.length >= 2) throw new Error('The first Figure Editor supports up to two aligned columns.')
+  if (draft.columns.length >= 8) throw new Error('A figure supports up to eight aligned columns.')
   const first = draft.columns[0]
-  draft.columns.push({ id: crypto.randomUUID(), title, region: { ...first.region }, assignments: structuredClone(first.assignments), styles: structuredClone(first.styles ?? {}) })
+  draft.columns.push({ id: crypto.randomUUID(), title, widthWeight: first.widthWeight, region: { ...first.region }, assignments: structuredClone(first.assignments), styles: structuredClone(first.styles ?? {}) })
 }
 
 export function setFigureColumnRegion(draft: FigureDocument, columnId: string, region: Region): void {
@@ -269,4 +293,25 @@ export function figureRequiredSourceIds(document: FigureDocument): Set<string> {
     }
   }
   return required
+}
+
+/** A reversible style starting point; keeps source data, regions and track assignments. */
+export function applyManuscriptPreset(draft: FigureDocument): void {
+  Object.assign(draft.page, { widthMm: 145, heightMm: 0, marginMm: 2, labelWidthMm: 15, columnGapMm: 3, rowGapMm: 0.5, rulerHeightMm: 5, fontSizePt: 6.5 })
+  draft.page.appearance = { ...draft.page.appearance, headingSizePt: 8.5, headingHeightMm: 4.5, rulerStyle: 'endpoints', rulerFontPt: 5.5, chromosomeFontPt: 6, scaleBarFontPt: 5, shadeRuler: true, rulerGapMm: 0.5 }
+  for (const row of draft.rows) {
+    const kind = draft.sourceDocument.tracks.find((track) => track.id === row.trackIds[0])?.kind
+    row.heightMm = kind === 'matrix' ? 20 : kind === 'genes' ? 5.5 : kind === 'interaction' ? 6 : 5.5
+    row.gapAfterMm = 0
+    row.frameWidthPt = kind === 'genes' ? 0 : 0.35
+    row.labelFontSizePt = 6.5
+    row.appearance = { ...row.appearance, scaleFontPt: 5, segmentedScales: kind === 'signal' || kind === 'stranded', showAnnotations: kind !== 'genes', groupFontPt: 7, groupLabelXmm: 2, groupBracketXmm: 4 }
+    for (const column of draft.columns) {
+      const style = (column.styles ??= {})[row.id] ??= {}
+      style.appearance = { ...style.appearance }
+      if (kind === 'signal' || kind === 'stranded' || kind === 'matrix') style.scaleMode = 'shared'
+      if (kind === 'genes') Object.assign(style.appearance, { exonHeightMm: 0.5, cdsHeightMm: 0.8, geneFontPt: 5.5, geneLaneMm: 1.4, geneTopMm: 0.7, geneLabelGapMm: 0.6, arrowSizeMm: 0.4 })
+      if (kind === 'matrix') Object.assign(style.appearance, { matrixTransform: 'linear', matrixColors: '#ffffff,#fff7bc,#fdae61,#d7191c', matrixLegend: 'last-column', legendWidthMm: 0.8, legendGapMm: 0.6, legendFontPt: 5 })
+    }
+  }
 }

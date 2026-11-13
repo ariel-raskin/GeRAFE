@@ -105,7 +105,7 @@ const figurePng = await readFile(await figurePngDownload.path())
 await page.screenshot({ path: 'dist/figure-editor-smoke.png' })
 await page.locator('.figure-editor [data-action="back"]').click()
 const figureResumeVisible = await page.locator('#create-figure').textContent()
-if (figureInitialRows < 1 || figureColumns !== 2 || !figureEditedLabel?.includes('Figure genes') || figureUndoLabel?.includes('Figure genes') || !figureRedoLabel?.includes('Figure genes') || !figureResumeVisible?.includes('Continue figure') || figureProject.schemaVersion !== 1 || figureProject.columns.length !== 2 || !figureSvg.includes('<svg') || !figureSvg.includes('Figure genes') || figurePng.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('Figure Editor handoff, project round trip, edit, and export smoke failed')
+if (figureInitialRows < 1 || figureColumns !== 2 || !figureEditedLabel?.includes('Figure genes') || figureUndoLabel?.includes('Figure genes') || !figureRedoLabel?.includes('Figure genes') || !figureResumeVisible?.includes('Continue figure') || figureProject.schemaVersion !== 2 || figureProject.columns.length !== 2 || !figureSvg.includes('<svg') || !figureSvg.includes('Figure genes') || figurePng.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('Figure Editor handoff, project round trip, edit, and export smoke failed')
 await page.evaluate(async () => {
   localStorage.setItem('gerafe:last-track-folder', 'C:\\Smoke')
   localStorage.setItem('gerafe-workspace-directory', 'D:\\Workspaces')
