@@ -1,7 +1,7 @@
 import { BigWig } from '@gmod/bbi'
 import { BlobFile } from 'generic-filehandle2'
 import type { GenericFilehandle } from 'generic-filehandle2'
-import type { Region, SignalFeature, SignalSource } from '../types.ts'
+import type { Region, SignalFeature, SignalSource, TrackQueryOptions } from '../types.ts'
 
 type BigWigHeader = Awaited<ReturnType<BigWig['getHeader']>>
 
@@ -32,11 +32,11 @@ export class BigWigSource implements SignalSource {
     }
   }
 
-  async getFeatures(region: Region, pixelWidth: number, signal?: AbortSignal): Promise<SignalFeature[]> {
+  async getFeatures(region: Region, pixelWidth: number, signal?: AbortSignal, options?: TrackQueryOptions): Promise<SignalFeature[]> {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
     const scale = (region.end - region.start) / Math.max(pixelWidth, 1)
     const features = await this.reader.getFeatures(region.chr, Math.floor(region.start), Math.ceil(region.end), {
-      scale,
+      scale: options?.signalResolution === 'full' ? 1 : scale,
       signal,
     })
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')

@@ -120,6 +120,8 @@ export interface AlignmentCoverageFeature extends SignalFeature {
 export type TrackFeature = SignalFeature | IntervalFeature | InteractionFeature | MatrixFeature | AlignmentFeature | AlignmentCoverageFeature
 
 export interface TrackQueryOptions {
+  /** Request unzoomed BigWig values for reproducible figure scales at every DPI. */
+  signalResolution?: 'full'
   bamViewMode?: 'coverage' | 'alignments' | 'both'
   bamViewAsPairs?: boolean
   bamMinMapq?: number
@@ -145,7 +147,7 @@ export interface TrackSource {
 export interface SignalSource extends TrackSource {
   readonly name: string
   readonly chromosomes: ReadonlyMap<string, number>
-  getFeatures(region: Region, pixelWidth: number, signal?: AbortSignal): Promise<SignalFeature[]>
+  getFeatures(region: Region, pixelWidth: number, signal?: AbortSignal, options?: TrackQueryOptions): Promise<SignalFeature[]>
 }
 
 export type TrackStatus = 'offline' | 'idle' | 'loading' | 'ready' | 'error'

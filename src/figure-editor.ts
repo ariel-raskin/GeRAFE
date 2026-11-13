@@ -1,7 +1,8 @@
+import { pageFields, rowFields, cellFields, resolveAppearance, type AppearanceField } from './figure-appearance.ts'
 import { invoke } from '@tauri-apps/api/core'
 import { pickNativeFilePaths } from './desktop-track-picker.ts'
-import { addFigureColumn, figureRequiredSourceIds, FigureDocumentStore, normalizeFigureDocument, setFigureColumnRegion, type FigureCellStyle, type FigureDocument } from './figure-document.ts'
-import { FigureRenderSession, figureSvgToPng } from './figure-render.ts'
+import { addFigureColumn, applyManuscriptPreset, figureRequiredSourceIds, FigureDocumentStore, normalizeFigureDocument, setFigureColumnRegion, type FigureCellStyle, type FigureDocument } from './figure-document.ts'
+import { FigureRenderSession, figureScaleSections, figureSvgToPng } from './figure-render.ts'
 import { formatLocus, parseLocus } from './genome.ts'
 import { isDesktopApp, listNativeDirectory, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
 import { nativeFilePathKey } from './open-track-files.ts'
@@ -82,17 +83,22 @@ export class FigureEditor {
     this.root.querySelector<HTMLButtonElement>('[data-action="undo"]')!.disabled = !this.store.canUndo
     this.root.querySelector<HTMLButtonElement>('[data-action="redo"]')!.disabled = !this.store.canRedo
     this.root.querySelector<HTMLElement>('[data-role="zoom"]')!.textContent = `${Math.round(this.zoom * 100)}%`
+    const inspector = this.root.querySelector<HTMLElement>('.fe-inspector')!
+    const scroll = inspector.scrollTop
+    const details = new Map([...inspector.querySelectorAll<HTMLDetailsElement>('details[data-detail]')].map((node) => [node.dataset.detail!, node.open]))
     this.renderLayers()
     this.renderInspector()
+    for (const detail of inspector.querySelectorAll<HTMLDetailsElement>('details[data-detail]')) if (details.has(detail.dataset.detail!)) detail.open = details.get(detail.dataset.detail!)!
+    inspector.scrollTop = scroll
     void this.renderPreview()
   }
 
   private renderLayers(): void {
     const document = this.store.current
     const layers = this.root.querySelector<HTMLElement>('[data-role="layers"]')!
-    layers.innerHTML = `<div class="fe-sidebar-section"><h2>Figure</h2><button type="button" class="${this.selection.kind === 'page' ? 'is-selected' : ''}" data-select="page">Page · ${document.page.widthMm} mm</button></div>
-      <div class="fe-sidebar-section"><h2>Columns</h2>${document.columns.map((column, index) => `<div class="fe-layer-line"><button type="button" class="${this.selection.kind === 'column' && this.selection.columnId === column.id ? 'is-selected' : ''}" data-select="column" data-column="${esc(column.id)}">${index + 1}. ${esc(column.title || formatLocus(column.region))}</button><button type="button" data-action="adjust-region" data-column="${esc(column.id)}" title="Adjust genomic region">↔</button></div>`).join('')}<button type="button" data-action="add-column" ${document.columns.length >= 2 ? 'disabled' : ''}>+ Add column</button></div>
-      <div class="fe-sidebar-section"><h2>Track rows</h2>${document.rows.map((row, index) => `<div class="fe-layer-line ${row.included ? '' : 'is-excluded'}"><button type="button" class="${this.selection.kind === 'row' && this.selection.rowId === row.id ? 'is-selected' : ''}" data-select="row" data-row="${esc(row.id)}">${esc(row.label)}</button><button type="button" data-action="row-up" data-row="${esc(row.id)}" ${index === 0 ? 'disabled' : ''} title="Move row up">↑</button><button type="button" data-action="row-down" data-row="${esc(row.id)}" ${index === document.rows.length - 1 ? 'disabled' : ''} title="Move row down">↓</button><button type="button" data-action="row-toggle" data-row="${esc(row.id)}" title="${row.included ? 'Remove from figure' : 'Restore to figure'}">${row.included ? '×' : '+'}</button></div>`).join('')}</div>`
+    layers.innerHTML = `<div class="fe-sidebar-section"><h2>Figure</h2><button type="button" class="${this.selection.kind === 'page' ? 'is-selected' : ''}" data-select="page">Page · ${document.page.widthMm} mm</button><button type="button" data-action="manuscript-preset">Compact manuscript layout</button><button type="button" data-action="three-columns">Set up 3 comparison columns</button></div>
+      <div class="fe-sidebar-section"><h2>Columns</h2>${document.columns.map((column, index) => `<div class="fe-layer-line"><button type="button" class="${this.selection.kind === 'column' && this.selection.columnId === column.id ? 'is-selected' : ''}" data-select="column" data-column="${esc(column.id)}">${index + 1}. ${esc(column.title || formatLocus(column.region))}</button><button type="button" data-action="adjust-region" data-column="${esc(column.id)}" title="Adjust genomic region">↔</button></div>`).join('')}<button type="button" data-action="add-column" ${document.columns.length >= 8 ? 'disabled' : ''}>+ Add column</button></div>
+      <div class="fe-sidebar-section"><h2>Track rows</h2>${document.rows.map((row, index) => `<div class="fe-layer-line ${row.included ? '' : 'is-excluded'}"><button type="button" class="${this.selection.kind === 'row' && this.selection.rowId === row.id ? 'is-selected' : ''}" data-select="row" data-row="${esc(row.id)}">${esc(row.label || docTrackLabel(document, row.trackIds[0]))}</button><button type="button" data-action="row-up" data-row="${esc(row.id)}" ${!document.rows.slice(0, index).some((candidate) => candidate.included === row.included) ? 'disabled' : ''} title="Move row up">↑</button><button type="button" data-action="row-down" data-row="${esc(row.id)}" ${!document.rows.slice(index + 1).some((candidate) => candidate.included === row.included) ? 'disabled' : ''} title="Move row down">↓</button><button type="button" data-action="row-toggle" data-row="${esc(row.id)}" title="${row.included ? 'Remove from figure' : 'Restore to figure'}">${row.included ? '×' : '+'}</button></div>`).join('')}</div>`
   }
 
   private renderInspector(): void {
@@ -105,22 +111,22 @@ export class FigureEditor {
       const missing = doc.sourceDocument.sources.filter((source) => required.has(source.id) && !this.sources.has(source.id))
       const annotationWidth = (kind: string, id: string, defaultWidth: number) => field('Line width (mm)', 'annotation-line-width', doc.annotationStyles?.[`${kind}:${id}`]?.lineWidthMm ?? defaultWidth, 'number', `min="0.05" max="3" step="0.05" data-annotation-kind="${kind}" data-annotation="${esc(id)}"`)
       const annotationControls = [
-        ...doc.sourceDocument.savedRegions.map((saved) => `<div class="fe-annotation-card"><div class="fe-annotation"><strong>${esc(saved.label)}</strong><label><input data-edit="annotation-visible" data-annotation-kind="region" data-annotation="${esc(saved.id)}" type="checkbox" ${saved.highlighted ? 'checked' : ''}/> Show</label><input data-edit="annotation-color" data-annotation-kind="region" data-annotation="${esc(saved.id)}" type="color" value="${esc(saved.color)}" aria-label="${esc(saved.label)} color"/></div><label class="fe-checkbox"><input data-edit="annotation-fill" data-annotation-kind="region" data-annotation="${esc(saved.id)}" type="checkbox" ${saved.fill ? 'checked' : ''}/> Fill region</label>${field('Shade opacity', 'annotation-shade', saved.shadeOpacity, 'number', `min="0" max="1" step="0.05" data-annotation-kind="region" data-annotation="${esc(saved.id)}"`)}<label class="fe-field"><span>Boundary</span><select data-edit="annotation-line-style" data-annotation-kind="region" data-annotation="${esc(saved.id)}"><option value="solid" ${saved.boundaryStyle === 'solid' ? 'selected' : ''}>Solid</option><option value="dashed" ${saved.boundaryStyle === 'dashed' ? 'selected' : ''}>Dashed</option><option value="none" ${saved.boundaryStyle === 'none' ? 'selected' : ''}>None</option></select></label>${annotationWidth('region', saved.id, 0.16)}</div>`),
-        ...doc.sourceDocument.comparisonDividers.map((divider, index) => `<div class="fe-annotation-card"><div class="fe-annotation"><strong>Divider ${index + 1}</strong><input data-edit="annotation-color" data-annotation-kind="divider" data-annotation="${esc(divider.id)}" type="color" value="${esc(divider.color)}" aria-label="Divider ${index + 1} color"/></div><label class="fe-field"><span>Line</span><select data-edit="annotation-line-style" data-annotation-kind="divider" data-annotation="${esc(divider.id)}"><option value="solid" ${divider.lineStyle === 'solid' ? 'selected' : ''}>Solid</option><option value="dashed" ${divider.lineStyle === 'dashed' ? 'selected' : ''}>Dashed</option></select></label>${annotationWidth('divider', divider.id, 0.2)}</div>`),
+        ...doc.sourceDocument.savedRegions.map((saved) => `<div class="fe-annotation-card"><div class="fe-annotation"><strong>${esc(saved.label)}</strong><label><input data-edit="annotation-visible" data-annotation-kind="region" data-annotation="${esc(saved.id)}" type="checkbox" ${saved.highlighted ? 'checked' : ''}/> Show</label><input data-edit="annotation-color" data-annotation-kind="region" data-annotation="${esc(saved.id)}" type="color" value="${esc(saved.color)}" aria-label="${esc(saved.label)} color"/></div><label class="fe-checkbox"><input data-edit="annotation-fill" data-annotation-kind="region" data-annotation="${esc(saved.id)}" type="checkbox" ${saved.fill ? 'checked' : ''}/> Fill region</label>${field('Shade opacity', 'annotation-shade', saved.shadeOpacity, 'number', `min="0" max="1" step="0.05" data-annotation-kind="region" data-annotation="${esc(saved.id)}"`)}<label class="fe-field"><span>Boundary</span><select data-edit="annotation-line-style" data-annotation-kind="region" data-annotation="${esc(saved.id)}"><option value="solid" ${saved.boundaryStyle === 'solid' ? 'selected' : ''}>Solid</option><option value="dashed" ${saved.boundaryStyle === 'dashed' ? 'selected' : ''}>Dashed</option><option value="none" ${saved.boundaryStyle === 'none' ? 'selected' : ''}>None</option></select></label>${field('Start (0-based bp)', 'annotation-start', saved.region.start, 'number', `min="0" step="1" data-annotation-kind="region" data-annotation="${esc(saved.id)}"`)}${field('End (exclusive bp)', 'annotation-end', saved.region.end, 'number', `min="1" step="1" data-annotation-kind="region" data-annotation="${esc(saved.id)}"`)}${annotationWidth('region', saved.id, 0.16)}</div>`),
+        ...doc.sourceDocument.comparisonDividers.map((divider, index) => `<div class="fe-annotation-card"><div class="fe-annotation"><strong>Divider ${index + 1}</strong><input data-edit="annotation-color" data-annotation-kind="divider" data-annotation="${esc(divider.id)}" type="color" value="${esc(divider.color)}" aria-label="Divider ${index + 1} color"/></div><label class="fe-field"><span>Line</span><select data-edit="annotation-line-style" data-annotation-kind="divider" data-annotation="${esc(divider.id)}"><option value="solid" ${divider.lineStyle === 'solid' ? 'selected' : ''}>Solid</option><option value="dashed" ${divider.lineStyle === 'dashed' ? 'selected' : ''}>Dashed</option></select></label>${field('Position (0-based bp)', 'annotation-position', divider.position, 'number', `min="0" step="1" data-annotation-kind="divider" data-annotation="${esc(divider.id)}"`)}${annotationWidth('divider', divider.id, 0.2)}<button type="button" data-action="remove-figure-divider" data-annotation="${esc(divider.id)}">Remove divider</button></div>`),
         ...doc.sourceDocument.matrixOutlines.map((outline) => `<div class="fe-annotation-card"><div class="fe-annotation"><strong>${esc(outline.label)}</strong><label><input data-edit="annotation-visible" data-annotation-kind="outline" data-annotation="${esc(outline.id)}" type="checkbox" ${outline.visible ? 'checked' : ''}/> Show</label><input data-edit="annotation-color" data-annotation-kind="outline" data-annotation="${esc(outline.id)}" type="color" value="${esc(outline.color)}" aria-label="${esc(outline.label)} color"/></div>${annotationWidth('outline', outline.id, 0.35)}</div>`),
       ].join('')
-      inspector.innerHTML = `<h2>Page</h2>${field('Figure name', 'figure-name', doc.name)}${field('Title', 'page-title', doc.page.title)}${field('Width (mm)', 'page-width', doc.page.widthMm, 'number', 'min="50" max="600" step="1"')}${field('Height (mm; 0 = fit)', 'page-height', doc.page.heightMm, 'number', 'min="0" max="600" step="1"')}${field('Margins (mm)', 'page-margin', doc.page.marginMm, 'number', 'min="0" max="100" step="0.5"')}${field('Label area (mm)', 'page-label-width', doc.page.labelWidthMm, 'number', 'min="0" max="120" step="0.5"')}${field('Column gap (mm)', 'page-column-gap', doc.page.columnGapMm, 'number', 'min="0" max="100" step="0.5"')}${field('Row gap (mm)', 'page-row-gap', doc.page.rowGapMm, 'number', 'min="0" max="50" step="0.5"')}${field('Ruler height (mm)', 'page-ruler-height', doc.page.rulerHeightMm, 'number', 'min="0" max="50" step="0.5"')}${field('Font family', 'page-font', doc.page.fontFamily)}${field('Font size (pt)', 'page-font-size', doc.page.fontSizePt, 'number', 'min="4" max="40" step="0.5"')}${field('Background', 'page-background', doc.page.background, 'color')}${annotationControls ? `<h3>Annotations</h3>${annotationControls}` : ''}${missing.length ? `<div class="fe-missing"><h3>Missing source files</h3><p>Reopen these files before export. Existing figure edits are preserved.</p>${missing.map((source) => `<div><span>${esc(source.name)}</span><button type="button" data-action="relink-source" data-source="${esc(source.id)}">Relink…</button></div>`).join('')}</div>` : ''}`
+      inspector.innerHTML = `<h2>Page</h2>${field('Figure name', 'figure-name', doc.name)}${field('Title', 'page-title', doc.page.title)}${field('Width (mm)', 'page-width', doc.page.widthMm, 'number', 'min="50" max="600" step="1"')}${field('Height (mm; 0 = fit)', 'page-height', doc.page.heightMm, 'number', 'min="0" max="600" step="1"')}${field('Margins (mm)', 'page-margin', doc.page.marginMm, 'number', 'min="0" max="100" step="0.5"')}${field('Label area (mm)', 'page-label-width', doc.page.labelWidthMm, 'number', 'min="0" max="120" step="0.5"')}${field('Column gap (mm)', 'page-column-gap', doc.page.columnGapMm, 'number', 'min="0" max="100" step="0.5"')}${field('Row gap (mm)', 'page-row-gap', doc.page.rowGapMm, 'number', 'min="0" max="50" step="0.5"')}${field('Ruler height (mm)', 'page-ruler-height', doc.page.rulerHeightMm, 'number', 'min="0" max="50" step="0.5"')}${field('Font family', 'page-font', doc.page.fontFamily)}${field('Font size (pt)', 'page-font-size', doc.page.fontSizePt, 'number', 'min="4" max="40" step="0.5"')}${field('Background', 'page-background', doc.page.background, 'color')}${appearanceControls('page', pageFields, doc.page.appearance)}<h3>Scale dividers</h3><button type="button" data-action="add-figure-divider">Add divider at first column center</button>${annotationControls ? `<h3>Annotations</h3>${annotationControls}` : ''}${missing.length ? `<div class="fe-missing"><h3>Missing source files</h3><p>Reopen these files before export. Existing figure edits are preserved.</p>${missing.map((source) => `<div><span>${esc(source.name)}</span><button type="button" data-action="relink-source" data-source="${esc(source.id)}">Relink…</button></div>`).join('')}</div>` : ''}`
       return
     }
     if (selection.kind === 'column') {
       const column = doc.columns.find((item) => item.id === selection.columnId)
       if (!column) { this.selection = { kind: 'page' }; this.renderInspector(); return }
-      inspector.innerHTML = `<h2>Column</h2>${field('Title', 'column-title', column.title)}<div class="fe-field"><span>Genomic region</span><strong>${esc(formatLocus(column.region))}</strong></div><button type="button" data-action="adjust-region" data-column="${esc(column.id)}">Adjust region…</button><label class="fe-checkbox"><input data-edit="linked-regions" type="checkbox" ${doc.linkedRegions ? 'checked' : ''}/> Link region edits across columns</label><p class="fe-help">Each column has its own ruler. Track rows stay aligned when regions differ.</p>${doc.columns.length > 1 ? `<button type="button" data-action="remove-column" data-column="${esc(column.id)}">Remove column</button>` : ''}`
+      inspector.innerHTML = `<h2>Column</h2>${field('Title', 'column-title', column.title)}${field('Relative plot width', 'column-weight', column.widthWeight ?? 1, 'number', 'min="0.1" max="10" step="0.1"')}<div class="fe-inline-actions"><button type="button" data-action="column-left" data-column="${esc(column.id)}">Move left</button><button type="button" data-action="column-right" data-column="${esc(column.id)}">Move right</button></div><div class="fe-field"><span>Genomic region</span><strong>${esc(formatLocus(column.region))}</strong></div><button type="button" data-action="adjust-region" data-column="${esc(column.id)}">Adjust region…</button><label class="fe-checkbox"><input data-edit="linked-regions" type="checkbox" ${doc.linkedRegions ? 'checked' : ''}/> Link region edits across columns</label><p class="fe-help">Each column has its own ruler. Track rows stay aligned when regions differ.</p>${doc.columns.length > 1 ? `<button type="button" data-action="remove-column" data-column="${esc(column.id)}">Remove column</button>` : ''}`
       return
     }
     const row = doc.rows.find((item) => item.id === selection.rowId)
     if (!row) { this.selection = { kind: 'page' }; this.renderInspector(); return }
-    const rowFields = `<h2>Track row</h2>${field('Figure label', 'row-label', row.label)}${field('Assay/group label', 'row-group-label', row.groupLabel ?? '')}${field('Height (mm)', 'row-height', row.heightMm, 'number', 'min="2" max="100" step="0.5"')}${field('Gap after (mm)', 'row-gap', row.gapAfterMm, 'number', 'min="0" max="100" step="0.5"')}${field('Label size (pt)', 'row-font-size', row.labelFontSizePt ?? doc.page.fontSizePt, 'number', 'min="4" max="40" step="0.5"')}${field('Label color', 'row-label-color', row.labelColor ?? '#111111', 'color')}${field('Frame color', 'row-frame-color', row.frameColor ?? '#444444', 'color')}${field('Frame width (pt)', 'row-frame-width', row.frameWidthPt ?? 0.5, 'number', 'min="0" max="8" step="0.1"')}`
+    const rowControls = `<h2>Track row</h2>${field('Figure label', 'row-label', row.label)}${field('Assay/group label', 'row-group-label', row.groupLabel ?? '')}${field('Height (mm)', 'row-height', row.heightMm, 'number', 'min="1" max="150" step="any"')}${field('Gap after (mm)', 'row-gap', row.gapAfterMm, 'number', 'min="0" max="100" step="0.5"')}${field('Label size (pt)', 'row-font-size', row.labelFontSizePt ?? doc.page.fontSizePt, 'number', 'min="4" max="40" step="0.5"')}${field('Label color', 'row-label-color', row.labelColor ?? '#111111', 'color')}${field('Frame color', 'row-frame-color', row.frameColor ?? '#444444', 'color')}${field('Frame width (pt)', 'row-frame-width', row.frameWidthPt ?? 0.5, 'number', 'min="0" max="8" step="0.1"')}${appearanceControls('row', rowFields, row.appearance)}`
     const assignments = doc.columns.map((column, index) => {
       const assigned = column.assignments[row.id] ?? []
       const options = doc.sourceDocument.tracks.map((track) => `<option value="${esc(track.id)}" ${assigned.length === 1 && assigned[0] === track.id ? 'selected' : ''}>${esc(track.label)}</option>`).join('')
@@ -134,13 +140,20 @@ export class FigureEditor {
       const quantitative = spec?.kind === 'signal' || spec?.kind === 'stranded' || spec?.kind === 'matrix'
       const color = spec && assignedIds.length === 1 ? field('Color', 'cell-color', style.color ?? spec.color, 'color', `data-column="${esc(column.id)}"`) : ''
       const negativeColor = spec?.kind === 'stranded' ? field('Negative color', 'cell-negative-color', style.negativeColor ?? spec.negativeColor ?? '#2878d4', 'color', `data-column="${esc(column.id)}"`) : ''
-      const opacity = spec && (spec.kind === 'signal' || spec.kind === 'stranded' || spec.kind === 'matrix') ? field('Opacity (%)', 'cell-opacity', style.opacity ?? 100, 'number', `min="0" max="100" step="1" data-column="${esc(column.id)}"`) : ''
-      const scale = quantitative ? `<label class="fe-field"><span>Scale</span><select data-edit="cell-scale-mode" data-column="${esc(column.id)}"><option value="shared" ${!style.scaleMode || style.scaleMode === 'shared' ? 'selected' : ''}>Shared across columns</option><option value="independent" ${style.scaleMode === 'independent' ? 'selected' : ''}>Independent</option><option value="fixed" ${style.scaleMode === 'fixed' ? 'selected' : ''}>Fixed limits</option></select></label>${style.scaleMode === 'fixed' ? field('Minimum', 'cell-scale-min', style.scaleMin ?? 0, 'number', `step="any" data-column="${esc(column.id)}"`) + field('Maximum', 'cell-scale-max', style.scaleMax ?? 1, 'number', `step="any" data-column="${esc(column.id)}"`) : ''}<label class="fe-checkbox"><input type="checkbox" data-edit="cell-show-scale" data-column="${esc(column.id)}" ${style.showScale !== false ? 'checked' : ''}/> Show scale values</label>` : ''
-      const graph = spec?.kind === 'signal' ? `<label class="fe-field"><span>Graph</span><select data-edit="cell-render-style" data-column="${esc(column.id)}"><option value="source" ${!style.renderStyle || style.renderStyle === 'source' ? 'selected' : ''}>Source setting</option><option value="fill" ${style.renderStyle === 'fill' ? 'selected' : ''}>Filled</option><option value="line" ${style.renderStyle === 'line' ? 'selected' : ''}>Line</option></select></label>` : ''
-      const palette = spec?.kind === 'matrix' ? `<label class="fe-field"><span>Palette</span><select data-edit="cell-matrix-palette" data-column="${esc(column.id)}"><option value="source" ${!style.matrixPalette || style.matrixPalette === 'source' ? 'selected' : ''}>Source setting</option><option value="warm" ${style.matrixPalette === 'warm' ? 'selected' : ''}>Warm</option><option value="blue-black" ${style.matrixPalette === 'blue-black' ? 'selected' : ''}>Blue-black</option><option value="single" ${style.matrixPalette === 'single' ? 'selected' : ''}>Single color</option></select></label>` : ''
-      return `<div class="fe-cell-style"><h3>Column ${index + 1} appearance</h3>${color}${negativeColor}${opacity}${scale}${graph}${palette}</div>`
+      const opacity = spec && (spec.kind === 'signal' || spec.kind === 'stranded' || spec.kind === 'matrix' || spec.kind === 'interaction' || spec.kind === 'genes') ? field('Opacity (%)', 'cell-opacity', style.opacity ?? 100, 'number', `min="0" max="100" step="1" data-column="${esc(column.id)}"`) : ''
+      const scale = quantitative ? `<label class="fe-field"><span>Scale</span><select data-edit="cell-scale-mode" data-column="${esc(column.id)}"><option value="source" ${!style.scaleMode || style.scaleMode === 'source' ? 'selected' : ''}>Source limits / pooled data</option><option value="shared" ${style.scaleMode === 'shared' ? 'selected' : ''}>Shared observed limits</option><option value="independent" ${style.scaleMode === 'independent' ? 'selected' : ''}>Independent</option><option value="fixed" ${style.scaleMode === 'fixed' ? 'selected' : ''}>Fixed limits</option></select></label>${style.scaleMode === 'fixed' ? field('Minimum', 'cell-scale-min', style.scaleMin ?? 0, 'number', `step="any" data-column="${esc(column.id)}"`) + field('Maximum', 'cell-scale-max', style.scaleMax ?? 1, 'number', `step="any" data-column="${esc(column.id)}"`) : ''}<label class="fe-checkbox"><input type="checkbox" data-edit="cell-show-scale" data-column="${esc(column.id)}" ${style.showScale !== false ? 'checked' : ''}/> Show scale values</label>` : ''
+      const graph = spec?.kind === 'signal' || spec?.kind === 'stranded' ? `<label class="fe-field"><span>Graph</span><select data-edit="cell-render-style" data-column="${esc(column.id)}"><option value="source" ${!style.renderStyle || style.renderStyle === 'source' ? 'selected' : ''}>Source setting</option><option value="fill" ${style.renderStyle === 'fill' ? 'selected' : ''}>Filled</option><option value="line" ${style.renderStyle === 'line' ? 'selected' : ''}>Line</option></select></label>` : ''
+      const customPalette = Boolean(style.appearance?.matrixColors?.trim())
+      const palette = spec?.kind === 'matrix' ? `<label class="fe-field"><span>Palette</span><select data-edit="cell-matrix-palette" data-column="${esc(column.id)}">${customPalette ? '<option value="custom" selected>Custom stops</option>' : ''}${[['source', 'Source setting'], ['warm', 'Warm'], ['blue-black', 'Blue-black'], ['single', 'Single color']].map(([value, label]) => `<option value="${value}" ${!customPalette && (style.matrixPalette ?? 'source') === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>` : ''
+      const sectionFields = style.scaleMode === 'fixed' && resolveAppearance(rowFields, row.appearance).segmentedScales
+        ? figureScaleSections(doc, row, column.region).map((section) => {
+          const limits = style.segmentLimits?.[String(section.start)] ?? { min: style.scaleMin ?? 0, max: style.scaleMax ?? 1 }
+          const attrs = `step="any" data-column="${esc(column.id)}" data-section="${section.start}"`
+          return `<div class="fe-section-scale"><small>${esc(formatLocus(section))}</small>${field('Section minimum', 'section-min', limits.min, 'number', attrs)}${field('Section maximum', 'section-max', limits.max, 'number', attrs)}</div>`
+        }).join('') : ''
+      return `<details class="fe-cell-style" data-detail="cell-${esc(column.id)}" ${selection.kind === 'row' || selection.columnId === column.id ? 'open' : ''}><summary>${esc(column.title || `Column ${index + 1}`)} appearance</summary>${color}${negativeColor}${opacity}${scale}${sectionFields}${graph}${palette}${appearanceControls('cell', cellFields, style.appearance, `data-column="${esc(column.id)}"`, spec?.kind)}<div class="fe-inline-actions"><button type="button" data-action="copy-cell-style" data-column="${esc(column.id)}" data-row="${esc(row.id)}">Apply appearance to all columns</button><button type="button" data-action="reset-cell-style" data-column="${esc(column.id)}" data-row="${esc(row.id)}">Reset appearance</button></div></details>`
     }).join('')
-    inspector.innerHTML = rowFields + `<h3>Column assignments</h3>${assignments}<p class="fe-help">Click a rendered cell to select it. Figure styling does not alter the GeR workspace.</p>${styleControls}`
+    inspector.innerHTML = rowControls + `<h3>Column assignments</h3>${assignments}<button type="button" data-action="consolidate-row" data-row="${esc(row.id)}">Hide separate rows for these assigned tracks</button><p class="fe-help">Click a rendered cell to select it. Figure styling does not alter the GeR workspace.</p>${styleControls}`
   }
 
   private async renderPreview(): Promise<void> {
@@ -185,9 +198,17 @@ export class FigureEditor {
       case 'zoom-in': this.zoom = Math.min(3, this.zoom * 1.2); this.refresh(); break
       case 'zoom-out': this.zoom = Math.max(0.25, this.zoom / 1.2); this.refresh(); break
       case 'zoom-fit': this.zoom = Math.max(0.25, Math.min(1.5, (this.root.querySelector('.fe-scroll')!.clientWidth - 48) / (this.store.current.page.widthMm * 96 / 25.4))); this.refresh(); break
+      case 'add-figure-divider': this.edit((draft) => { const region = draft.columns[0].region; draft.sourceDocument.comparisonDividers.push({ id: crypto.randomUUID(), chr: region.chr, position: Math.round((region.start + region.end) / 2), color: '#777777', lineStyle: 'solid' }) }); break
+      case 'remove-figure-divider': this.edit((draft) => { draft.sourceDocument.comparisonDividers = draft.sourceDocument.comparisonDividers.filter((divider) => divider.id !== action.dataset.annotation) }); break
+      case 'manuscript-preset': this.edit(applyManuscriptPreset); this.toast('Applied compact layout, typography, gene geometry and linear matrix palette. Undo restores the previous settings.'); break
+      case 'three-columns': this.edit((draft) => { while (draft.columns.length < 3) addFigureColumn(draft); draft.columns.forEach((column, index) => { column.title ||= index === 0 ? 'Control' : `Condition ${index + 1}` }); draft.linkedRegions = true }); break
+      case 'column-left': case 'column-right': this.edit((draft) => { const index = draft.columns.findIndex((column) => column.id === columnId); const next = index + (action.dataset.action === 'column-left' ? -1 : 1); if (index >= 0 && next >= 0 && next < draft.columns.length) [draft.columns[index], draft.columns[next]] = [draft.columns[next], draft.columns[index]] }); break
+      case 'copy-cell-style': this.edit((draft) => { const style = draft.columns.find((column) => column.id === columnId)?.styles?.[rowId!]; for (const column of draft.columns) (column.styles ??= {})[rowId!] = structuredClone(style ?? {}) }); break
+      case 'reset-cell-style': this.edit((draft) => { const column = draft.columns.find((column) => column.id === columnId); if (column?.styles) delete column.styles[rowId!] }); break
+      case 'consolidate-row': this.edit((draft) => { const assigned = new Set(draft.columns.flatMap((column) => column.assignments[rowId!] ?? [])); for (const row of draft.rows) if (row.id !== rowId && row.trackIds.length && row.trackIds.every((id) => assigned.has(id))) row.included = false }); break
       case 'add-column': this.edit((draft) => addFigureColumn(draft)); break
       case 'remove-column': this.selection = { kind: 'page' }; this.edit((draft) => { draft.columns = draft.columns.filter((column) => column.id !== columnId); draft.linkedRegions = false }); break
-      case 'row-up': case 'row-down': this.edit((draft) => { const index = draft.rows.findIndex((row) => row.id === rowId); const next = index + (action.dataset.action === 'row-up' ? -1 : 1); if (index >= 0 && next >= 0 && next < draft.rows.length) [draft.rows[index], draft.rows[next]] = [draft.rows[next], draft.rows[index]] }); break
+      case 'row-up': case 'row-down': this.edit((draft) => { const index = draft.rows.findIndex((row) => row.id === rowId); if (index < 0) return; const direction = action.dataset.action === 'row-up' ? -1 : 1; let next = index + direction; while (next >= 0 && next < draft.rows.length && draft.rows[next].included !== draft.rows[index].included) next += direction; if (next >= 0 && next < draft.rows.length) { const [row] = draft.rows.splice(index, 1); draft.rows.splice(next, 0, row) } }); break
       case 'row-toggle': this.edit((draft) => { const row = draft.rows.find((candidate) => candidate.id === rowId); if (row) row.included = !row.included }); break
       case 'adjust-region': if (columnId) void this.adjustRegion(columnId); break
       case 'save': void this.saveProject(false); break
@@ -202,6 +223,26 @@ export class FigureEditor {
   private onChange(event: Event): void {
     const input = event.target as HTMLInputElement | HTMLSelectElement
     const key = input.dataset.edit
+    if (input.dataset.appearance) {
+      if (input instanceof HTMLInputElement && (!input.validity.valid || input.type === 'number' && !input.value)) { input.reportValidity(); return }
+      const scope = input.dataset.appearance
+      const fields: Record<string, AppearanceField> = scope === 'page' ? pageFields : scope === 'row' ? rowFields : cellFields
+      const property = input.dataset.property!
+      const definition = fields[property]
+      if (!definition) return
+      const value = typeof definition.value === 'number' ? Number(input.value) : typeof definition.value === 'boolean' ? (input as HTMLInputElement).checked : input.value
+      this.edit((draft) => {
+        let appearance: object
+        if (scope === 'page') appearance = draft.page.appearance ??= {}
+        else if (this.selection.kind === 'row' || this.selection.kind === 'cell') {
+          const row = draft.rows.find((row) => row.id === (this.selection as { rowId: string }).rowId)!
+          if (scope === 'row') appearance = row.appearance ??= {}
+          else { const column = draft.columns.find((column) => column.id === input.dataset.column)!; appearance = ((column.styles ??= {})[row.id] ??= {}).appearance ??= {} }
+        } else return
+        ;(appearance as Record<string, unknown>)[property] = value
+      })
+      return
+    }
     if (!key) return
     const number = Number(input.value)
     const selection = this.selection
@@ -229,7 +270,15 @@ export class FigureEditor {
           const styles = draft.annotationStyles ??= {}
           styles[`${kind}:${id}`] = { lineWidthMm: number }
         } else if (annotation) {
-          if (key === 'annotation-color') annotation.color = input.value
+          if (key === 'annotation-position' && 'position' in annotation) {
+            if (!Number.isSafeInteger(number) || number < 0) throw new Error('Divider positions must be non-negative whole bases.')
+            annotation.position = number
+          } else if ((key === 'annotation-start' || key === 'annotation-end') && 'region' in annotation) {
+            if (!Number.isSafeInteger(number) || number < 0) throw new Error('Region coordinates must be non-negative whole bases.')
+            annotation.region[key === 'annotation-start' ? 'start' : 'end'] = number
+            if (annotation.region.end <= annotation.region.start) throw new Error('Region start must precede its exclusive end.')
+          }
+          else if (key === 'annotation-color') annotation.color = input.value
           else if (key === 'annotation-visible' && 'highlighted' in annotation) annotation.highlighted = (input as HTMLInputElement).checked
           else if (key === 'annotation-visible' && 'visible' in annotation) annotation.visible = (input as HTMLInputElement).checked
           else if (key === 'annotation-fill' && 'fill' in annotation) annotation.fill = (input as HTMLInputElement).checked
@@ -239,6 +288,7 @@ export class FigureEditor {
         }
       }
       else if (key === 'linked-regions') draft.linkedRegions = (input as HTMLInputElement).checked
+      else if (key === 'column-weight' && selection.kind === 'column') draft.columns.find((column) => column.id === selection.columnId)!.widthWeight = number
       else if (key === 'column-title' && selection.kind === 'column') draft.columns.find((column) => column.id === selection.columnId)!.title = input.value
       else if (selection.kind === 'row' || selection.kind === 'cell') {
         const row = draft.rows.find((candidate) => candidate.id === selection.rowId)!
@@ -253,17 +303,22 @@ export class FigureEditor {
         else if (key === 'cell-track') {
           if (input.value === '__stack__') return
           draft.columns.find((column) => column.id === input.dataset.column)!.assignments[row.id] = input.value ? [input.value] : []
-        } else if (key.startsWith('cell-')) {
+        } else if (key.startsWith('cell-') || key.startsWith('section-')) {
           const column = draft.columns.find((item) => item.id === input.dataset.column)
           if (!column) return
           const styles = column.styles ??= {}
           const style: FigureCellStyle = styles[row.id] ??= {}
-          if (key === 'cell-color') style.color = input.value
+          if (key === 'section-min' || key === 'section-max') {
+            const limits = (style.segmentLimits ??= {})[input.dataset.section!] ??= { min: style.scaleMin ?? 0, max: style.scaleMax ?? 1 }
+            if (key === 'section-min') limits.min = number
+            else limits.max = number
+          }
+          else if (key === 'cell-color') style.color = input.value
           else if (key === 'cell-negative-color') style.negativeColor = input.value
           else if (key === 'cell-opacity') style.opacity = number
           else if (key === 'cell-render-style') style.renderStyle = input.value as FigureCellStyle['renderStyle']
-          else if (key === 'cell-matrix-palette') style.matrixPalette = input.value as FigureCellStyle['matrixPalette']
-          else if (key === 'cell-scale-mode') { style.scaleMode = input.value as FigureCellStyle['scaleMode']; if (style.scaleMode === 'fixed') { style.scaleMin ??= 0; style.scaleMax ??= 1 } }
+          else if (key === 'cell-matrix-palette' && input.value !== 'custom') { style.matrixPalette = input.value as FigureCellStyle['matrixPalette']; if (style.appearance) delete style.appearance.matrixColors }
+          else if (key === 'cell-scale-mode') { style.scaleMode = input.value as FigureCellStyle['scaleMode']; if (style.scaleMode === 'fixed') { style.scaleMin ??= draft.sourceDocument.tracks.find((track) => track.id === column.assignments[row.id]?.[0])?.kind === 'stranded' ? -1 : 0; style.scaleMax ??= 1 } }
           else if (key === 'cell-scale-min') style.scaleMin = number
           else if (key === 'cell-scale-max') style.scaleMax = number
           else if (key === 'cell-show-scale') style.showScale = (input as HTMLInputElement).checked
@@ -377,20 +432,20 @@ export class FigureEditor {
       let contents: string
       let path: string | undefined
       if (isDesktopApp()) {
-        path = (await pickNativeFilePaths({ title: 'Open GeRAFE figure project', category: 'FIGURE PROJECTS', fileMatches: (name) => /\.gerafe-figure\.json$/i.test(name), startFolder: localStorage.getItem(FIGURE_FOLDER_KEY) || undefined }))?.[0]
+        path = (await pickNativeFilePaths({ title: 'Open GeRAFE figure project', category: 'FIGURE PROJECTS', fileMatches: (name) => /(?:\.gerafe-figure\.json|\.svg)$/i.test(name), startFolder: localStorage.getItem(FIGURE_FOLDER_KEY) || undefined }))?.[0]
         if (!path) return
         contents = await readNativeTextFile(path)
       } else {
-        const file = await chooseBrowserFile('.gerafe-figure.json,.json')
+        const file = await chooseBrowserFile('.gerafe-figure.json,.json,.svg')
         if (!file) return
         contents = await file.text()
       }
-      const next = normalizeFigureDocument(JSON.parse(contents))
+      const next = parseFigureProject(contents)
       this.sources = await this.options.restoreSources(next)
       this.session = new FigureRenderSession()
       this.store = new FigureDocumentStore(next)
       this.savedSnapshot = JSON.stringify(this.store.current)
-      this.projectPath = path
+      this.projectPath = path?.toLowerCase().endsWith('.svg') ? undefined : path
       this.selection = { kind: 'page' }
       if (path) rememberFigureFolder(path)
       this.refresh()
@@ -517,4 +572,35 @@ async function writeNativeBlob(path: string, blob: Blob): Promise<void> {
   const chunks: string[] = []
   for (let index = 0; index < bytes.length; index += 16_384) chunks.push(String.fromCharCode(...bytes.subarray(index, index + 16_384)))
   await invoke('write_binary_file', { path, base64Contents: btoa(chunks.join('')) })
+}
+
+function appearanceControls(scope: 'page' | 'row' | 'cell', fields: Record<string, AppearanceField>, value?: object, attributes = '', trackKind?: string): string {
+  const groups = new Map<string, string[]>()
+  for (const [property, field] of Object.entries(fields)) {
+    if (field.tracks && !field.tracks.includes(trackKind ?? '')) continue
+    const current = (value as Record<string, unknown> | undefined)?.[property] ?? field.value
+    const attrs = `data-appearance="${scope}" data-property="${property}" ${attributes}`
+    const control = typeof field.value === 'boolean'
+      ? `<label class="fe-checkbox"><input type="checkbox" ${attrs} ${current ? 'checked' : ''}/> ${esc(field.label)}</label>`
+      : `<label class="fe-field"><span>${esc(field.label)}</span>${field.options
+        ? `<select ${attrs}>${field.options.map((option) => `<option value="${esc(option)}" ${option === current ? 'selected' : ''}>${esc(option)}</option>`).join('')}</select>`
+        : `<input ${attrs} type="${typeof field.value === 'number' ? 'number' : field.kind === 'color' ? 'color' : 'text'}" value="${esc(String(current))}" ${typeof field.value === 'number' ? `min="${field.min}" max="${field.max}" step="${field.step}"` : ''}/>`}</label>`
+    if (!groups.has(field.group)) groups.set(field.group, [])
+    groups.get(field.group)!.push(control)
+  }
+  return [...groups].map(([name, controls]) => `<details class="fe-properties" data-detail="${scope}-${esc(name)}-${attributes.replace(/[^a-z0-9_-]/gi, '')}"><summary>${esc(name)}</summary>${controls.join('')}</details>`).join('')
+}
+
+function docTrackLabel(document: FigureDocument, id: string): string { return document.sourceDocument.tracks.find((track) => track.id === id)?.label || 'Untitled row' }
+
+/** Reads metadata as text; never inserts an imported SVG into the application. */
+function parseFigureProject(contents: string): FigureDocument {
+  if (contents.trimStart().startsWith('{')) return normalizeFigureDocument(JSON.parse(contents))
+  if (/<!DOCTYPE/i.test(contents)) throw new Error('SVG projects with a document type declaration are unsupported.')
+  const xml = new DOMParser().parseFromString(contents, 'image/svg+xml')
+  if (xml.querySelector('parsererror')) throw new Error('The SVG is invalid.')
+  const metadata = xml.querySelector('svg > metadata')?.textContent
+  const recipe = metadata ? JSON.parse(metadata).figure : undefined
+  if (!recipe) throw new Error('This SVG does not contain an editable GeRAFE figure recipe.')
+  return normalizeFigureDocument(recipe)
 }
