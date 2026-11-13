@@ -53,8 +53,26 @@ if (process.env.GERAFE_IGV_SESSION_SMOKE_PATH) {
   console.log(`Real IGV session parsed: ${realIgv.genome}, ${realIgv.resources} resources`)
 }
 await page.waitForTimeout(500)
+// Most real handoffs occur after navigation, which leaves fractional base bounds.
+const feNavigationBox = await page.locator('#genome-header').boundingBox()
+await page.mouse.move(feNavigationBox.x + feNavigationBox.width * 0.5, feNavigationBox.y + 50)
+await page.mouse.down()
+await page.mouse.move(feNavigationBox.x + feNavigationBox.width * 0.5 + 37, feNavigationBox.y + 50, { steps: 5 })
+await page.mouse.up()
+await page.keyboard.down('Control')
+await page.mouse.wheel(0, -123)
+await page.keyboard.up('Control')
+await page.waitForFunction(() => {
+  const region = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').region
+  return region && (!Number.isInteger(region.start) || !Number.isInteger(region.end))
+})
+const feBrowserRegion = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document')).region)
 await page.locator('#create-figure').click()
 await page.locator('.fe-page svg').waitFor()
+const feInitialRegion = await page.locator('.fe-page svg metadata').evaluate((element) => JSON.parse(element.textContent).columns[0].region)
+if (feInitialRegion.start !== Math.floor(feBrowserRegion.start) || feInitialRegion.end !== Math.ceil(feBrowserRegion.end)) throw new Error('Figure handoff did not retain the complete navigated base interval.')
+const feBrowserRegionAfter = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document')).region)
+if (JSON.stringify(feBrowserRegion) !== JSON.stringify(feBrowserRegionAfter)) throw new Error('Creating a figure changed the browser viewport.')
 const figureInitialRows = await page.locator('.fe-sidebar-section').filter({ hasText: 'Track rows' }).locator('.fe-layer-line').count()
 await page.locator('.figure-editor [data-action="add-column"]').click()
 await page.locator('.fe-page svg [data-fe-column]').first().waitFor()

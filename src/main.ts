@@ -694,13 +694,10 @@ store.subscribe((document, reason) => {
 })
 emptyWorkspace.hidden = store.current.tracks.some((track) => track.kind !== 'genes' || track.sourceIds.length > 0)
 browser.syncDocument(store.current, runtimeSources)
-createFigureButton.addEventListener('click', () => {
-  if (figureEditor) figureEditor.show()
-  else openNewFigureEditor()
-})
+createFigureButton.addEventListener('click', showFigureEditor)
 newFigureButton.addEventListener('click', () => void confirmAction({
   title: 'Start a new figure?', message: 'The current FE draft will be replaced. Save it first if you want to keep it.', submitLabel: 'Start new figure', danger: true,
-}).then((confirmed) => { if (confirmed) { figureEditor?.dispose(); figureEditor = undefined; openNewFigureEditor() } }))
+}).then((confirmed) => { if (confirmed) { figureEditor?.dispose(); figureEditor = undefined; showFigureEditor() } }))
 void restorePersistedSources()
 browser.setSelectedTracks(selectedTrackIds)
 fitBottomPaneToContent()
@@ -708,6 +705,17 @@ window.setTimeout(fitBottomPaneToContent, 0)
 updateUpperAutoFitControl()
 scheduleUpperAutoFit()
 renderRegionMenu()
+
+function showFigureEditor(): void {
+  try {
+    if (figureEditor) figureEditor.show()
+    else openNewFigureEditor()
+  } catch (error) {
+    figureEditor?.hide()
+    console.error('Could not open Figure Editor', error)
+    showToast(`Could not open Figure Editor: ${error instanceof Error ? error.message : String(error)}`, true)
+  }
+}
 
 function openNewFigureEditor(): void {
   const sourceDocument = structuredClone(store.current)
