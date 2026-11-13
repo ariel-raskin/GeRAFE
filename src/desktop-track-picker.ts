@@ -1,9 +1,10 @@
 import { listNativeDirectory, type NativeDirectoryListing } from './native-file.ts'
 import { nativeFilePathKey, type OpenNativeFileRole } from './open-track-files.ts'
 import { folderCrumbs, folderShortcutLabel, LAST_TRACK_FOLDER_KEY, parseSavedTrackFolders, SAVED_TRACK_FOLDERS_KEY } from './track-picker-state.ts'
+import { annotationFormat } from './gene-annotation.ts'
 
 export function isSupportedPickerFile(name: string): boolean {
-  return /\.(?:bw|bigwig|bedgraph|bedgraph\.gz|tdf|bam|bai|csi|bed|bedpe|hic|cool|mcool)$/i.test(name)
+  return Boolean(annotationFormat(name)) || /\.(?:bw|bigwig|bedgraph|bedgraph\.gz|tdf|bam|bai|csi|bed|bedpe|hic|cool|mcool)$/i.test(name)
 }
 
 export interface NativeFilePickerOptions {

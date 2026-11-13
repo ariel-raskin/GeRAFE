@@ -67,6 +67,10 @@ import type { IgvPreview, IgvSession } from './igv-session.ts'
 import { nativeFilePathKey } from './open-track-files.ts'
 import { createFigureDocument, figureRequiredSourceIds, type FigureDocument } from './figure-document.ts'
 import { FigureEditor } from './figure-editor.ts'
+import { annotationFormat, readGeneAnnotation, type AnnotationFormat } from './gene-annotation.ts'
+import { openAnnotationLibrary, restoreCachedAnnotation } from './annotation-library.ts'
+import { copyableRegion } from './genome.ts'
+import { addGeneTrack } from './track-document.ts'
 
 void installWindowsCursorScaleCorrection()
 
@@ -131,6 +135,8 @@ app.innerHTML = `
               <span>Open tracks…</span><kbd>Ctrl+O</kbd>
             </button>
             <span class="menu-separator"></span>
+            <button class="menu-item" id="gene-annotations-menu-item" type="button" role="menuitem"><span>Gene annotations…</span></button>
+            <span class="menu-separator"></span>
             <button class="menu-item" id="new-workspace-menu-item" type="button" role="menuitem"><span>New workspace</span></button>
             <button class="menu-item" id="open-workspace-menu-item" type="button" role="menuitem"><span>Open workspace…</span></button>
             <button class="menu-item" id="import-igv-session-menu-item" type="button" role="menuitem"><span>Import IGV session…</span></button>
@@ -189,9 +195,9 @@ app.innerHTML = `
       <div class="app-menu region-tools-control" id="region-menu-root">
         <button class="menu-trigger region-tools-button" id="region-menu-button" type="button" aria-haspopup="menu" aria-expanded="false" title="Select, save, and revisit genomic regions">Regions <small id="region-menu-count"></small></button>
         <div class="menu-popover region-menu-popover" id="region-menu-popup" role="menu" hidden>
-          <div class="region-menu-heading">Comparison dividers</div>
-          <button class="menu-item" type="button" data-region-action="place-divider"><span>Add comparison divider…</span></button>
-          <button class="menu-item" id="clear-comparison-dividers" type="button" data-region-action="clear-dividers"><span>Clear all comparison dividers</span></button>
+          <div class="region-menu-heading">Scale dividers</div>
+          <button class="menu-item" type="button" data-region-action="place-divider"><span>Add scale divider…</span></button>
+          <button class="menu-item" id="clear-comparison-dividers" type="button" data-region-action="clear-dividers"><span>Clear all scale dividers</span></button>
           <div id="comparison-divider-items"></div>
           <span class="menu-separator"></span>
           <div class="region-menu-heading">Matrix outlines</div>
@@ -201,6 +207,8 @@ app.innerHTML = `
           <span class="menu-separator"></span>
           <button class="menu-item" type="button" data-region-action="select"><span>Add region…</span><small>Hold Ctrl</small></button>
           <button class="menu-item" type="button" data-region-action="save-current"><span>Add current view as region…</span></button>
+          <button class="menu-item" type="button" data-region-action="copy-current"><span>Copy current coordinates</span><small>1-based inclusive</small></button>
+          <button class="menu-item" type="button" data-region-action="copy-current-bed"><span>Copy current view as BED</span><small>0-based, end exclusive</small></button>
           <button class="menu-item" id="region-snap-matrix-bins" type="button" data-region-action="toggle-snap"><span>Snap selection to matrix bins</span><small id="region-snap-status"></small></button>
           <div class="region-menu-heading">Saved regions</div>
           <div id="saved-region-items"></div>
@@ -340,7 +348,9 @@ app.innerHTML = `
             <h3>Regions and matrices</h3>
             <ul>
               <li><span>Hold <kbd>Ctrl</kbd> and drag</span><small>Add a highlighted genomic region.</small></li>
-              <li><span>Hover a region edge or divider</span><small>Drag the resize cursor to move that boundary.</small></li>
+              <li><span><kbd>Ctrl</kbd>-click the plot or ruler</span><small>Place a Scale divider.</small></li>
+              <li><span><kbd>Shift</kbd>-drag across the plot or ruler</span><small>Highlight a temporary span; right-click it to save a region, copy coordinates, or zoom.</small></li>
+              <li><span>Hover a region edge or Scale divider</span><small>Drag to move the boundary, or right-click for its controls.</small></li>
               <li><span>Triangular matrix annotations</span><small>Resize regions from their slanted sides and manual outlines from their corners.</small></li>
             </ul>
           </section>
@@ -543,12 +553,11 @@ let activeRegionTool: RegionToolMode | undefined
 let openRegionOptionsId: string | undefined
 let openMatrixOutlineOptionsId: string | undefined
 let pendingMatrixOutlineTargetIds: string[] | undefined
-let ctrlRegionSelectionActive = false
 
 interface OpenedSource {
   source: TrackSource
   sourceSpec: TrackSourceSpec
-  kind: 'signal' | 'interval' | 'interaction' | 'matrix' | 'alignment'
+  kind: 'signal' | 'interval' | 'interaction' | 'matrix' | 'alignment' | 'genes'
 }
 
 const initialRegion = restoredDocument && restoredDocument.referenceId === activeReference.id
@@ -572,6 +581,9 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
   },
   onRegionSelected(region) {
     void saveBrowserRegion(region)
+  },
+  onHighlightedSpanContextMenu(region, x, y) {
+    openHighlightedSpanContextMenu(region, x, y)
   },
   onSavedRegionResize(id, region) {
     store.edit((draft) => { const saved = draft.savedRegions.find((item) => item.id === id); if (saved) saved.region = region })
@@ -597,6 +609,9 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
   onComparisonDividerMove(id, position) {
     store.edit((draft) => { const divider = draft.comparisonDividers.find((item) => item.id === id); if (divider) divider.position = position })
   },
+  onRegionLineContextMenu(kind, id, x, y) {
+    openRegionLineContextMenu(kind, id, x, y)
+  },
   onRegionToolModeChange(mode) {
     activeRegionTool = mode
     regionMenuButton.classList.toggle('is-active', Boolean(mode))
@@ -610,7 +625,7 @@ const browser = new GenomeBrowser(headerCanvas, canvas, bottomCanvas, activeChro
   onTracksChange(nextTracks) {
     const runtimeByTrack = new Map<string, TrackRuntime[]>()
     for (const runtime of nextTracks) runtimeByTrack.set(runtime.trackId, [...runtimeByTrack.get(runtime.trackId) ?? [], runtime])
-    const visualTracks = store.current.tracks.filter((track) => track.kind !== 'genes')
+    const visualTracks = store.current.tracks.filter((track) => track.kind !== 'genes' || track.sourceIds.length > 0)
     const loading = visualTracks.filter((track) => runtimeByTrack.get(track.id)?.some((runtime) => runtime.status === 'loading')).length
     const attention = visualTracks.filter((track) => runtimeByTrack.get(track.id)?.some((runtime) => runtime.status === 'error' || runtime.status === 'offline')).length
     const ready = visualTracks.filter((track) => runtimeByTrack.get(track.id)?.length && runtimeByTrack.get(track.id)!.every((runtime) => runtime.status === 'ready')).length
@@ -666,32 +681,41 @@ window.setTimeout(showFirstRunInteractionHint, 450)
 let persistTimer: number | undefined
 let sourceRestoreGeneration = 0
 store.subscribe((document, reason) => {
+  if (reason === 'replace') browser.clearHighlightedSpan()
   window.clearTimeout(persistTimer)
   persistTimer = window.setTimeout(() => localStorage.setItem(WORKSPACE_KEY, JSON.stringify(document)), 180)
   if (reason !== 'viewport') browser.syncDocument(document, runtimeSources)
-  emptyWorkspace.hidden = document.tracks.some((track) => track.kind !== 'genes')
+  emptyWorkspace.hidden = document.tracks.some((track) => track.kind !== 'genes' || track.sourceIds.length > 0)
   updateUndoControls()
   browser.setSelectedTracks(selectedTrackIds)
   if (bottomPaneAutoFit && reason !== 'viewport') requestAnimationFrame(fitBottomPaneToContent)
   if (reason !== 'viewport') scheduleUpperAutoFit()
   renderRegionMenu()
 })
-emptyWorkspace.hidden = store.current.tracks.some((track) => track.kind !== 'genes')
+emptyWorkspace.hidden = store.current.tracks.some((track) => track.kind !== 'genes' || track.sourceIds.length > 0)
 browser.syncDocument(store.current, runtimeSources)
-createFigureButton.addEventListener('click', () => {
-  if (figureEditor) figureEditor.show()
-  else openNewFigureEditor()
-})
+createFigureButton.addEventListener('click', showFigureEditor)
 newFigureButton.addEventListener('click', () => void confirmAction({
   title: 'Start a new figure?', message: 'The current FE draft will be replaced. Save it first if you want to keep it.', submitLabel: 'Start new figure', danger: true,
-}).then((confirmed) => { if (confirmed) { figureEditor?.dispose(); figureEditor = undefined; openNewFigureEditor() } }))
-if (isDesktopApp()) void restorePersistedSources()
+}).then((confirmed) => { if (confirmed) { figureEditor?.dispose(); figureEditor = undefined; showFigureEditor() } }))
+void restorePersistedSources()
 browser.setSelectedTracks(selectedTrackIds)
 fitBottomPaneToContent()
 window.setTimeout(fitBottomPaneToContent, 0)
 updateUpperAutoFitControl()
 scheduleUpperAutoFit()
 renderRegionMenu()
+
+function showFigureEditor(): void {
+  try {
+    if (figureEditor) figureEditor.show()
+    else openNewFigureEditor()
+  } catch (error) {
+    figureEditor?.hide()
+    console.error('Could not open Figure Editor', error)
+    showToast(`Could not open Figure Editor: ${error instanceof Error ? error.message : String(error)}`, true)
+  }
+}
 
 function openNewFigureEditor(): void {
   const sourceDocument = structuredClone(store.current)
@@ -724,7 +748,7 @@ document.querySelector<HTMLFormElement>('#locus-form')!.addEventListener('submit
   const query = locusInput.value.trim()
   const region = parseLocus(locusInput.value, activeChromosomes)
   if (region) { rememberInputHistory('locus', query); return browser.setRegion(region) }
-  const gene = activeGeneSource?.find(locusInput.value)
+  const gene = findAnnotationGene(locusInput.value)
   if (gene) {
     rememberInputHistory('locus', query)
     const geneSpan = gene.end - gene.start
@@ -733,7 +757,7 @@ document.querySelector<HTMLFormElement>('#locus-form')!.addEventListener('submit
     showToast(`${gene.name} · ${formatLocus({ chr: gene.chr, start: gene.start, end: gene.end })}`)
     return
   }
-  showToast(activeGeneSource
+  showToast(annotationSourcesForSearch().length
     ? `No gene or locus matched “${locusInput.value.trim()}”.`
     : `This reference has no gene-name index. Try a locus like ${exampleLocus(activeReference)}.`, true)
 })
@@ -768,7 +792,7 @@ document.querySelector<HTMLButtonElement>('#open-tracks-menu-item')!.addEventLis
 })
 document.querySelector<HTMLButtonElement>('#new-workspace-menu-item')!.addEventListener('click', async () => {
   closeMenus()
-  const loadedTracks = store.current.tracks.filter((track) => track.kind !== 'genes')
+  const loadedTracks = store.current.tracks.filter((track) => track.kind !== 'genes' || track.sourceIds.length > 0)
   if (loadedTracks.length && !await confirmAction({
     title: 'Start a new workspace?',
     message: `This will remove ${loadedTracks.length} loaded track${loadedTracks.length === 1 ? '' : 's'} from the current workspace. You can undo this change afterward.`,
@@ -894,12 +918,8 @@ document.addEventListener('pointerdown', (event) => {
   if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog, #track-options-dialog, #interaction-guide-dialog, #matrix-settings-dialog, #action-dialog')) clearTrackSelection()
 })
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Control' && !event.repeat && !activeRegionTool
-    && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement) && !(event.target as HTMLElement).isContentEditable) {
-    ctrlRegionSelectionActive = true
-    browser.setRegionToolMode('select')
-  }
-  if (event.key === 'Escape') { ctrlRegionSelectionActive = false; pendingMatrixOutlineTargetIds = undefined; closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeInteractionGuide(); closeMatrixSettingsDialog(); closeActionDialog(undefined); browser.setRegionToolMode(undefined) }
+  if (event.key === 'Control' || event.key === 'Shift') browser.setPlotModifiers(event.ctrlKey, event.shiftKey)
+  if (event.key === 'Escape') { browser.clearHighlightedSpan(); pendingMatrixOutlineTargetIds = undefined; closeMenus(); setReferenceMenu(false); setChromosomeMenu(false); closeTrackContextMenu(); closeColorDialog(); closeUpdateDialog(); closeTrackOptionsDialog(); closeInteractionGuide(); closeMatrixSettingsDialog(); closeActionDialog(undefined); browser.setRegionToolMode(undefined) }
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'o') {
     event.preventDefault()
     closeMenus()
@@ -933,14 +953,11 @@ document.addEventListener('keydown', (event) => {
   }
 })
 document.addEventListener('keyup', (event) => {
-  if (event.key !== 'Control' || !ctrlRegionSelectionActive) return
-  ctrlRegionSelectionActive = false
-  if (activeRegionTool === 'select') browser.setRegionToolMode(undefined)
+  if (event.key === 'Control' || event.key === 'Shift') browser.setPlotModifiers(event.ctrlKey, event.shiftKey)
 })
 window.addEventListener('blur', () => {
-  if (!ctrlRegionSelectionActive) return
-  ctrlRegionSelectionActive = false
-  if (activeRegionTool === 'select') browser.setRegionToolMode(undefined)
+  browser.setPlotModifiers(false, false)
+  browser.cancelSpanGesture()
 })
 
 function switchChromosome(chr: string): void {
@@ -975,10 +992,29 @@ themeToggle.addEventListener('click', () => {
   browser.refresh()
 })
 fileInput.addEventListener('change', () => void loadFiles(fileInput.files))
+document.querySelector('#gene-annotations-menu-item')!.addEventListener('click', showGeneAnnotationLibrary)
 fileInput.addEventListener('cancel', () => { pendingOpenGroupId = undefined })
 workspaceFileInput.addEventListener('change', () => void openWorkspace(workspaceFileInput.files?.[0]))
 relinkFileInput.addEventListener('change', () => void relinkTrack(relinkFileInput.files))
 trackContextMenu.addEventListener('click', handleTrackContextAction)
+trackContextMenu.addEventListener('click', async (event) => {
+  const action = (event.target as Element).closest<HTMLElement>('[data-span-action]')?.dataset.spanAction
+  if (!action) return
+  const span = browser.getHighlightedSpan()
+  closeTrackContextMenu()
+  if (!span) return
+  if (action === 'create') { if (await saveBrowserRegion(span)) browser.clearHighlightedSpan() }
+  else if (action === 'copy' || action === 'copy-bed') await copyRegionCoordinates(span, action === 'copy-bed' ? 'bed' : 'locus')
+  else if (action === 'zoom') browser.setRegion(span)
+  else if (action === 'clear') browser.clearHighlightedSpan()
+})
+trackContextMenu.addEventListener('click', (event) => {
+  if (!(event.target as Element).closest('[data-line-action]')) return
+  closeTrackContextMenu()
+  void handleRegionMenuAction(event)
+})
+trackContextMenu.addEventListener('input', handleRegionMenuSettingPreview)
+trackContextMenu.addEventListener('change', handleRegionMenuSettingChange)
 trackContextFlyout.addEventListener('click', handleTrackContextAction)
 trackContextMenu.addEventListener('click', (event) => {
   const trigger = (event.target as Element).closest<HTMLButtonElement>('[data-context-submenu]')
@@ -1051,6 +1087,7 @@ updateDialog.addEventListener('pointerdown', (event) => { if (event.target === u
 updatePrimaryAction.addEventListener('click', () => void handleUpdatePrimaryAction())
 app.addEventListener('contextmenu', (event) => event.preventDefault())
 paneResizer.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return
   event.preventDefault()
   bottomPaneAutoFit = false
   paneResizer.setPointerCapture(event.pointerId)
@@ -1062,13 +1099,14 @@ paneResizer.addEventListener('pointermove', (event) => {
   setBottomPaneHeight(body.bottom - event.clientY)
 })
 const finishPaneResize = (event: PointerEvent) => {
-  if (!paneResizer.hasPointerCapture(event.pointerId)) return
-  paneResizer.releasePointerCapture(event.pointerId)
+  if (!bottomPane.classList.contains('is-resizing')) return
   bottomPane.classList.remove('is-resizing')
+  if (paneResizer.hasPointerCapture(event.pointerId)) paneResizer.releasePointerCapture(event.pointerId)
   scheduleUpperAutoFit()
 }
 paneResizer.addEventListener('pointerup', finishPaneResize)
 paneResizer.addEventListener('pointercancel', finishPaneResize)
+paneResizer.addEventListener('lostpointercapture', finishPaneResize)
 window.addEventListener('resize', () => {
   bottomPaneAutoFit ? fitBottomPaneToContent() : setBottomPaneHeight(bottomPane.getBoundingClientRect().height)
   scheduleUpperAutoFit()
@@ -1113,16 +1151,10 @@ async function loadFiles(files: FileList | null | undefined): Promise<void> {
     if (/\.(bai|csi)$/i.test(file.name)) continue
     try {
       const { source, sourceSpec, kind } = await sourceFromFile(file, selected)
+      if (sourceSpec.annotationReferenceId && sourceSpec.annotationReferenceId !== activeReference.id) throw new Error('The reference changed while reading this annotation. Import it again for the active reference.')
       const trackId = crypto.randomUUID()
       runtimeSources.set(sourceSpec.id, source)
-      store.edit((draft) => {
-        const added = kind === 'interval' ? addIntervalTrack(draft, sourceSpec, { id: trackId })
-          : kind === 'interaction' ? addInteractionTrack(draft, sourceSpec, { id: trackId })
-            : kind === 'matrix' ? addMatrixTrack(draft, sourceSpec, { id: trackId, defaultNormalization: isNativeMatrixSource(source) ? source.matrixMetadata.defaultNormalization : undefined })
-            : kind === 'alignment' ? addAlignmentTrack(draft, sourceSpec, { id: trackId })
-            : addSignalTrack(draft, sourceSpec, { id: trackId, displayGroupId: destinationGroupId, autoPair: savedStrandedAutoLink(), autoStrandColors: savedStrandedAutoColors() })
-        if (destinationGroupId) addTracksToGroup(draft, destinationGroupId, [added.id])
-      })
+      addOpenedTrack(sourceSpec, kind, trackId, destinationGroupId, true, source)
       await browser.attachSource(sourceSpec.id, source)
       showToast(`Opened ${file.name}`)
     } catch (error) {
@@ -1132,8 +1164,13 @@ async function loadFiles(files: FileList | null | undefined): Promise<void> {
   fileInput.value = ''
 }
 
-async function sourceFromFile(file: File, selected: readonly File[]): Promise<OpenedSource> {
+async function sourceFromFile(file: File, selected: readonly File[], chromosomes = activeChromosomes, referenceId = activeReference.id): Promise<OpenedSource> {
   const name = file.name.toLowerCase()
+  const annotation = annotationFormat(name)
+  if (annotation) return {
+    source: await readGeneAnnotation(file.stream(), name.endsWith('.gz'), annotation, file.name, chromosomes),
+    sourceSpec: { ...makeSourceSpec(file, annotation), annotationReferenceId: referenceId }, kind: 'genes',
+  }
   if (matrixFormatForName(name)) throw new Error(`${file.name}: contact matrices are opened directly from disk; use the GeRAFE desktop app's Open tracks command.`)
   if (name.endsWith('.bw') || name.endsWith('.bigwig')) return {
     source: await BigWigSource.fromFile(file),
@@ -1199,6 +1236,31 @@ async function openTrackPicker(): Promise<void> {
   }
 }
 
+function showGeneAnnotationLibrary(): void {
+  closeMenus()
+  openAnnotationLibrary({
+    anchor: document.querySelector<HTMLElement>('#file-menu-button')!,
+    reference: activeReference,
+    add(source, entry, size, downloadedAt) {
+      const sourceSpec: TrackSourceSpec = { id: crypto.randomUUID(), name: `${entry.label} · ${entry.assembly}`, format: entry.format, annotationUrl: entry.url, annotationDownloadedAt: downloadedAt, annotationReferenceId: activeReference.id, files: [{ name: entry.fileName, size, lastModified: Date.parse(downloadedAt), role: 'signal' }] }
+      runtimeSources.set(sourceSpec.id, source)
+      addOpenedTrack(sourceSpec, 'genes', crypto.randomUUID())
+      void browser.attachSource(sourceSpec.id, source)
+    },
+    importLocal() {
+      if (!isDesktopApp()) { fileInput.click(); return }
+      void pickNativeFilePaths({ title: 'Import gene annotations', category: 'GENE ANNOTATIONS', fileMatches: (name) => Boolean(annotationFormat(name)), multiple: true }).then((paths) => { if (paths?.length) return loadNativePaths(paths) }).catch((error) => showToast(String(error), true))
+    },
+    bundled() {
+      store.edit((draft) => {
+        const existing = draft.tracks.find((track) => track.id === 'reference-genes')
+        if (existing) existing.enabled = true
+        else draft.tracks.push(createTrackDocument(activeReference.id, browser.getRegion()).tracks.find((track) => track.kind === 'genes')!)
+      })
+    },
+  })
+}
+
 async function loadNativePaths(paths: readonly string[]): Promise<void> {
   const descriptions = await Promise.allSettled(paths.map(describeNativeFile))
   const selected = descriptions.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])
@@ -1219,6 +1281,7 @@ async function loadNativePaths(paths: readonly string[]): Promise<void> {
     try {
       const { source, sourceSpec, kind } = await sourceFromNativeFile(file, selected,
         (progress) => { if (reservedSource) browser.setOpeningProgress(trackId, progress) })
+      if (sourceSpec.annotationReferenceId && sourceSpec.annotationReferenceId !== activeReference.id) throw new Error('The reference changed while reading this annotation. Import it again for the active reference.')
       if (reservedSource) {
         if (!store.current.tracks.some((track) => track.id === trackId)) continue
         const completedSpec = { ...sourceSpec, id: reservedSource.id }
@@ -1254,7 +1317,8 @@ async function loadNativePaths(paths: readonly string[]): Promise<void> {
 
 function addOpenedTrack(sourceSpec: TrackSourceSpec, kind: OpenedSource['kind'], trackId: string, destinationGroupId?: string, autoPair = true, source?: TrackSource): void {
   store.edit((draft) => {
-    const added = kind === 'interval' ? addIntervalTrack(draft, sourceSpec, { id: trackId })
+    const added = kind === 'genes' ? addGeneTrack(draft, sourceSpec, { id: trackId })
+      : kind === 'interval' ? addIntervalTrack(draft, sourceSpec, { id: trackId })
       : kind === 'interaction' ? addInteractionTrack(draft, sourceSpec, { id: trackId })
         : kind === 'matrix' ? addMatrixTrack(draft, sourceSpec, { id: trackId, defaultNormalization: source && isNativeMatrixSource(source) ? source.matrixMetadata.defaultNormalization : undefined })
         : kind === 'alignment' ? addAlignmentTrack(draft, sourceSpec, { id: trackId })
@@ -1265,6 +1329,8 @@ function addOpenedTrack(sourceSpec: TrackSourceSpec, kind: OpenedSource['kind'],
 
 function nativeOpeningType(name: string): { kind: OpenedSource['kind']; format: SourceFormat } | undefined {
   const lower = name.toLowerCase()
+  const annotation = annotationFormat(lower)
+  if (annotation) return { kind: 'genes', format: annotation }
   const matrix = matrixFormatForName(lower)
   if (matrix) return { kind: 'matrix', format: matrix }
   if (/\.(?:bw|bigwig)$/.test(lower)) return { kind: 'signal', format: 'bigwig' }
@@ -1332,14 +1398,25 @@ async function prepareCloudFile(file: LocalFileDescriptor, onProgress: (progress
   } finally { active = false; window.clearInterval(pollTimer) }
 }
 
-async function sourceFromNativeFile(file: LocalFileDescriptor, selected: readonly LocalFileDescriptor[], onProgress: (progress: TrackOpeningProgress) => void): Promise<OpenedSource> {
+async function sourceFromNativeFile(file: LocalFileDescriptor, selected: readonly LocalFileDescriptor[], onProgress: (progress: TrackOpeningProgress) => void, chromosomes = activeChromosomes, referenceId = activeReference.id): Promise<OpenedSource> {
   await prepareCloudFile(file, onProgress)
-  return sourceFromPreparedNativeFile(file, selected, onProgress)
+  return sourceFromPreparedNativeFile(file, selected, onProgress, chromosomes, referenceId)
 }
 
-async function sourceFromPreparedNativeFile(file: LocalFileDescriptor, selected: readonly LocalFileDescriptor[], onProgress: (progress: TrackOpeningProgress) => void): Promise<OpenedSource> {
+async function sourceFromPreparedNativeFile(file: LocalFileDescriptor, selected: readonly LocalFileDescriptor[], onProgress: (progress: TrackOpeningProgress) => void, chromosomes = activeChromosomes, referenceId = activeReference.id): Promise<OpenedSource> {
   const name = file.name.toLowerCase()
   const handle = new NativeFileHandle(file.path)
+  const annotation = annotationFormat(name)
+  if (annotation) {
+    let offset = 0
+    const stream = new ReadableStream<Uint8Array<ArrayBuffer>>({ async pull(controller) {
+      if (offset >= file.size) { controller.close(); return }
+      const bytes = await handle.read(Math.min(256 * 1024, file.size - offset), offset)
+      if (!bytes.length) { controller.error(new Error('Annotation file ended unexpectedly.')); return }
+      offset += bytes.length; controller.enqueue(bytes)
+    } })
+    return { source: await readGeneAnnotation(stream, name.endsWith('.gz'), annotation, file.name, chromosomes, (lines) => onProgress({ message: `Reading annotation: ${lines.toLocaleString()} records…` })), sourceSpec: { ...makeSourceSpec(file, annotation), annotationReferenceId: referenceId }, kind: 'genes' }
+  }
   const matrixFormat = matrixFormatForName(name)
   if (matrixFormat) return {
     source: await NativeMatrixSource.open(file.name, file.path, matrixFormat),
@@ -1433,7 +1510,7 @@ function restorePersistedSources(): void {
   const generation = ++sourceRestoreGeneration
   const usedSourceIds = new Set(store.current.tracks.flatMap((track) => track.sourceIds))
   const savedSources = store.current.sources.filter((sourceSpec) =>
-    usedSourceIds.has(sourceSpec.id) && sourceSpec.files.length > 0 && sourceSpec.files.every((file) => Boolean(file.path)))
+    usedSourceIds.has(sourceSpec.id) && (sourceSpec.annotationUrl || (isDesktopApp() && sourceSpec.files.length > 0 && sourceSpec.files.every((file) => Boolean(file.path)))))
   startIndependentSourceRestores(savedSources, async (sourceSpec) => {
     if (generation !== sourceRestoreGeneration) return
     const trackIds = store.current.tracks.filter((track) => track.sourceIds.includes(sourceSpec.id)).map((track) => track.id)
@@ -1442,6 +1519,15 @@ function restorePersistedSources(): void {
       for (const id of trackIds) browser.setOpeningProgress(id, progress)
     }
     try {
+      if (sourceSpec.annotationReferenceId && sourceSpec.annotationReferenceId !== store.current.referenceId) throw new Error('This annotation belongs to another reference assembly.')
+      if (sourceSpec.annotationUrl) {
+        const source = await restoreCachedAnnotation(sourceSpec.annotationUrl, sourceSpec.format as AnnotationFormat, sourceSpec.name, activeChromosomes)
+        if (generation !== sourceRestoreGeneration) return
+        runtimeSources.set(sourceSpec.id, source)
+        browser.syncDocument(store.current, runtimeSources)
+        await browser.attachSource(sourceSpec.id, source)
+        return
+      }
       const descriptors = await Promise.all(sourceSpec.files.map(async (saved) => {
         const current = await describeNativeFile(saved.path!)
         if (current.size !== saved.size) throw new Error(`${saved.name} has changed size since it was opened.`)
@@ -1484,8 +1570,14 @@ async function restoreFigureRuntimeSources(figure: FigureDocument): Promise<Read
   const restored = new Map<string, TrackSource>()
   const usedIds = figureRequiredSourceIds(figure)
   await Promise.all(figure.sourceDocument.sources.filter((source) => usedIds.has(source.id)).map(async (sourceSpec) => {
+    if (sourceSpec.annotationReferenceId && sourceSpec.annotationReferenceId !== figure.referenceId) return
     const active = runtimeSources.get(sourceSpec.id)
     if (active) { restored.set(sourceSpec.id, active); return }
+    if (sourceSpec.annotationUrl) {
+      try { restored.set(sourceSpec.id, await restoreCachedAnnotation(sourceSpec.annotationUrl, sourceSpec.format as AnnotationFormat, sourceSpec.name, references.get(figure.referenceId)?.chromosomes ?? new Map())) }
+      catch (error) { console.warn(`Could not reopen figure annotation ${sourceSpec.name}`, error) }
+      return
+    }
     if (!isDesktopApp() || !sourceSpec.files.length || sourceSpec.files.some((file) => !file.path)) return
     try {
       const descriptors = await Promise.all(sourceSpec.files.map(async (file) => {
@@ -1503,7 +1595,7 @@ async function restoreFigureRuntimeSources(figure: FigureDocument): Promise<Read
           ? new NativeMatrixDerivedSource(sourceSpec.name,
             await NativeMatrixSource.open(primary.name, primary.path, matrixFormatForName(primary.name)!),
             sourceSpec.matrixDerivedMode!, sourceSpec.matrixDerivedNormalization!, sourceSpec.matrixDerivedResolution)
-          : (await sourceFromNativeFile(primary, descriptors, () => {})).source
+          : (await sourceFromNativeFile(primary, descriptors, () => {}, references.get(figure.referenceId)?.chromosomes ?? activeChromosomes, figure.referenceId)).source
       restored.set(sourceSpec.id, source)
     } catch (error) {
       console.warn(`Could not reopen figure source ${sourceSpec.name}`, error)
@@ -1522,7 +1614,7 @@ async function relinkFigureSource(figure: FigureDocument, sourceId: string): Pro
     const selected = await Promise.all(paths.map(describeNativeFile))
     const primary = selected.find((file) => !/\.(bai|csi)$/i.test(file.name))
     if (!primary) throw new Error('Select a data file and its index if required.')
-    const opened = await sourceFromNativeFile(primary, selected, () => {})
+    const opened = await sourceFromNativeFile(primary, selected, () => {}, references.get(figure.referenceId)?.chromosomes ?? activeChromosomes, figure.referenceId)
     if (opened.sourceSpec.format !== expected.format) throw new Error(`Expected a ${expected.format} source, but selected ${opened.sourceSpec.format}.`)
     return opened
   }
@@ -1533,7 +1625,7 @@ async function relinkFigureSource(figure: FigureDocument, sourceId: string): Pro
       const selected = [...(input.files ?? [])]
       const primary = selected.find((file) => !/\.(bai|csi)$/i.test(file.name))
       if (!primary) { resolve(undefined); return }
-      void sourceFromFile(primary, selected).then((opened) => {
+      void sourceFromFile(primary, selected, references.get(figure.referenceId)?.chromosomes ?? activeChromosomes, figure.referenceId).then((opened) => {
         if (opened.sourceSpec.format !== expected.format) throw new Error(`Expected a ${expected.format} source, but selected ${opened.sourceSpec.format}.`)
         resolve(opened)
       }).catch(reject)
@@ -1631,7 +1723,7 @@ function renderRegionMenu(): void {
   const outlines = store.current.matrixOutlines
   regionMenuCount.textContent = regions.length + outlines.length ? String(regions.length + outlines.length) : ''
   regionMenuButton.title = activeRegionTool === 'select' ? 'Drag across the ruler or track area to save a region'
-    : activeRegionTool === 'divider' ? 'Click in the ruler or track area to place the comparison divider'
+    : activeRegionTool === 'divider' ? 'Click in the ruler or track area to place the scale divider'
       : activeRegionTool === 'matrix-outline' ? 'Drag across matrix bins to add an outline'
       : 'Select, save, and revisit genomic regions'
   const dividers = store.current.comparisonDividers
@@ -1643,14 +1735,14 @@ function renderRegionMenu(): void {
   comparisonDividerItems.innerHTML = dividers.length ? dividers.map((divider, index) => {
     const id = encodeURIComponent(divider.id)
     return `<div class="saved-region-row">
-      <button class="saved-region-go" type="button" data-divider-go="${id}" title="Center comparison divider">
+      <button class="saved-region-go" type="button" data-divider-go="${id}" title="Center scale divider">
         <i style="background:${escapeHtml(divider.color)}"></i><span><strong>Divider ${index + 1}</strong><small>${escapeHtml(`${divider.chr}:${(divider.position + 1).toLocaleString()}`)}</small></span>
       </button>
       <button class="saved-region-icon" type="button" data-divider-style="${id}" title="Use ${divider.lineStyle === 'dashed' ? 'solid' : 'dashed'} line" aria-label="Toggle divider ${index + 1} line style">${divider.lineStyle === 'dashed' ? '┄' : '—'}</button>
       <button class="saved-region-icon" type="button" data-divider-color="${id}" title="Set divider color" aria-label="Set divider ${index + 1} color" style="color:${escapeHtml(divider.color)}">●</button>
       <button class="saved-region-icon remove" type="button" data-divider-remove="${id}" title="Remove divider" aria-label="Remove divider ${index + 1}">×</button>
     </div>`
-  }).join('') : '<p class="saved-region-empty">No comparison dividers yet.</p>'
+  }).join('') : '<p class="saved-region-empty">No scale dividers yet.</p>'
   const matrixTracks = store.current.tracks.filter((track) => track.kind === 'matrix')
   matrixOutlineItems.innerHTML = outlines.length ? outlines.map((outline) => {
     const id = encodeURIComponent(outline.id)
@@ -1684,6 +1776,7 @@ function renderRegionMenu(): void {
       <button class="saved-region-icon" type="button" data-region-color="${id}" title="Set highlight color" aria-label="Set ${escapeHtml(saved.label)} color" style="color:${escapeHtml(saved.color)}">●</button>
       <button class="saved-region-icon ${optionsOpen ? 'is-active' : ''}" type="button" data-region-options="${id}" title="Highlight appearance" aria-label="Set ${escapeHtml(saved.label)} appearance">⚙</button>
       <button class="saved-region-icon" type="button" data-region-rename="${id}" title="Rename region" aria-label="Rename ${escapeHtml(saved.label)}">✎</button>
+      <button class="saved-region-icon" type="button" data-region-copy="${id}" title="Copy coordinates (1-based inclusive)" aria-label="Copy ${escapeHtml(saved.label)} coordinates">⧉</button>
       <button class="saved-region-icon remove" type="button" data-region-remove="${id}" title="Remove region" aria-label="Remove ${escapeHtml(saved.label)}">×</button>
     </div>${optionsOpen ? `<div class="saved-region-options">
       <label><span>Boundary</span><select data-region-boundary="${id}"><option value="dashed" ${saved.boundaryStyle === 'dashed' ? 'selected' : ''}>Dashed</option><option value="solid" ${saved.boundaryStyle === 'solid' ? 'selected' : ''}>Solid</option><option value="none" ${saved.boundaryStyle === 'none' ? 'selected' : ''}>None</option></select></label>
@@ -1704,13 +1797,14 @@ async function handleRegionMenuAction(event: Event): Promise<void> {
     closeMenus()
     if (action === 'select') browser.setRegionToolMode('select')
     else if (action === 'save-current') await saveBrowserRegion(browser.getRegion())
+    else if (action === 'copy-current' || action === 'copy-current-bed') await copyRegionCoordinates(browser.getRegion(), action === 'copy-current-bed' ? 'bed' : 'locus')
     else if (action === 'place-divider') browser.setRegionToolMode('divider')
     else if (action === 'draw-matrix-outline') { pendingMatrixOutlineTargetIds = undefined; browser.setRegionToolMode('matrix-outline') }
     else if (action === 'clear-dividers') store.edit((draft) => { draft.comparisonDividers = [] })
     else if (action === 'clear-matrix-outlines') store.edit((draft) => { draft.matrixOutlines = [] })
     return
   }
-  const button = target.closest<HTMLButtonElement>('[data-region-go], [data-region-toggle], [data-region-color], [data-region-options], [data-region-rename], [data-region-remove], [data-divider-go], [data-divider-style], [data-divider-color], [data-divider-remove], [data-outline-toggle], [data-outline-color], [data-outline-options], [data-outline-rename], [data-outline-remove]')
+  const button = target.closest<HTMLButtonElement>('[data-region-go], [data-region-toggle], [data-region-color], [data-region-options], [data-region-rename], [data-region-remove], [data-region-copy], [data-region-copy-bed], [data-divider-go], [data-divider-style], [data-divider-color], [data-divider-remove], [data-outline-toggle], [data-outline-color], [data-outline-options], [data-outline-rename], [data-outline-remove]')
   if (!button) return
   const encodedOutlineId = button.dataset.outlineToggle ?? button.dataset.outlineColor ?? button.dataset.outlineOptions ?? button.dataset.outlineRename ?? button.dataset.outlineRemove
   if (encodedOutlineId) {
@@ -1751,12 +1845,12 @@ async function handleRegionMenuAction(event: Event): Promise<void> {
     } else if (button.dataset.dividerRemove !== undefined) {
       store.edit((draft) => { draft.comparisonDividers = draft.comparisonDividers.filter((item) => item.id !== dividerId) })
     } else {
-      const color = await requestColor('Set comparison divider color', divider.color)
+      const color = await requestColor('Set scale divider color', divider.color)
       if (color) store.edit((draft) => { const item = draft.comparisonDividers.find((candidate) => candidate.id === dividerId); if (item) item.color = color })
     }
     return
   }
-  const encodedId = button.dataset.regionGo ?? button.dataset.regionToggle ?? button.dataset.regionColor ?? button.dataset.regionOptions ?? button.dataset.regionRename ?? button.dataset.regionRemove
+  const encodedId = button.dataset.regionGo ?? button.dataset.regionToggle ?? button.dataset.regionColor ?? button.dataset.regionOptions ?? button.dataset.regionRename ?? button.dataset.regionRemove ?? button.dataset.regionCopy ?? button.dataset.regionCopyBed
   if (!encodedId) return
   const id = decodeURIComponent(encodedId)
   const saved = store.current.savedRegions.find((region) => region.id === id)
@@ -1767,6 +1861,10 @@ async function handleRegionMenuAction(event: Event): Promise<void> {
     return
   }
   closeMenus()
+  if (button.dataset.regionCopy !== undefined || button.dataset.regionCopyBed !== undefined) {
+    await copyRegionCoordinates(saved.region, button.dataset.regionCopyBed !== undefined ? 'bed' : 'locus')
+    return
+  }
   if (button.dataset.regionGo !== undefined) {
     browser.setRegion(saved.region)
     return
@@ -1823,6 +1921,10 @@ function handleRegionMenuSettingChange(event: Event): void {
     else if (element.dataset.regionFill !== undefined && element instanceof HTMLInputElement) region.fill = element.checked
     else if (element.dataset.regionOpacity !== undefined) region.shadeOpacity = Math.max(0.01, Math.min(0.5, Number(element.value) / 100))
   })
+  if (element.dataset.regionFill !== undefined) {
+    const opacity = trackContextMenu.querySelector<HTMLInputElement>('[data-region-opacity]')
+    if (opacity) opacity.disabled = !(element as HTMLInputElement).checked
+  }
 }
 
 function matrixTrackCompatibleWithOutline(track: TrackSpec, outline: Pick<MatrixOutline, 'axis1' | 'axis2'>): boolean {
@@ -1866,11 +1968,11 @@ async function saveMatrixOutline(selection: { sourceTrackId: string; axis1: Regi
   showToast(`Added ${label} to ${targetTrackIds.length} matrix track${targetTrackIds.length === 1 ? '' : 's'}`)
 }
 
-async function saveBrowserRegion(region: Region): Promise<void> {
+async function saveBrowserRegion(region: Region): Promise<boolean> {
   const sequence = store.current.savedRegions.length + 1
   const label = (await requestText({ title: 'Save genomic region', label: 'Region name', initial: `Region ${sequence}`, submitLabel: 'Save region',
     message: formatLocus(region), validate: requiredName }))?.trim()
-  if (!label) return
+  if (!label) return false
   const color = TRACK_COLORS[store.current.savedRegions.length % TRACK_COLORS.length]
   store.edit((draft) => {
     draft.savedRegions.push({
@@ -1879,6 +1981,7 @@ async function saveBrowserRegion(region: Region): Promise<void> {
     })
   })
   showToast(`Saved ${label} · ${formatLocus(region)}`)
+  return true
 }
 
 async function switchReference(id: string): Promise<void> {
@@ -1902,7 +2005,7 @@ async function switchReference(id: string): Promise<void> {
   } else browser.setRegion(defaultRegion(reference))
   if (previousReferenceId !== reference.id && (store.current.savedRegions.length || store.current.comparisonDividers.length || store.current.matrixOutlines.length)) {
     store.edit((draft) => { draft.savedRegions = []; draft.comparisonDividers = []; draft.matrixOutlines = [] })
-    showToast('Cleared saved regions and comparison dividers for the new reference.')
+    showToast('Cleared saved regions and scale dividers for the new reference.')
   }
   await activateGeneTrack(reference)
   localStorage.setItem(WORKSPACE_KEY, JSON.stringify(store.current))
@@ -1944,6 +2047,54 @@ function clearTrackSelection(): void {
   browser.setSelectedTracks(selectedTrackIds)
 }
 
+function annotationSourcesForSearch(): GeneSource[] {
+  const imported = store.current.tracks.filter((track) => track.kind === 'genes' && track.enabled && track.sourceIds.length && store.current.sources.find((source) => source.id === track.sourceIds[0])?.annotationReferenceId === activeReference.id).map((track) => runtimeSources.get(track.sourceIds[0])).filter((source): source is GeneSource => source instanceof GeneSource)
+  return activeGeneSource ? [...imported, activeGeneSource] : imported
+}
+function findAnnotationGene(name: string) { return annotationSourcesForSearch().map((source) => source.find(name)).find(Boolean) }
+
+async function copyRegionCoordinates(region: Region, format: 'locus' | 'bed' = 'locus'): Promise<void> {
+  const value = copyableRegion(region, format)
+  try { await navigator.clipboard.writeText(value); showToast(`Copied ${format === 'bed' ? 'BED coordinates (0-based, end exclusive)' : value}`) }
+  catch { await requestText({ title: 'Copy coordinates', label: format === 'bed' ? 'BED: 0-based, end exclusive' : 'Coordinates: 1-based inclusive', initial: value, submitLabel: 'Done', message: 'Automatic copying is unavailable. Select and copy the coordinates below.' }) }
+}
+
+function openHighlightedSpanContextMenu(region: Region, x: number, y: number): void {
+  closeMenus()
+  closeTrackContextMenu()
+  delete trackContextMenu.dataset.trackId
+  delete trackContextMenu.dataset.groupId
+  const action = (id: string, label: string) => `<button class="context-item" type="button" data-span-action="${id}">${label}</button>`
+  trackContextMenu.innerHTML = `<div class="context-heading"><strong>Selected span</strong><span>${escapeHtml(formatLocus(region))}</span></div>
+    ${action('create', 'Create region…')}${action('copy', 'Copy coordinates · 1-based inclusive')}${action('copy-bed', 'Copy as BED · 0-based, end exclusive')}
+    <span class="context-separator"></span>${action('zoom', 'Zoom to selected span')}${action('clear', 'Clear selection')}`
+  positionContextMenu(x, y)
+}
+
+function openRegionLineContextMenu(kind: 'divider' | 'region', id: string, x: number, y: number): void {
+  const divider = kind === 'divider' ? store.current.comparisonDividers.find((item) => item.id === id) : undefined
+  const saved = kind === 'region' ? store.current.savedRegions.find((item) => item.id === id) : undefined
+  if (!divider && !saved) return
+  closeMenus()
+  closeTrackContextMenu()
+  delete trackContextMenu.dataset.trackId
+  delete trackContextMenu.dataset.groupId
+  const encoded = encodeURIComponent(id)
+  const action = (name: string, label: string) => `<button class="context-item" type="button" data-line-action data-${kind}-${name}="${encoded}">${label}</button>`
+  trackContextMenu.innerHTML = divider
+    ? `<div class="context-heading"><strong>Scale divider</strong><span>${escapeHtml(`${divider.chr}:${(divider.position + 1).toLocaleString()}`)}</span></div>
+       ${action('go', 'Center on divider')}${action('style', `Use ${divider.lineStyle === 'dashed' ? 'solid' : 'dashed'} line`)}
+       ${action('color', 'Set color…')}${action('remove', 'Remove scale divider')}`
+    : `<div class="context-heading"><strong>${escapeHtml(saved!.label)}</strong><span>${escapeHtml(formatLocus(saved!.region))}</span></div>
+       ${action('go', 'Go to region')}${action('copy', 'Copy coordinates · 1-based inclusive')}${action('copy-bed', 'Copy as BED · 0-based, end exclusive')}${action('rename', 'Rename…')}${action('color', 'Set color…')}
+       <div class="saved-region-options">
+         <label><span>Boundary</span><select aria-label="Region boundary style" data-region-boundary="${encoded}"><option value="dashed" ${saved!.boundaryStyle === 'dashed' ? 'selected' : ''}>Dashed</option><option value="solid" ${saved!.boundaryStyle === 'solid' ? 'selected' : ''}>Solid</option><option value="none" ${saved!.boundaryStyle === 'none' ? 'selected' : ''}>None</option></select></label>
+         <label class="saved-region-fill"><input type="checkbox" data-region-fill="${encoded}" ${saved!.fill ? 'checked' : ''}/><span>Fill</span></label>
+         <label class="saved-region-shade"><span>Shade</span><input aria-label="Region shade opacity" type="range" min="1" max="50" step="1" value="${Math.round(saved!.shadeOpacity * 100)}" data-region-opacity="${encoded}" ${saved!.fill ? '' : 'disabled'}/><output>${Math.round(saved!.shadeOpacity * 100)}%</output></label>
+       </div>${action('toggle', 'Hide highlight')}${action('remove', 'Remove region')}`
+  positionContextMenu(x, y)
+}
+
 function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const selected = store.current.tracks.filter((track) => selectedTrackIds.has(track.id))
   const target = store.current.tracks.find((track) => track.id === trackId)
@@ -1953,7 +2104,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
   const signalsOnly = selected.every((track) => track.kind === 'signal' || track.kind === 'stranded')
   const ordinarySignalsOnly = selected.every((track) => track.kind === 'signal' && !track.signalStrand)
   const strandedOnly = selected.every((track) => track.kind === 'stranded')
-  const dataOnly = selected.every((track) => track.kind !== 'genes')
+  const dataOnly = selected.every((track) => track.kind !== 'genes' || track.sourceIds.length > 0)
   const allResizable = selected.every((track) => track.kind !== 'genes' || track.pane !== 'bottom')
   const allFittable = selected.every((track) => track.pane === 'main')
   const intervalTracks = sameKind && target.kind === 'interval' ? selected : []
@@ -2105,6 +2256,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
       + action('bam-supplementary', 'Include supplementary alignments', alignmentTracks.every((track) => track.bamIncludeSupplementary) ? 'current' : ''))
   }
   if (geneTracks.length) {
+    typeItems += action('gene-library', 'Gene annotations…')
     const mode = sameValue(geneTracks.map((track) => track.geneDisplayMode ?? 'collapsed')) ? geneTracks[0].geneDisplayMode ?? 'collapsed' : 'mixed'
     typeItems += submenu('genes-display', 'Display mode', capitalize(mode),
       action('genes-collapsed', 'Collapsed', geneTracks.every((track) => track.geneDisplayMode === 'collapsed' || !track.geneDisplayMode) ? 'current' : '')
@@ -2130,6 +2282,7 @@ function openTrackContextMenu(trackId: string, x: number, y: number): void {
       ? runtimeSources.has(target.sourceIds[0]) ? 'Replace BAM and index…' : 'Relink BAM and index…'
       : runtimeSources.has(target.sourceIds[0]) ? 'Replace source file…' : 'Relink source file…')
   }
+  if (one && target.kind === 'genes' && target.sourceIds.length) sourceItems = action('relink', runtimeSources.has(target.sourceIds[0]) ? 'Replace annotation file…' : 'Relink annotation file…')
   const sections = [
     one ? action('rename', 'Rename…') : '',
     samePane ? action(target.pane === 'main' ? 'move-pane-bottom' : 'move-pane-main', target.pane === 'main' ? 'Move to lower area' : 'Move to upper area') : '',
@@ -2448,13 +2601,14 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
   if (!targetId) return
   const ids = [...selectedTrackIds]
   const signalIds = store.current.tracks.filter((track) => (track.kind === 'signal' || track.kind === 'stranded') && ids.includes(track.id)).map((track) => track.id)
-  const dataIds = store.current.tracks.filter((track) => track.kind !== 'genes' && ids.includes(track.id)).map((track) => track.id)
+  const dataIds = store.current.tracks.filter((track) => (track.kind !== 'genes' || track.sourceIds.length > 0) && ids.includes(track.id)).map((track) => track.id)
   const intervalIds = store.current.tracks.filter((track) => track.kind === 'interval' && ids.includes(track.id)).map((track) => track.id)
   const interactionIds = store.current.tracks.filter((track) => track.kind === 'interaction' && ids.includes(track.id)).map((track) => track.id)
   const matrixIds = store.current.tracks.filter((track) => track.kind === 'matrix' && ids.includes(track.id)).map((track) => track.id)
   const alignmentIds = store.current.tracks.filter((track) => track.kind === 'alignment' && ids.includes(track.id)).map((track) => track.id)
   const geneIds = store.current.tracks.filter((track) => track.kind === 'genes' && ids.includes(track.id)).map((track) => track.id)
   closeTrackContextMenu()
+  if (command === 'gene-library') showGeneAnnotationLibrary()
   if (command === 'rename') {
     const track = store.current.tracks.find((item) => item.id === targetId)
     const label = (await requestText({ title: 'Rename track', label: 'Track name', initial: track?.label ?? '', submitLabel: 'Rename', validate: requiredName }))?.trim()
@@ -2652,7 +2806,7 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
           track.interactionFilterMode = genes.length ? 'genes' : 'all'
         }
       })
-      const unresolved = activeGeneSource ? genes.filter((gene) => !activeGeneSource?.find(gene)) : genes
+      const unresolved = annotationSourcesForSearch().length ? genes.filter((gene) => !findAnnotationGene(gene)) : genes
       if (unresolved.length) showToast(`${unresolved.join(', ')} ${unresolved.length === 1 ? 'was' : 'were'} not found in the active annotation; matching BEDPE names instead.`)
     }
   }
@@ -2756,7 +2910,7 @@ async function applyMatrixContextAction(command: string | undefined, matrixIds: 
       resolutions: source.matrixMetadata.resolutions,
       selectedResolution: track.matrixResolution,
       enforceBinLimit: source.format !== 'hic',
-      findGene: activeReference.id === 'hg38' && activeGeneSource ? (name) => activeGeneSource?.find(name) : undefined,
+      findGene: (name) => findAnnotationGene(name),
     })
     const entered = await requestText({ title: 'Vertical matrix locus', label: 'Gene, chromosome, or chr:start-end',
       initial: formatLocus(initial), placeholder: 'MYC, chr8, or chr8:50,000,000-52,000,000', submitLabel: 'Show rectangular map',
@@ -2827,7 +2981,7 @@ async function applyMatrixContextAction(command: string | undefined, matrixIds: 
           delete track.matrixOverlayFocusRegion
         }
       })
-      const unresolved = activeGeneSource ? genes.filter((gene) => !activeGeneSource?.find(gene)) : genes
+      const unresolved = annotationSourcesForSearch().length ? genes.filter((gene) => !findAnnotationGene(gene)) : genes
       if (unresolved.length) showToast(`${unresolved.join(', ')} ${unresolved.length === 1 ? 'was' : 'were'} not found in the active annotation; matching BEDPE names instead.`)
     }
     return
@@ -3682,7 +3836,7 @@ async function relinkTrackNative(id: string): Promise<void> {
 
 async function applyRelink(id: string, opened: OpenedSource, channel?: 'plus' | 'minus'): Promise<void> {
     const track = store.current.tracks.find((item) => item.id === id)
-    if (!track || track.kind === 'genes') throw new Error('This track cannot be relinked.')
+    if (!track || (track.kind === 'genes' && !track.sourceIds.length)) throw new Error('This track cannot be relinked.')
     const expectedKind = track.kind === 'stranded' ? 'signal' : track.kind
     if (expectedKind !== opened.kind) throw new Error(`Choose another ${track.kind === 'interval' ? 'BED interval' : track.kind === 'interaction' ? 'BEDPE interaction' : track.kind === 'matrix' ? 'contact matrix' : track.kind === 'alignment' ? 'BAM and matching index' : 'signal'} file for this track.`)
     const { source, sourceSpec } = opened
@@ -3918,7 +4072,7 @@ async function showIgvSessionPreview(session: IgvSession, sessionPath: string): 
   referenceSelect.addEventListener('change', () => { selectedReferenceId = referenceSelect.value || undefined; render() })
   importButton.addEventListener('click', async () => {
     if (!preview.referenceId || checking) return
-    const loadedTracks = store.current.tracks.filter((track) => track.kind !== 'genes')
+    const loadedTracks = store.current.tracks.filter((track) => track.kind !== 'genes' || track.sourceIds.length > 0)
     modal.close()
     if (loadedTracks.length && !await confirmAction({
       title: 'Replace current workspace?',
@@ -3966,7 +4120,7 @@ async function openWorkspaceContents(contents: string, name: string, path?: stri
     store.replace(next)
     await switchReference(next.referenceId)
     browser.setRegion(next.region)
-    if (isDesktopApp()) restorePersistedSources()
+    restorePersistedSources()
     if (path) rememberWorkspacePath(path)
     else clearWorkspacePath()
     showToast(`Opened ${name}${isDesktopApp() ? '' : '; relink local data files to draw them.'}`)

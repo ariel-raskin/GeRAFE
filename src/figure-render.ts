@@ -1,6 +1,6 @@
 import type { FigureCellStyle, FigureDocument, FigureRow } from './figure-document.ts'
 import { filterInteractionFeatures, filterInteractionsForGenes, interactionFeatureColor, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryMaximumDistance, matrixSignedColor, matrixValueIntensity, matrixWarmPaletteColor, selectInteractionFeatures } from './browser.ts'
-import type { GeneSource } from './reference.ts'
+import { GeneSource } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
 import type { AlignmentCoverageFeature, AlignmentFeature, InteractionFeature, IntervalFeature, MatrixFeature, Region, SignalFeature, TrackFeature, TrackQueryOptions, TrackSource } from './types.ts'
 
@@ -62,7 +62,10 @@ export class FigureRenderSession {
         const spec = document.sourceDocument.tracks.find((track) => track.id === trackId)
         if (!spec) { issues.push(`${column.title || 'Column'} / ${row.label}: track is missing from the figure project.`); continue }
         if (spec.kind === 'genes') {
-          if (!genes) issues.push(`${column.title || 'Column'} / ${row.label}: gene annotation is unavailable.`)
+          const referenceId = document.sourceDocument.sources.find((source) => source.id === spec.sourceIds[0])?.annotationReferenceId
+          if (referenceId && referenceId !== document.referenceId) { issues.push(`${column.title || 'Column'} / ${row.label}: annotation belongs to another reference assembly.`); continue }
+          const source = spec.sourceIds[0] ? sources.get(spec.sourceIds[0]) : genes
+          if (!(source instanceof GeneSource)) issues.push(`${column.title || 'Column'} / ${row.label}: gene annotation is unavailable.${spec.sourceIds.length ? ' Reopen or relink its source.' : ''}`)
           continue
         }
         for (const [sourceIndex, sourceId] of (spec.kind === 'stranded' ? spec.sourceIds : spec.sourceIds.slice(0, 1)).entries()) {
@@ -103,7 +106,7 @@ export class FigureRenderSession {
         }
       }
     })))
-    return { svg: buildSvg(document, layout, cells, genes, issues), widthMm: layout.widthMm, heightMm: layout.heightMm, issues }
+    return { svg: buildSvg(document, layout, cells, genes, issues, sources), widthMm: layout.widthMm, heightMm: layout.heightMm, issues }
   }
 }
 
@@ -139,7 +142,7 @@ function px(region: Region, bounds: FigureCellBounds, coordinate: number): numbe
   return bounds.x + ((coordinate - region.start) / (region.end - region.start)) * bounds.width
 }
 
-function buildSvg(document: FigureDocument, layout: FigureLayout, cells: Map<string, QueryCell>, genes: GeneSource | undefined, issues: string[]): string {
+function buildSvg(document: FigureDocument, layout: FigureLayout, cells: Map<string, QueryCell>, genes: GeneSource | undefined, issues: string[], sources: ReadonlyMap<string, TrackSource>): string {
   const page = document.page
   const fontMm = page.fontSizePt * 25.4 / 72
   const queryCounts = document.columns.flatMap((column) => document.rows.filter((row) => row.included).map((row) => {
@@ -215,7 +218,12 @@ function buildSvg(document: FigureDocument, layout: FigureLayout, cells: Map<str
           parts.push('</g>')
         }
         else if (spec.kind === 'alignment') parts.push(drawAlignments(features, renderSpec, column.region, bounds))
-        else if (spec.kind === 'genes' && genes) parts.push(drawGenes(genes, renderSpec, column.region, bounds, fontMm))
+        else if (spec.kind === 'genes') {
+          const referenceId = document.sourceDocument.sources.find((source) => source.id === spec.sourceIds[0])?.annotationReferenceId
+          if (referenceId && referenceId !== document.referenceId) continue
+          const source = spec.sourceIds[0] ? sources.get(spec.sourceIds[0]) : genes
+          if (source instanceof GeneSource) parts.push(drawGenes(source, renderSpec, column.region, bounds, fontMm))
+        }
       }
       parts.push(drawAnnotations(document, column.region, bounds, specs.find((spec) => spec.kind === 'matrix')))
       parts.push('</g>')

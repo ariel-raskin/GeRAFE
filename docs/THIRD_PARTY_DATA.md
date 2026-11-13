@@ -61,3 +61,13 @@ When replacing a bundled reference asset, record the exact upstream URL,
 assembly/accession, track or annotation release, and retrieval date in this file
 and in the generated asset where practical. Review the upstream conditions before
 committing a new data source.
+
+## Optional downloaded gene annotations
+
+The application’s Gene annotations catalog links to public files without bundling them in the repository:
+
+- [UCSC database downloads](https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/): `ncbiRefSeq` (NCBI placements) and `refGene` (UCSC placements), for hg38, hg19, mm39, and mm10. genePredExt table dumps may include the UCSC bin field. Data are snapshots as downloaded. [UCSC gene-set documentation](https://genome.ucsc.edu/FAQ/FAQgenes.html).
+- [GENCODE human release 49](https://www.gencodegenes.org/human/release_49.html): Basic GTF, GRCh38.p14.
+- [Ensembl FTP downloads](https://www.ensembl.org/info/data/ftp/index.html): human GRCh38 release 115 GTF, explicitly pinned by release number.
+
+GeRAFE preserves each download URL and acquisition timestamp in the workspace’s source provenance. The downloaded annotation is kept locally; the catalog does not query providers with a user’s locus or local track contents. GTF/GFF3 input conventions follow the provider documentation and the [Sequence Ontology GFF3 specification](https://github.com/The-Sequence-Ontology/Specifications/blob/master/gff3.md).

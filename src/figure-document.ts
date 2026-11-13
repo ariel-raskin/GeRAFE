@@ -69,6 +69,9 @@ export interface FigureDocument {
 
 export function createFigureDocument(source: TrackDocument): FigureDocument {
   const snapshot = cloneDocument(source)
+  // Smooth browser navigation uses fractional bases. Figure columns use whole,
+  // half-open base intervals matching the coordinates displayed in the viewer.
+  snapshot.region = { chr: snapshot.region.chr, start: Math.floor(snapshot.region.start), end: Math.ceil(snapshot.region.end) }
   const rows: FigureRow[] = []
   const representedStacks = new Set<string>()
   for (const track of snapshot.tracks) {

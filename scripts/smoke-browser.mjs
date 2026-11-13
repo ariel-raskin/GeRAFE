@@ -53,8 +53,26 @@ if (process.env.GERAFE_IGV_SESSION_SMOKE_PATH) {
   console.log(`Real IGV session parsed: ${realIgv.genome}, ${realIgv.resources} resources`)
 }
 await page.waitForTimeout(500)
+// Most real handoffs occur after navigation, which leaves fractional base bounds.
+const feNavigationBox = await page.locator('#genome-header').boundingBox()
+await page.mouse.move(feNavigationBox.x + feNavigationBox.width * 0.5, feNavigationBox.y + 50)
+await page.mouse.down()
+await page.mouse.move(feNavigationBox.x + feNavigationBox.width * 0.5 + 37, feNavigationBox.y + 50, { steps: 5 })
+await page.mouse.up()
+await page.keyboard.down('Control')
+await page.mouse.wheel(0, -123)
+await page.keyboard.up('Control')
+await page.waitForFunction(() => {
+  const region = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').region
+  return region && (!Number.isInteger(region.start) || !Number.isInteger(region.end))
+})
+const feBrowserRegion = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document')).region)
 await page.locator('#create-figure').click()
 await page.locator('.fe-page svg').waitFor()
+const feInitialRegion = await page.locator('.fe-page svg metadata').evaluate((element) => JSON.parse(element.textContent).columns[0].region)
+if (feInitialRegion.start !== Math.floor(feBrowserRegion.start) || feInitialRegion.end !== Math.ceil(feBrowserRegion.end)) throw new Error('Figure handoff did not retain the complete navigated base interval.')
+const feBrowserRegionAfter = await page.evaluate(() => JSON.parse(localStorage.getItem('gerafe-track-document')).region)
+if (JSON.stringify(feBrowserRegion) !== JSON.stringify(feBrowserRegionAfter)) throw new Error('Creating a figure changed the browser viewport.')
 const figureInitialRows = await page.locator('.fe-sidebar-section').filter({ hasText: 'Track rows' }).locator('.fe-layer-line').count()
 await page.locator('.figure-editor [data-action="add-column"]').click()
 await page.locator('.fe-page svg [data-fe-column]').first().waitFor()
@@ -200,6 +218,21 @@ const openingTrackCanvas = await page.evaluate(async () => {
   genome.syncDocument(documentState, new Map())
   genome.render()
   const afterRemoval = [...ctx.getImageData(220, 24, 1, 1).data]
+  addSignalTrack(documentState, { id: 'scale-source', name: 'Scale fixture', format: 'bigwig', files: [] }, { id: 'scale-track', autoPair: false })
+  documentState.comparisonDividers = [3000, 6000].map((position) => ({ id: String(position), chr: 'chr1', position, color: '#1188cc', lineStyle: 'dashed' }))
+  genome.syncDocument(documentState, new Map([['scale-source', {
+    name: 'Scale fixture', chromosomes: new Map([['chr1', 100000]]),
+    getFeatures: async () => [{ start: 0, end: 3000, score: 2 }, { start: 3000, end: 6000, score: 8 }, { start: 6000, end: 10000, score: 20 }],
+  }]]))
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  const scaleLabels = []
+  for (const canvas of [header, main]) {
+    const context = canvas.getContext('2d')
+    const original = context.fillText
+    context.fillText = function (text, ...args) { scaleLabels.push(String(text)); original.call(this, text, ...args) }
+  }
+  genome.render()
+  if (scaleLabels.some((text) => /scale sections|independent scale|^(?:L|R|\d+) [−+]?\d/.test(text)) || scaleLabels.filter((text) => /^\d+(?:\.\d+)?$/.test(text)).length < 3) throw new Error(`Scale section labels have extra text or lost values: ${JSON.stringify(scaleLabels)}`)
   genome.destroy()
   host.remove()
   return { filled, empty, indeterminateStart, indeterminateEnd, afterRemoval, order }
@@ -327,15 +360,15 @@ const regionMenuText = await (async () => {
   await page.keyboard.press('Escape')
   return text
 })()
-const regionMenuOrder = regionMenuText.indexOf('Comparison dividers') < regionMenuText.indexOf('Add region')
+const regionMenuOrder = regionMenuText.includes('Scale dividers') && regionMenuText.indexOf('Scale dividers') < regionMenuText.indexOf('Add region')
   && regionMenuText.indexOf('Add region') < regionMenuText.indexOf('Saved regions')
 const headerBoxForRegion = await page.locator('#genome-header').boundingBox()
 if (!headerBoxForRegion) throw new Error('Genome header was not visible for region selection.')
 const regionHeaderBefore = await page.locator('#genome-header').evaluate((element) => element.toDataURL())
 const regionCanvasBefore = await canvas.evaluate((element) => element.toDataURL())
-await page.keyboard.down('Control')
-const ctrlRegionSelectionActivated = await canvas.evaluate((element) => element.classList.contains('is-region-selecting'))
 await page.mouse.move(headerBoxForRegion.x + headerBoxForRegion.width * 0.42, headerBoxForRegion.y + 48)
+await page.keyboard.down('Control')
+const ctrlRegionSelectionActivated = await page.locator('#genome-header').evaluate((element) => element.classList.contains('is-region-selecting'))
 await page.mouse.down()
 await page.mouse.move(headerBoxForRegion.x + headerBoxForRegion.width * 0.56, headerBoxForRegion.y + 48, { steps: 6 })
 await page.mouse.up()
@@ -376,9 +409,9 @@ const regionSnapStatusText = await page.locator('#region-snap-status').textConte
 await page.locator('[data-region-action="place-divider"]').click()
 await page.mouse.click(box.x + box.width * 0.64, box.y + Math.min(95, box.height - 5))
 await page.waitForFunction(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').comparisonDividers?.length === 1)
-await page.locator('#region-menu-button').click()
-await page.locator('[data-region-action="place-divider"]').click()
+await page.keyboard.down('Control')
 await page.mouse.click(box.x + box.width * 0.76, box.y + Math.min(95, box.height - 5))
+await page.keyboard.up('Control')
 await page.waitForFunction(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').comparisonDividers?.length === 2)
 await page.locator('#region-menu-button').click()
 await page.locator('[data-divider-style]').first().click()
@@ -421,6 +454,15 @@ let regionBoundaryHoverCursor = ''
 if (regionBoundaryDragStart) {
   await page.mouse.move(regionBoundaryDragStart.x, regionBoundaryDragStart.y)
   regionBoundaryHoverCursor = await canvas.evaluate((element) => getComputedStyle(element).cursor)
+  await page.mouse.click(regionBoundaryDragStart.x, regionBoundaryDragStart.y, { button: 'right' })
+  const regionMenu = page.locator('#track-context-menu')
+  if (!await regionMenu.locator('[data-region-rename]').isVisible() || await regionMenu.locator('[data-divider-remove]').count()) throw new Error('Region boundary did not open its specific controls.')
+  await regionMenu.locator('[data-region-fill]').uncheck()
+  if (!await regionMenu.locator('[data-region-opacity]').isDisabled()) throw new Error('Region opacity stayed enabled without fill.')
+  await regionMenu.locator('[data-region-fill]').check()
+  await regionMenu.locator('[data-region-boundary]').selectOption('dashed')
+  await page.keyboard.press('Escape')
+  await page.mouse.move(regionBoundaryDragStart.x, regionBoundaryDragStart.y)
   await page.mouse.down()
   await page.mouse.move(regionBoundaryDragStart.x + 35, regionBoundaryDragStart.y, { steps: 5 })
   await page.mouse.up()
@@ -438,11 +480,33 @@ let dividerHoverCursor = ''
 if (dividerDragStart) {
   await page.mouse.move(dividerDragStart.x, dividerDragStart.y)
   dividerHoverCursor = await page.locator('#genome-header').evaluate((element) => getComputedStyle(element).cursor)
+  await page.mouse.click(dividerDragStart.x, dividerDragStart.y, { button: 'right' })
+  const dividerMenu = page.locator('#track-context-menu')
+  if (!await dividerMenu.locator('[data-divider-remove]').isVisible() || await dividerMenu.locator('[data-region-rename]').count()) throw new Error('Scale divider did not open its specific controls.')
+  await dividerMenu.locator('[data-divider-style]').click()
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').comparisonDividers?.[0]?.lineStyle === 'dashed')
+  await page.mouse.move(dividerDragStart.x, dividerDragStart.y)
   await page.mouse.down()
   await page.mouse.move(dividerDragStart.x + 45, dividerDragStart.y, { steps: 5 })
   await page.mouse.up()
 }
 const dividerMoved = dividerDragStart ? await page.waitForFunction(({ id, position }) => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').comparisonDividers?.find((divider) => divider.id === id)?.position !== position, { id: dividerDragStart.id, position: dividerDragStart.position }).then(() => true).catch(() => false) : false
+// Remove the second divider through its line menu, then undo to preserve the fixture.
+const secondDividerPoint = await page.evaluate(() => {
+  const state = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
+  const box = document.querySelector('#genome-canvas').getBoundingClientRect()
+  const divider = state.comparisonDividers[1]
+  return { id: divider.id, x: box.left + 176 + (divider.position - state.region.start) / (state.region.end - state.region.start) * (box.width - 176), y: box.top + 40 }
+})
+await page.mouse.click(secondDividerPoint.x, secondDividerPoint.y, { button: 'right' })
+await page.locator('#track-context-menu [data-divider-remove]').click()
+await page.waitForFunction((id) => {
+  const dividers = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').comparisonDividers
+  return dividers.length === 1 && !dividers.some((divider) => divider.id === id)
+}, secondDividerPoint.id)
+await page.keyboard.press('Control+z')
+await page.waitForFunction(() => JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}').comparisonDividers?.length === 2)
+console.log('Scale divider shortcut, line menus, removal/undo, and region controls passed.')
 await page.mouse.move(box.x + box.width * 0.72, box.y + 95)
 await page.mouse.down()
 await page.mouse.move(box.x + box.width * 0.48, box.y + 95, { steps: 12 })
@@ -840,6 +904,7 @@ const matrixGroupRightClickHighlightChanged = matrixGroupBeforeRightClick !== ma
 const matrixGroupMenuText = await page.locator('#track-context-menu').textContent()
 const matrixOutlineShortcutVisible = matrixGroupMenuText?.includes('Draw matrix outline')
 await page.locator('[data-context-action="matrix-outline-draw"]').click()
+await page.mouse.move(matrixCanvasBox.x + 300, matrixCanvasBox.y + 60)
 const matrixOutlineDrawMode = await page.locator('#genome-canvas').evaluate((element) => element.classList.contains('is-matrix-outline-selecting') && getComputedStyle(element).cursor === 'crosshair')
 await page.keyboard.press('Escape')
 await page.locator('#region-menu-button').click()
@@ -1246,7 +1311,7 @@ if ([fitGapBeforeResize, fitGapAfterResize, fitGapAfterAutoResize].some((metrics
 if (fitLockedOverflow.range < 100 || Math.abs(fitLockedOverflow.scrollTop - fitLockedOverflow.range) > 2 || Math.abs(fitLockedOverflow.gap) > 2 || Math.abs(fitLockedOverflow.paneAlignment) > 2) process.exitCode = 1
 if (themeBefore === themeAfterToggle || themeAfterToggle !== themeAfterReload) process.exitCode = 1
 if (!emptyWorkspaceVisible || !emptyWorkspaceText?.includes('Open or drop genomics files') || !emptyWorkspaceText.includes('GeRAFE') || Math.abs(emptyWorkspaceBrand.centerOffset) > 1 || emptyWorkspaceBrand.headingOffset > 30 || emptyWorkspaceBrand.headingFontSize < 18 || emptyWorkspaceBrand.imageGap > 16 || emptyWorkspaceBrand.imageHeight < 600 || emptyWorkspaceBrand.wordmarkHeight < 60 || cornerBrandCount !== 0 || footerHeight > 24 || emptyWorkspaceHiddenAfterLoad === false) process.exitCode = 1
-if (!blankCanvasFillsPane || !canvasWidthsAligned || !regionMenuOrder || !regionMenuText?.includes('Add region') || !regionMenuText.includes('Add comparison divider') || !regionMenuText.includes('Add current view as region') || !savedRegionMenuText?.includes('Smoke region') || !ctrlRegionSelectionActivated || !regionHighlightChanged || !regionHeaderUnchanged || !actionHistoryEmptyBeforeTyping || !actionAutocompleteDisabled || !actionHistoryMatches.includes('Smoke region') || !regionAppearanceControlsVisible || !regionShadePreviewChanged || !regionSnapStatusText?.startsWith('On') || regionColorIcon !== 'rgb(17, 136, 204)' || dividerColorIcon !== 'rgb(34, 170, 68)' || !visualRegionColorPicker || !visualDividerColorPicker || !regionRoundTrip || !regionBoundaryHoverCursor.includes('ew-resize') || !regionBoundaryMoved || !dividerHoverCursor.includes('ew-resize') || !dividerMoved || regionStateAfterReload.snap !== true || regionStateAfterReload.saved?.highlighted !== true || regionStateAfterReload.saved?.color !== '#1188cc' || regionStateAfterReload.saved?.boundaryStyle !== 'solid' || regionStateAfterReload.saved?.fill !== true || regionStateAfterReload.saved?.shadeOpacity !== 0.25 || regionStateAfterReload.dividers?.length !== 2 || regionStateAfterReload.dividers[0]?.color !== '#22aa44' || regionStateAfterReload.dividers[0]?.lineStyle !== 'solid' || !regionStateAfterReload.dividers.every((divider) => Number.isFinite(divider.position) && /^#[0-9a-f]{6}$/i.test(divider.color))) process.exitCode = 1
+if (!blankCanvasFillsPane || !canvasWidthsAligned || !regionMenuOrder || !regionMenuText?.includes('Add region') || !regionMenuText.includes('Add scale divider') || !regionMenuText.includes('Add current view as region') || !savedRegionMenuText?.includes('Smoke region') || !ctrlRegionSelectionActivated || !regionHighlightChanged || !regionHeaderUnchanged || !actionHistoryEmptyBeforeTyping || !actionAutocompleteDisabled || !actionHistoryMatches.includes('Smoke region') || !regionAppearanceControlsVisible || !regionShadePreviewChanged || !regionSnapStatusText?.startsWith('On') || regionColorIcon !== 'rgb(17, 136, 204)' || dividerColorIcon !== 'rgb(34, 170, 68)' || !visualRegionColorPicker || !visualDividerColorPicker || !regionRoundTrip || !regionBoundaryHoverCursor.includes('ew-resize') || !regionBoundaryMoved || !dividerHoverCursor.includes('ew-resize') || !dividerMoved || regionStateAfterReload.snap !== true || regionStateAfterReload.saved?.highlighted !== true || regionStateAfterReload.saved?.color !== '#1188cc' || regionStateAfterReload.saved?.boundaryStyle !== 'solid' || regionStateAfterReload.saved?.fill !== true || regionStateAfterReload.saved?.shadeOpacity !== 0.25 || regionStateAfterReload.dividers?.length !== 2 || regionStateAfterReload.dividers[0]?.color !== '#22aa44' || regionStateAfterReload.dividers[0]?.lineStyle !== 'solid' || !regionStateAfterReload.dividers.every((divider) => Number.isFinite(divider.position) && /^#[0-9a-f]{6}$/i.test(divider.color))) process.exitCode = 1
 if (!(matrixInspectorSizing.expandedWidth > matrixInspectorSizing.compactWidth) || !(matrixInspectorSizing.expandedHeight > matrixInspectorSizing.compactHeight)) process.exitCode = 1
 if (!fileMenuVisible || !fileMenuText?.includes('Open tracks')) process.exitCode = 1
 if (fileMenuActiveElement !== 'file-menu-button' || settingsMenuActiveElement !== 'settings-menu-button' || helpMenuActiveElement !== 'help-menu-button') process.exitCode = 1

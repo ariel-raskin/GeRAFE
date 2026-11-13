@@ -10,6 +10,16 @@ function browserDocument() {
 }
 
 describe('figure document', () => {
+  it('hands off fractional browser viewports as complete bases without changing GeR', () => {
+    const source = browserDocument()
+    source.region = { chr: 'chr1', start: 100.25, end: 200.75 }
+    const figure = createFigureDocument(source)
+    const store = new FigureDocumentStore(figure)
+    expect(store.current.columns[0].region).toEqual({ chr: 'chr1', start: 100, end: 201 })
+    expect(store.current.sourceDocument.region).toEqual(store.current.columns[0].region)
+    expect(source.region).toEqual({ chr: 'chr1', start: 100.25, end: 200.75 })
+  })
+
   it('hands off every loaded track without mutating GeR', () => {
     const source = browserDocument()
     const figure = createFigureDocument(source)

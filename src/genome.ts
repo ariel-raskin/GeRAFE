@@ -68,6 +68,12 @@ export function formatLocus(region: Region): string {
   return `${region.chr}:${Math.floor(region.start + 1).toLocaleString()}-${Math.ceil(region.end).toLocaleString()}`
 }
 
+export function copyableRegion(region: Region, format: 'locus' | 'bed' = 'locus'): string {
+  const start = Math.max(0, Math.floor(region.start))
+  const end = Math.max(start + 1, Math.ceil(region.end))
+  return format === 'bed' ? `${region.chr}\t${start}\t${end}` : `${region.chr}:${start + 1}-${end}`
+}
+
 export function formatBases(value: number): string {
   const absolute = Math.abs(value)
   if (absolute >= 1_000_000_000) return `${trim(value / 1_000_000_000)} Gb`

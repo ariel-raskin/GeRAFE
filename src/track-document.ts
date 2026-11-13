@@ -1,11 +1,11 @@
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 32 as const
+export const TRACK_DOCUMENT_VERSION = 33 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
 
-export type SourceFormat = 'bigwig' | 'bedgraph' | 'tdf' | 'bam' | 'bed' | 'bedpe' | 'hic' | 'cool' | 'mcool' | 'matrix-comparison' | 'matrix-derived'
+export type SourceFormat = 'bigwig' | 'bedgraph' | 'tdf' | 'bam' | 'bed' | 'bedpe' | 'hic' | 'cool' | 'mcool' | 'matrix-comparison' | 'matrix-derived' | 'gtf' | 'gff3' | 'genepred'
 export type ScaleMode = 'auto-visible' | 'auto-percentile' | 'fixed'
 export type SignalTransform = 'linear' | 'log1p' | 'symlog'
 export type SignalRenderStyle = 'fill' | 'line' | 'bar'
@@ -40,6 +40,9 @@ export interface TrackSourceSpec {
   name: string
   format: SourceFormat
   files: SourceFileSpec[]
+  annotationUrl?: string
+  annotationDownloadedAt?: string
+  annotationReferenceId?: string
   /** Derived signal computed from a native matrix; no data pixels are stored in the workspace. */
   matrixDerivedMode?: 'insulation' | 'compartment'
   matrixDerivedNormalization?: string
@@ -471,6 +474,13 @@ export function intervalLabelHeightScore(label: string): number {
   return Math.max(5, Math.min(20, Math.ceil(estimatedLines * 15 / 3.6)))
 }
 
+export function addGeneTrack(draft: TrackDocument, source: TrackSourceSpec, options: { id?: string; label?: string } = {}): TrackSpec {
+  const track: TrackSpec = { id: options.id ?? crypto.randomUUID(), kind: 'genes', sourceIds: [source.id], label: options.label ?? source.name, color: '#3478c9', enabled: true, height: 28, pane: 'bottom', geneDisplayMode: 'collapsed', geneTranscriptMode: 'canonical' }
+  draft.sources.push(source)
+  draft.tracks.push(track)
+  return track
+}
+
 export function addIntervalTrack(
   draft: TrackDocument,
   source: TrackSourceSpec,
@@ -871,7 +881,7 @@ export function computeSegmentScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({
@@ -1247,7 +1257,10 @@ function isRegion(value: unknown): value is Region {
 
 function isSourceSpec(value: unknown): value is TrackSourceSpec {
   return isRecord(value) && typeof value.id === 'string' && typeof value.name === 'string'
-    && ['bigwig', 'bedgraph', 'tdf', 'bam', 'bed', 'bedpe', 'hic', 'cool', 'mcool', 'matrix-comparison', 'matrix-derived'].includes(value.format) && Array.isArray(value.files) && value.files.every(isSourceFileSpec)
+    && ['bigwig', 'bedgraph', 'tdf', 'bam', 'bed', 'bedpe', 'hic', 'cool', 'mcool', 'matrix-comparison', 'matrix-derived', 'gtf', 'gff3', 'genepred'].includes(value.format) && Array.isArray(value.files) && value.files.every(isSourceFileSpec)
+    && (value.annotationUrl === undefined || (['gtf', 'gff3', 'genepred'].includes(value.format) && typeof value.annotationUrl === 'string' && /^https:\/\//.test(value.annotationUrl)))
+    && (value.annotationDownloadedAt === undefined || typeof value.annotationDownloadedAt === 'string')
+    && (value.annotationReferenceId === undefined || typeof value.annotationReferenceId === 'string')
     && (value.format !== 'matrix-comparison' || (value.files.length === 2 && value.files[0].role === 'signal' && value.files[1].role === 'comparison'))
     && (value.format !== 'matrix-derived' || (value.files.length === 1 && value.files[0].role === 'signal'
       && ['insulation', 'compartment'].includes(value.matrixDerivedMode) && typeof value.matrixDerivedNormalization === 'string'
