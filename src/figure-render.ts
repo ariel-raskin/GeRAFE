@@ -1,6 +1,8 @@
+import { stackAppearance, svgStackPattern } from './signal-stack-style.ts'
+import { figureAssignedTrackIds, figureStackGroup } from './figure-document.ts'
 import { pageFields, rowFields, cellFields, resolveAppearance, type RowAppearance } from './figure-appearance.ts'
 import type { FigureCellStyle, FigureDocument, FigureRow } from './figure-document.ts'
-import { filterInteractionFeatures, filterInteractionsForGenes, interactionFeatureColor, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryMaximumDistance, matrixSignedColor, matrixValueIntensity, matrixWarmPaletteColor, selectInteractionFeatures } from './browser.ts'
+import { signalTransform, signalStackDisplayEntries, filterInteractionFeatures, filterInteractionsForGenes, interactionFeatureColor, interactionTouchesRegion, matrixAutomaticMagnitude, matrixAutomaticMaximum, matrixBlueBlackPaletteColor, matrixGradientColor, matrixOverlayAnchorPair, matrixPaletteIntensity, matrixQueryMaximumDistance, matrixSignedColor, matrixValueIntensity, matrixWarmPaletteColor, selectInteractionFeatures } from './browser.ts'
 import { GeneSource } from './reference.ts'
 import type { TrackSpec } from './track-document.ts'
 import type { AlignmentCoverageFeature, AlignmentFeature, InteractionFeature, IntervalFeature, MatrixFeature, Region, SignalFeature, TrackFeature, TrackQueryOptions, TrackSource } from './types.ts'
@@ -21,7 +23,7 @@ export function layoutFigure(document: FigureDocument): FigureLayout {
   const gutters = document.columns.map((column, index) => Math.max(0, ...document.rows.filter((row) => row.included).map((row) => {
     const style = column.styles?.[row.id]
     const cell = resolveAppearance(cellFields, style?.appearance)
-    const matrix = (column.assignments[row.id] ?? []).some((id) => document.sourceDocument.tracks.find((track) => track.id === id)?.kind === 'matrix')
+    const matrix = (figureAssignedTrackIds(document, column, row.id)).some((id) => document.sourceDocument.tracks.find((track) => track.id === id)?.kind === 'matrix')
     return matrix && style?.showScale !== false && (cell.matrixLegend === 'right' || cell.matrixLegend === 'last-column' && index === document.columns.length - 1) ? cell.legendGapMm + cell.legendWidthMm + 1.5 : 0
   })))
   const available = page.widthMm - page.marginMm * 2 - page.labelWidthMm - page.columnGapMm * (document.columns.length - 1) - gutters.reduce((a, b) => a + b, 0)
@@ -69,7 +71,7 @@ export class FigureRenderSession {
     await Promise.all(document.columns.flatMap((column) => document.rows.filter((row) => row.included).map(async (row) => {
       const features = new Map<string, TrackFeature[]>()
       cells.set(cellKey(column.id, row.id), features)
-      for (const trackId of column.assignments[row.id] ?? []) {
+      for (const trackId of figureAssignedTrackIds(document, column, row.id)) {
         const sourceSpec = document.sourceDocument.tracks.find((track) => track.id === trackId)
         const spec = sourceSpec && figureTrackSpec(sourceSpec, column.styles?.[row.id])
         if (!spec) { issues.push(`${column.title || 'Column'} / ${row.label}: track is missing from the figure project.`); continue }
@@ -182,7 +184,7 @@ function buildSvg(document: FigureDocument, layout: FigureLayout, cells: Map<str
   const visibleRows = document.rows.filter((row) => row.included)
   const sharedMatrixMaxima = new Map<string, number>()
   const sharedMatrixObservedMaxima = new Map<string, number>()
-  for (const row of visibleRows) for (const column of document.columns) for (const trackId of column.assignments[row.id] ?? []) {
+  for (const row of visibleRows) for (const column of document.columns) for (const trackId of figureAssignedTrackIds(document, column, row.id)) {
     const spec = document.sourceDocument.tracks.find((track) => track.id === trackId)
     if (spec?.kind !== 'matrix') continue
     const matrix = (cells.get(cellKey(column.id, row.id))?.get(spec.id) ?? []).find((feature): feature is MatrixFeature => 'featureType' in feature && feature.featureType === 'matrix')
@@ -222,12 +224,12 @@ function buildSvg(document: FigureDocument, layout: FigureLayout, cells: Map<str
       parts.push(`<g data-fe-row="${escapeXml(row.id)}" data-fe-column="${escapeXml(column.id)}">`)
       parts.push(rect(frame.x, frame.y, frame.width, frame.height, rowAppearance.background))
       parts.push(`<g clip-path="url(#${clipId})">`)
-      const trackIds = column.assignments[row.id] ?? []
+      const trackIds = figureAssignedTrackIds(document, column, row.id)
       const cell: QueryCell = cells.get(cellKey(column.id, row.id)) ?? new Map()
       const specs = trackIds.map((id) => document.sourceDocument.tracks.find((track) => track.id === id)).filter((item): item is TrackSpec => Boolean(item))
       const style = column.styles?.[row.id]
       if (!specs.length) parts.push(text(bounds.x + 2, bounds.y + bounds.height / 2, 'No track assigned', fontMm * 0.8, '#888888'))
-      else if (specs.length > 1 && specs.every((spec) => spec.kind === 'signal')) parts.push(drawSignalStack(specs, cell, column.region, bounds, document, cells, row, style))
+      else if (specs.length > 1 && specs.every((spec) => spec.kind === 'signal') || figureStackGroup(document, column, row.id)) parts.push(drawSignalStack(specs, cell, column.region, bounds, document, cells, row, column.id, style))
       else for (const spec of specs) {
         const renderSpec = figureTrackSpec(spec, style)
         const features = cell.get(spec.id) ?? []
@@ -328,12 +330,12 @@ function sectionDomain(document: FigureDocument, row: FigureRow, allCells: Map<s
   for (const column of document.columns) {
     const candidate = allCells.get(cellKey(column.id, row.id))
     if (!candidate || style?.scaleMode === 'independent' && candidate !== cell) continue
-    for (const id of column.assignments[row.id] ?? []) {
+    for (const id of figureAssignedTrackIds(document, column, row.id)) {
       const assigned = document.sourceDocument.tracks.find((track) => track.id === id)
       if (!assigned || (stranded ? assigned.kind !== 'stranded' : assigned.kind !== 'signal')) continue
       const pooledSection = figureScaleSections(document, row, column.region)[sectionIndex] ?? column.region
       const overlap = (feature: SignalFeature) => Number.isFinite(feature.score) && feature.start < pooledSection.end && feature.end > pooledSection.start
-      values.push(...((candidate.get(id) ?? []) as SignalFeature[]).filter(overlap))
+      values.push(...((candidate.get(id) ?? []) as SignalFeature[]).filter(overlap).map((feature) => !stranded && assigned.allowNegativeValues === false ? { ...feature, score: Math.max(0, feature.score) } : feature))
       if (stranded) negatives.push(...((candidate.get(assigned.sourceIds[1]) ?? []) as SignalFeature[]).filter(overlap))
     }
   }
@@ -376,15 +378,56 @@ function drawSignal(features: SignalFeature[], spec: TrackSpec, region: Region, 
     const values = features.filter((feature) => feature.end > section.start && feature.start < section.end && Number.isFinite(feature.score))
     const color = style?.color ?? spec.color
     const lineStyle = (style?.renderStyle === 'source' || !style?.renderStyle ? spec.signalRenderStyle : style.renderStyle) === 'line'
-    const marks = lineStyle ? `<path d="${values.map((feature, index) => `${index ? 'L' : 'M'}${n(px(region, bounds, (Math.max(section.start, feature.start) + Math.min(section.end, feature.end)) / 2))} ${n(y(feature.score))}`).join(' ')}" fill="none" stroke="${color}" stroke-width="${n(c.lineWidthPt * 25.4 / 72)}"/>`
+    const marks = lineStyle ? `<path d="${values.map((feature, index) => `${index ? 'L' : 'M'}${n(px(region, bounds, (Math.max(section.start, feature.start) + Math.min(section.end, feature.end)) / 2))} ${n(y(feature.score))}`).join(' ')}" fill="none" stroke="${escapeXml(color)}" stroke-width="${n(c.lineWidthPt * 25.4 / 72)}"/>`
       : values.map((feature) => { const x1 = Math.max(left, px(region, bounds, feature.start)), x2 = Math.min(right, px(region, bounds, feature.end)), point = y(feature.score); return rect(x1, Math.min(zero, point), x2 - x1, Math.abs(zero - point), color) }).join('')
     return `<g data-scale-start="${section.start}" data-scale-min="${n(domain.min)}" data-scale-max="${n(domain.max)}"><g opacity="${n((style?.opacity ?? spec.signalOpacity ?? 100) / 100)}">${marks}</g>${line(left, zero, right, zero, a.baselineColor, a.baselineWidthPt * 25.4 / 72)}${style?.showScale === false ? '' : drawScaleLabels(b, domain, a)}</g>`
   }).join('')
 }
 
-function drawSignalStack(specs: TrackSpec[], cell: QueryCell, region: Region, bounds: FigureCellBounds, document: FigureDocument, allCells: Map<string, QueryCell>, row: FigureRow, style?: FigureCellStyle): string {
-  // Render each member against the same pooled domain; only the first draws axis labels.
-  return specs.map((spec, index) => drawSignal((cell.get(spec.id) ?? []) as SignalFeature[], spec, region, bounds, document, allCells, row, { ...style, color: spec.color, showScale: index === 0 && style?.showScale !== false, renderStyle: 'line' }, cell)).join('')
+function drawSignalStack(specs: TrackSpec[], cell: QueryCell, region: Region, bounds: FigureCellBounds, document: FigureDocument, allCells: Map<string, QueryCell>, row: FigureRow, columnId: string, style?: FigureCellStyle): string {
+  const column = document.columns.find((column) => column.id === columnId)!
+  const group = figureStackGroup(document, column, row.id) ?? { id: '', label: '', signalStackRenderStyle: 'line' as const, signalStackDifferentiation: 'colors' as const }
+  const members = document.sourceDocument.tracks.filter((track) => track.displayGroupId === group.id)
+  const a = stackAppearance(group, members.length ? members : specs)
+  const entries = signalStackDisplayEntries(group, members.length ? members : specs, specs)
+  const presentation = resolveAppearance(rowFields, row.appearance)
+  const renderStyle = !style?.renderStyle || style.renderStyle === 'source' ? a.renderStyle : style.renderStyle === 'line' ? 'line' : 'fill'
+  const fills: string[] = [], outlines: string[] = [], labels: string[] = []
+  for (const section of figureScaleSections(document, row, region)) {
+    const domain = sectionDomain(document, row, allCells, cell, section, { ...specs[0], allowNegativeValues: true }, style, false, region)
+    const left = px(region, bounds, section.start), right = px(region, bounds, section.end)
+    const inset = Math.min(0.8, bounds.height * 0.1)
+    const transform = document.sourceDocument.scales.find((binding) => binding.id === specs[0].scaleBindingId)?.transform ?? 'linear'
+    const transformedMin = signalTransform(domain.min, transform), transformedMax = signalTransform(domain.max, transform)
+    const y = (value: number) => bounds.y + inset + (bounds.height - inset * 2) * (1 - (signalTransform(Math.max(domain.min, Math.min(domain.max, value)), transform) - transformedMin) / Math.max(1e-12, transformedMax - transformedMin))
+    const zero = y(0)
+    for (const spec of specs) {
+      const entry = entries.find((entry) => entry.id === spec.id)!
+      const values = ((cell.get(spec.id) ?? []) as SignalFeature[]).map((feature) => spec.allowNegativeValues === false ? { ...feature, score: Math.max(0, feature.score) } : feature).filter((feature) => Number.isFinite(feature.score) && feature.start < section.end && feature.end > section.start).sort((a, b) => a.start - b.start)
+      const runs: SignalFeature[][] = []
+      for (const value of values) {
+        const run = runs.at(-1)
+        if (!run || value.start > run.at(-1)!.end) runs.push([value]); else run.push(value)
+      }
+      const color = style?.color ?? entry.color
+      const id = `stack-${safeId(columnId)}-${safeId(row.id)}-${safeId(spec.id)}-${section.start}`
+      if (renderStyle !== 'line' && entry.pattern !== 'none') fills.push(`<defs>${svgStackPattern(id, entry.pattern, color, a.patternSpacing * 25.4 / 96, 25.4 / 96)}</defs>`)
+      for (const run of runs) {
+        const x1 = Math.max(left, px(region, bounds, run[0].start)), x2 = Math.min(right, px(region, bounds, run.at(-1)!.end))
+        const steps = run.map((feature, index) => `${index ? `L${n(Math.max(left, px(region, bounds, feature.start)))} ${n(y(feature.score))}` : ''} L${n(Math.min(right, px(region, bounds, feature.end)))} ${n(y(feature.score))}`).join(' ')
+        const curve = `M${n(x1)} ${n(y(run[0].score))}${steps}`
+        const area = `${curve} L${n(x2)} ${n(zero)} L${n(x1)} ${n(zero)} Z`
+        if (renderStyle !== 'line') {
+          fills.push(`<path data-stack-fill="${escapeXml(spec.id)}" d="${area}" fill="${escapeXml(color)}" opacity="${n((style?.opacity ?? a.opacity) / 100)}"/>`)
+          if (entry.pattern !== 'none') fills.push(`<path data-stack-pattern="${entry.pattern}" d="${area}" fill="url(#${id})" opacity="${n(a.patternOpacity / 100)}"/>`)
+        }
+        if (renderStyle !== 'fill') outlines.push(`<path data-stack-outline="${escapeXml(spec.id)}" d="${curve}" fill="none" stroke="${escapeXml(color)}" stroke-width="${n(style?.appearance?.lineWidthPt ? style.appearance.lineWidthPt * 25.4 / 72 : a.lineWidth * 25.4 / 96)}" stroke-dasharray="${entry.dash.map((value) => n(value * 25.4 / 96)).join(' ')}"/>`)
+      }
+    }
+    labels.push(line(left, zero, right, zero, presentation.baselineColor, presentation.baselineWidthPt * 25.4 / 72))
+    if (style?.showScale !== false) labels.push(drawScaleLabels({ ...bounds, x: left, width: right - left }, domain, presentation))
+  }
+  return fills.join('') + outlines.join('') + labels.join('')
 }
 
 function drawStranded(spec: TrackSpec, plus: SignalFeature[], cell: QueryCell, region: Region, bounds: FigureCellBounds, style: FigureCellStyle | undefined, document: FigureDocument, row: FigureRow, allCells: Map<string, QueryCell>): string {
@@ -400,7 +443,7 @@ function drawStranded(spec: TrackSpec, plus: SignalFeature[], cell: QueryCell, r
       const available = Math.max(0.1, bounds.height * (positive ? fraction : 1 - fraction) - 0.3)
       const values = features.filter((feature) => feature.end > section.start && feature.start < section.end && Number.isFinite(feature.score))
       const point = (score: number) => midpoint + (positive ? -1 : 1) * Math.min(1, Math.abs(score) / maximum) * available
-      if (style?.renderStyle === 'line') return `<path d="${values.map((feature, index) => `${index ? 'L' : 'M'}${n(px(region, bounds, (Math.max(section.start, feature.start) + Math.min(section.end, feature.end)) / 2))} ${n(point(feature.score))}`).join(' ')}" fill="none" stroke="${color}" stroke-width="${n(c.lineWidthPt * 25.4 / 72)}"/>`
+      if (style?.renderStyle === 'line') return `<path d="${values.map((feature, index) => `${index ? 'L' : 'M'}${n(px(region, bounds, (Math.max(section.start, feature.start) + Math.min(section.end, feature.end)) / 2))} ${n(point(feature.score))}`).join(' ')}" fill="none" stroke="${escapeXml(color)}" stroke-width="${n(c.lineWidthPt * 25.4 / 72)}"/>`
       return values.map((feature) => { const x1 = Math.max(left, px(region, bounds, feature.start)), x2 = Math.min(right, px(region, bounds, feature.end)), y = point(feature.score); return rect(x1, Math.min(midpoint, y), x2 - x1, Math.abs(midpoint - y), color) }).join('')
     }
     return `<g data-scale-start="${section.start}" data-scale-min="${n(domain.min)}" data-scale-max="${n(domain.max)}"><g opacity="${n((style?.opacity ?? 100) / 100)}">${render(plus, style?.color ?? spec.color, true)}${render(minus, style?.negativeColor ?? spec.negativeColor ?? '#2878d4', false)}</g>${line(left, midpoint, right, midpoint, a.baselineColor, a.baselineWidthPt * 25.4 / 72)}${style?.showScale === false ? '' : drawScaleLabels({ ...bounds, x: left, width: right - left }, domain, a, true)}</g>`

@@ -1,6 +1,7 @@
+import { normalizeStackAppearance, type SignalStackAppearance } from './signal-stack-style.ts'
 import type { Region, SignalFeature } from './types.ts'
 
-export const TRACK_DOCUMENT_VERSION = 33 as const
+export const TRACK_DOCUMENT_VERSION = 34 as const
 export const TRACK_COLORS = ['#6d55e0', '#d95d74', '#169b8f', '#d88928', '#3478c9'] as const
 export const STRANDED_POSITIVE_COLOR = '#e3342f'
 export const STRANDED_NEGATIVE_COLOR = '#2878d4'
@@ -10,7 +11,7 @@ export type ScaleMode = 'auto-visible' | 'auto-percentile' | 'fixed'
 export type SignalTransform = 'linear' | 'log1p' | 'symlog'
 export type SignalRenderStyle = 'fill' | 'line' | 'bar'
 export type SignalStackDifferentiation = 'shades' | 'colors' | 'patterns' | 'shades-patterns'
-export type SignalStackRenderStyle = 'fill-line' | 'line'
+export type SignalStackRenderStyle = 'fill-line' | 'fill' | 'line'
 export type SignalStrand = 'plus' | 'minus'
 export type SignalScaleChannel = 'ordinary' | SignalStrand
 export type InteractionDirection = 'up' | 'down'
@@ -63,6 +64,7 @@ export interface DisplayGroup {
   signalStackDifferentiation?: SignalStackDifferentiation
   signalStackRenderStyle?: SignalStackRenderStyle
   signalStackOpacity?: number
+  signalStackAppearance?: Partial<SignalStackAppearance>
   /** Stack-only visibility; expanding the group reveals every enabled member again. */
   signalStackHiddenTrackIds?: string[]
   /** Stable style slots by track ID; painting order remains the order of tracks. */
@@ -715,7 +717,11 @@ export function collapseSignalStack(draft: TrackDocument, groupId: string): bool
   if (!group || !canSignalStack(members)) return false
   group.signalStackMode = 'collapsed'
   group.signalStackDifferentiation ??= 'patterns'
-  group.signalStackRenderStyle = 'line'
+  if (!group.signalStackRenderStyle) {
+    group.signalStackRenderStyle = 'fill-line'
+    group.signalStackOpacity = 30
+    group.signalStackAppearance = { colorMode: 'same', color: group.color ?? members[0].color, fillPatterns: 'mixed', outlinePatterns: false }
+  }
   group.signalStackHiddenTrackIds = (group.signalStackHiddenTrackIds ?? []).filter((id) => members.some((track) => track.id === id))
   group.signalStackStyleTrackIds ??= members.map((track) => track.id)
   group.scaleBehavior = 'linked'
@@ -881,7 +887,7 @@ export function computeSegmentScaleDomains(
 }
 
 export function normalizeTrackDocument(value: unknown): TrackDocument {
-  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
+  if (!isRecord(value) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, TRACK_DOCUMENT_VERSION].includes(value.schemaVersion)) throw new Error('This is not a supported GeRAFE workspace file.')
   if (typeof value.referenceId !== 'string' || !isRegion(value.region)) throw new Error('The workspace is missing a valid reference or region.')
   const sources = Array.isArray(value.sources) ? value.sources.filter(isSourceSpec).map(cloneSource) : []
   const groups = Array.isArray(value.groups) ? value.groups.filter(isGroup).map((group) => ({
@@ -889,9 +895,10 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
     signalStackMode: group.signalStackMode === 'collapsed' ? 'collapsed' as const : undefined,
     signalStackDifferentiation: ['shades', 'colors', 'patterns', 'shades-patterns'].includes(group.signalStackDifferentiation as string)
       ? group.signalStackDifferentiation : undefined,
-    signalStackRenderStyle: group.signalStackRenderStyle === 'line' ? 'line' as const : group.signalStackRenderStyle === 'fill-line' ? 'fill-line' as const : undefined,
+    signalStackRenderStyle: ['line', 'fill-line', 'fill'].includes(group.signalStackRenderStyle ?? '') ? group.signalStackRenderStyle : undefined,
+    signalStackAppearance: normalizeStackAppearance(group.signalStackAppearance),
     signalStackOpacity: typeof group.signalStackOpacity === 'number' && Number.isFinite(group.signalStackOpacity)
-      ? Math.max(10, Math.min(100, Math.round(group.signalStackOpacity))) : undefined,
+      ? Math.max(0, Math.min(100, Math.round(group.signalStackOpacity))) : undefined,
     signalStackHiddenTrackIds: Array.isArray(group.signalStackHiddenTrackIds)
       ? [...new Set(group.signalStackHiddenTrackIds.filter((id): id is string => typeof id === 'string'))].slice(0, 500) : undefined,
     signalStackStyleTrackIds: Array.isArray(group.signalStackStyleTrackIds)
@@ -1202,6 +1209,7 @@ function pruneDocument(document: TrackDocument): void {
       delete group.signalStackStyleTrackIds
     } else {
       const memberIds = new Set(members.map((track) => track.id))
+      if (group.signalStackAppearance?.memberPatterns) group.signalStackAppearance.memberPatterns = Object.fromEntries(Object.entries(group.signalStackAppearance.memberPatterns).filter(([id]) => memberIds.has(id)))
       group.signalStackHiddenTrackIds = (group.signalStackHiddenTrackIds ?? []).filter((id) => memberIds.has(id))
       group.signalStackStyleTrackIds = [
         ...(group.signalStackStyleTrackIds ?? []).filter((id) => memberIds.has(id)),
@@ -1283,7 +1291,7 @@ function isGroup(value: unknown): value is DisplayGroup {
     && (value.scaleBehavior === undefined || ['linked', 'independent'].includes(value.scaleBehavior))
     && (value.signalStackMode === undefined || value.signalStackMode === 'collapsed')
     && (value.signalStackDifferentiation === undefined || ['shades', 'colors', 'patterns', 'shades-patterns'].includes(value.signalStackDifferentiation))
-    && (value.signalStackRenderStyle === undefined || ['fill-line', 'line'].includes(value.signalStackRenderStyle))
+    && (value.signalStackRenderStyle === undefined || ['fill-line', 'fill', 'line'].includes(value.signalStackRenderStyle))
     && (value.signalStackOpacity === undefined || (typeof value.signalStackOpacity === 'number' && Number.isFinite(value.signalStackOpacity)))
     && (value.signalStackHiddenTrackIds === undefined || (Array.isArray(value.signalStackHiddenTrackIds) && value.signalStackHiddenTrackIds.every((id: unknown) => typeof id === 'string')))
     && (value.signalStackStyleTrackIds === undefined || (Array.isArray(value.signalStackStyleTrackIds) && value.signalStackStyleTrackIds.every((id: unknown) => typeof id === 'string')))

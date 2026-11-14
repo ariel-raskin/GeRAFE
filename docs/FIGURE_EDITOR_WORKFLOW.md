@@ -30,6 +30,8 @@ The preset is a starting point for the compact multi-condition heatmap/interacti
 
 Sizes are physical units, independent of preview zoom. Font family names use fonts available on the rendering computer. Font embedding and PDF export remain future work.
 
+Collapsed signal stacks retain the viewer's color mode, transparent fills, member patterns, outline style and visible-member choices in SVG/PNG. Hidden members do not require reopening sources for export. Stack patterns are vector geometry in SVG; export DPI changes raster resolution, not their physical spacing.
+
 ## Quantitative comparisons
 
 **Source limits / pooled data** retains fixed source caps when available. **Shared observed limits** pools visible values from the tracks assigned to that assay row across conditions; **Independent** uses each cell's values. **Fixed limits** takes explicit minimum/maximum values. Matrix automatic limits use the source's maximum/percentile policy, with fixed caps overridden when observed scaling is selected.

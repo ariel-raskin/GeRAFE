@@ -1058,28 +1058,32 @@ await page.mouse.click(signalStackBox.x + 60, signalStackBox.y + 50, { button: '
 const signalStackMenuText = await page.locator('#track-context-menu').textContent()
 await page.locator('[data-context-submenu="signal-stack"]').hover()
 const signalStackFlyoutText = await page.locator('#track-context-flyout').textContent()
-await page.locator('[data-context-action="signal-stack-diff-shades"]').click()
+await page.locator('[data-context-action="signal-stack-appearance"]').click()
+await page.locator('.signal-stack-menu [data-stack="colorMode"]').selectOption('distinct')
+await page.locator('.signal-stack-menu [data-action="close"]').last().click()
 await page.waitForTimeout(300)
 const signalStackLegendChanged = signalStackBeforeStyle !== await signalStackCanvas.evaluate((element) => element.toDataURL())
 const signalStackBeforeMove = await page.evaluate(async () => {
-  const { signalStackLegendEntries } = await import('/src/browser.ts')
+  const { signalStackDisplayEntries } = await import('/src/browser.ts')
   const state = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
   const members = state.tracks.filter((track) => track.displayGroupId === 'signal-stack')
   const group = state.groups.find((item) => item.id === 'signal-stack')
   return { order: members.map((track) => track.id), styleIds: group.signalStackStyleTrackIds,
-    styles: signalStackLegendEntries(members, members, group.signalStackDifferentiation, [], group.signalStackStyleTrackIds) }
+    styles: signalStackDisplayEntries(group, members) }
 })
 await page.mouse.click(signalStackBox.x + 60, signalStackBox.y + 50, { button: 'right' })
 await page.locator('[data-context-submenu="signal-stack"]').hover()
-await page.locator('[data-context-action="signal-stack-up-stack-b"]').click()
+await page.locator('[data-context-action="signal-stack-appearance"]').click()
+await page.locator('.signal-stack-menu [data-move="stack-b"][data-delta="-1"]').click()
+await page.locator('.signal-stack-menu [data-action="close"]').last().click()
 await page.waitForTimeout(300)
 const signalStackAfterMove = await page.evaluate(async () => {
-  const { signalStackLegendEntries } = await import('/src/browser.ts')
+  const { signalStackDisplayEntries } = await import('/src/browser.ts')
   const state = JSON.parse(localStorage.getItem('gerafe-track-document') ?? '{}')
   const members = state.tracks.filter((track) => track.displayGroupId === 'signal-stack')
   const group = state.groups.find((item) => item.id === 'signal-stack')
   return { order: members.map((track) => track.id), styleIds: group.signalStackStyleTrackIds,
-    styles: signalStackLegendEntries(members, members, group.signalStackDifferentiation, [], group.signalStackStyleTrackIds) }
+    styles: signalStackDisplayEntries(group, members) }
 })
 const signalStackStylesFollowTracks = signalStackBeforeMove.order.join(',') === 'stack-a,stack-b'
   && signalStackAfterMove.order.join(',') === 'stack-b,stack-a'
@@ -1322,7 +1326,7 @@ if (!helpMenuVisible || !helpMenuText?.includes('Track interactions') || !helpMe
   || !aboutDialogVisible || !aboutVersionText?.startsWith('Version ') || !browserUpdateDisabled) process.exitCode = 1
 if (!trackContextVisible) process.exitCode = 1
 if (!singleItemFlyoutFlattened || !flyoutClosesOnPlainAction || !redundantGroupingHidden || !crossGroupSelectionText?.includes('2 tracks selected') || crossGroupSelectionText.includes('3 tracks selected') || !heightInputUsesPixels) process.exitCode = 1
-if (!signalStackMenuText?.includes('Signal stack') || !signalStackFlyoutText?.includes('Distinct colors') || !signalStackFlyoutText.includes('Line patterns') || signalStackFlyoutText.includes('fill') || !signalStackLegendChanged || !signalStackStylesFollowTracks) process.exitCode = 1
+if (!signalStackMenuText?.includes('Signal stack') || !signalStackFlyoutText?.includes('Stack appearance') || !signalStackLegendChanged || !signalStackStylesFollowTracks) process.exitCode = 1
 if (trackContextFocusedAction || groupContextFocusedAction) process.exitCode = 1
 if (initialTrackContextText?.toLocaleLowerCase().includes('current') || initialTrackContextText?.includes('Set visual group')) process.exitCode = 1
 if ((!firstTrackSpec || ['interval', 'interaction', 'alignment'].includes(firstTrackSpec.kind)) && currentIndicatorCount < 1) process.exitCode = 1

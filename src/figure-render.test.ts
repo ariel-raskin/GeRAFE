@@ -1,13 +1,41 @@
 import { describe, expect, it } from 'vitest'
-import { createFigureDocument } from './figure-document.ts'
+import { createFigureDocument, figureRequiredSourceIds } from './figure-document.ts'
 import { embedPngDpi, FigureRenderSession, figureCellBounds, figureSvgToPng, layoutFigure } from './figure-render.ts'
 import { matrixWarmPaletteColor } from './browser.ts'
 import { GeneSource } from './reference.ts'
-import { addAlignmentTrack, addInteractionTrack, addIntervalTrack, addMatrixTrack, addSignalTrack, createTrackDocument } from './track-document.ts'
+import { addAlignmentTrack, addInteractionTrack, addIntervalTrack, addMatrixTrack, addSignalTrack, assignDisplayGroup, collapseSignalStack, createTrackDocument } from './track-document.ts'
 import type { TrackSource } from './types.ts'
 import { createManuscriptFixture } from '../scripts/fixtures/manuscript-figure.ts'
 
 describe('figure rendering', () => {
+  it('exports translucent stack fills and stable patterns, omits hidden sources and paints outlines last', async () => {
+    const source = createTrackDocument('hg38', { chr: 'chr1', start: 0, end: 1000 })
+    for (const id of ['a', 'b', 'c']) addSignalTrack(source, { id, name: id, format: 'bedgraph', files: [] }, { id, autoPair: false })
+    assignDisplayGroup(source, ['a', 'b', 'c'], 'Stack'); collapseSignalStack(source, source.groups[0].id)
+    const group = source.groups[0]
+    group.signalStackHiddenTrackIds = ['c']
+    group.signalStackAppearance!.color = '#123abc'
+    group.signalStackAppearance!.memberPatterns = { b: 'crosshatch' }
+    source.comparisonDividers.push({ id: 'split', chr: 'chr1', position: 500, color: '#777777', lineStyle: 'solid' })
+    const figure = createFigureDocument(source)
+    figure.rows.find((row) => row.trackIds[0] === 'reference-genes')!.included = false
+    const row = figure.rows.find((row) => row.trackIds.includes('a'))!
+    row.appearance = { segmentedScales: true }
+    expect([...figureRequiredSourceIds(figure)].sort()).toEqual(['a', 'b'])
+    const features = [{ start: 0, end: 500, score: 5 }, { start: 500, end: 1000, score: -3 }]
+    const reader: TrackSource = { name: 'signal', chromosomes: new Map(), async getFeatures() { return features } }
+    const result = await new FigureRenderSession().render(figure, new Map([['a', reader], ['b', reader]]))
+    expect(result.issues).toEqual([])
+    expect(result.svg).toContain('data-stack-pattern="diagonal"')
+    expect(result.svg).toContain('data-stack-pattern="crosshatch"')
+    expect(result.svg).toContain('fill="#123abc" opacity="0.3"')
+    expect(result.svg).not.toContain('data-stack-fill="c"')
+    expect(result.svg.lastIndexOf('data-stack-fill=')).toBeLessThan(result.svg.indexOf('data-stack-outline='))
+    figure.sourceDocument.groups[0].signalStackHiddenTrackIds = ['b', 'c']
+    const single = await new FigureRenderSession().render(figure, new Map([['a', reader]]))
+    expect(single.issues).toEqual([])
+    expect(single.svg).toContain('data-stack-pattern="diagonal"')
+  })
   it('renders a compact three-condition panel with one reserved color bar and an attached editable recipe', async () => {
     const fixture = createManuscriptFixture()
     fixture.document.sourceDocument.sources[0].files = [{ name: 'example.cool', path: 'C:/private/example.cool', role: 'signal', size: 100, lastModified: 0 }]

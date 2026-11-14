@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url'
 const port = 5174
 const appUrl = `http://127.0.0.1:${port}`
 const vitePath = fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url))
-const targetedScripts = new Map([['--annotations', './smoke-annotations.mjs'], ['--editing', './smoke-viewer-editing.mjs'], ['--spans', './smoke-span-gestures.mjs'], ['--figure', './smoke-figure-manuscript.mjs']])
+const targetedScripts = new Map([['--annotations', './smoke-annotations.mjs'], ['--editing', './smoke-viewer-editing.mjs'], ['--spans', './smoke-span-gestures.mjs'], ['--figure', './smoke-figure-manuscript.mjs'], ['--stacks', './smoke-signal-stacks.mjs']])
 const targeted = targetedScripts.get(process.argv[2])
-const smokeScripts = targeted ? [targeted] : ['./smoke-browser.mjs', './smoke-annotations.mjs', './smoke-viewer-editing.mjs', './smoke-span-gestures.mjs', './smoke-figure-manuscript.mjs']
+const smokeScripts = targeted ? [targeted] : ['./smoke-browser.mjs', './smoke-annotations.mjs', './smoke-viewer-editing.mjs', './smoke-span-gestures.mjs', './smoke-figure-manuscript.mjs', './smoke-signal-stacks.mjs']
 
 const vite = spawn(process.execPath, [vitePath, '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
   cwd: fileURLToPath(new URL('..', import.meta.url)),

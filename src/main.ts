@@ -1,3 +1,4 @@
+import { openSignalStackMenu } from './signal-stack-menu.ts'
 import './style.css'
 import { ungzip } from 'pako-esm2'
 import { distributeFittedPixels, GenomeBrowser, heightScoreForPixels, MATRIX_BLUE_BLACK_COLORS, MATRIX_WARM_COLORS, trackPixelHeight } from './browser.ts'
@@ -915,7 +916,7 @@ document.addEventListener('pointerdown', (event) => {
   if (!(event.target as Element).closest?.('#reference-picker')) setReferenceMenu(false)
   if (!(event.target as Element).closest?.('#chromosome-picker')) setChromosomeMenu(false)
   if (!(event.target as Element).closest?.('.track-context-menu')) closeTrackContextMenu()
-  if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, #color-dialog, #update-dialog, #track-options-dialog, #interaction-guide-dialog, #matrix-settings-dialog, #action-dialog')) clearTrackSelection()
+  if (event.button === 0 && !(event.target as Element).closest?.('#genome-header, #genome-canvas, #bottom-canvas, .track-context-menu, .signal-stack-menu, #color-dialog, #update-dialog, #track-options-dialog, #interaction-guide-dialog, #matrix-settings-dialog, #action-dialog')) clearTrackSelection()
 })
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Control' || event.key === 'Shift') browser.setPlotModifiers(event.ctrlKey, event.shiftKey)
@@ -2500,19 +2501,7 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
   const stackItems = group.signalStackMode === 'collapsed' ? [
     action('signal-stack-expand', 'Expand into separate tracks'),
     '<span class="context-separator"></span>',
-    action('signal-stack-diff-shades', 'Distinct colors', group.signalStackDifferentiation === 'shades' ? 'current' : ''),
-    action('signal-stack-diff-colors', 'Original track colors', group.signalStackDifferentiation === 'colors' ? 'current' : ''),
-    action('signal-stack-diff-patterns', 'Line patterns', group.signalStackDifferentiation === 'patterns' ? 'current' : ''),
-    action('signal-stack-diff-shades-patterns', 'Distinct colors and patterns', group.signalStackDifferentiation === 'shades-patterns' ? 'current' : ''),
-    '<span class="context-separator"></span>',
-    ...members.flatMap((track, index) => {
-      const hidden = (group.signalStackHiddenTrackIds ?? []).includes(track.id)
-      return [
-        action(`signal-stack-visible-${encodeURIComponent(track.id)}`, `${hidden ? 'Show' : 'Hide'} ${escapeHtml(track.label)}`, hidden ? 'off' : 'on'),
-        action(`signal-stack-up-${encodeURIComponent(track.id)}`, `Move ${escapeHtml(track.label)} up`, '', index === 0),
-        action(`signal-stack-down-${encodeURIComponent(track.id)}`, `Move ${escapeHtml(track.label)} down`, '', index === members.length - 1),
-      ]
-    }),
+    action('signal-stack-appearance', 'Stack appearance…', 'Fills, colors, patterns, members'),
   ].join('') : action('signal-stack-collapse', 'Collapse into signal stack')
   trackContextMenu.innerHTML = `
     <div class="context-heading"><strong>${escapeHtml(group.label)}</strong><span>${members.length} track${members.length === 1 ? '' : 's'} · group options</span></div>
@@ -2521,7 +2510,7 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
         action('group-open', 'Add files…')
         + action('group-add-selected', 'Add selected tracks', selectedOutside.length ? `${selectedOutside.length} selected` : '', selectedOutside.length === 0)),
       submenu('group-appearance', 'Appearance', '',
-        (hasOrdinaryColor ? action(hasLinkedStranded ? 'group-color-ordinary' : 'group-color-all', hasLinkedStranded ? 'Set unstranded track color…' : 'Set group track color…') : '')
+        (group.signalStackMode === 'collapsed' ? action('signal-stack-appearance', 'Signal stack appearance…', 'Fills, colors and patterns') : hasOrdinaryColor ? action(hasLinkedStranded ? 'group-color-ordinary' : 'group-color-all', hasLinkedStranded ? 'Set unstranded track color…' : 'Set group track color…') : '')
         + (hasPlusColor ? action('group-color-plus', 'Set positive-strand color…') : '')
         + (hasMinusColor ? action('group-color-minus', 'Set negative-strand color…') : '')
         + action('group-height', 'Set group track height…')),
@@ -2639,6 +2628,7 @@ async function handleTrackContextAction(event: MouseEvent): Promise<void> {
     const label = await requestText({ title: 'Group selected tracks', label: 'Group name', initial: current, submitLabel: 'Group tracks', validate: requiredName })
     if (label !== undefined) store.edit((draft) => assignDisplayGroup(draft, ids, label, { autoScale: savedGroupAutoscale() }))
   }
+
   if (command === 'signal-stack-collapse') {
     let collapsedGroupId: string | undefined
     store.edit((draft) => {
@@ -3173,6 +3163,7 @@ async function handleGroupContextAction(command: string | undefined, groupId: st
   const matricesOnly = matrixIds.length > 0 && matrixIds.length === memberIds.length
   const hasLinkedStranded = store.current.tracks.some((track) => track.displayGroupId === groupId && track.kind === 'stranded')
   const signalIds = store.current.tracks.filter((track) => (track.kind === 'signal' || track.kind === 'stranded') && track.displayGroupId === groupId).map((track) => track.id)
+  if (command === 'signal-stack-appearance') openSignalStackMenu({ groupId, x: Number.parseFloat(trackContextMenu.style.left) || 24, y: Number.parseFloat(trackContextMenu.style.top) || 80, current: () => store.current, edit: (change) => store.edit(change), preview: (document) => browser.syncDocument(document, runtimeSources), undo: () => store.undo(), redo: () => store.redo(), canUndo: () => store.canUndo, canRedo: () => store.canRedo })
   if (command === 'signal-stack-collapse') store.edit((draft) => collapseSignalStack(draft, groupId))
   if (command === 'signal-stack-expand') store.edit((draft) => expandSignalStack(draft, groupId))
   if (command?.startsWith('signal-stack-diff-')) store.edit((draft) => {
