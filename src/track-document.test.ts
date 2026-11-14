@@ -506,7 +506,7 @@ describe('track document', () => {
     expect(collapseSignalStack(document, group.id)).toBe(true)
     expect(group).toMatchObject({
       signalStackMode: 'collapsed', signalStackDifferentiation: 'patterns',
-      signalStackRenderStyle: 'line', scaleBehavior: 'linked',
+      signalStackRenderStyle: 'fill-line', signalStackOpacity: 30, scaleBehavior: 'linked',
       signalStackStyleTrackIds: ['t1', 't2'],
     })
     expect(new Set(document.tracks.filter((track) => track.displayGroupId === group.id).map((track) => track.scaleBindingId)).size).toBe(1)

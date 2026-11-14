@@ -278,12 +278,26 @@ export function setFigureColumnRegion(draft: FigureDocument, columnId: string, r
   }
 }
 
+/** A collapsed row keeps its visible-member choices through handoff and export. */
+export function figureStackGroup(document: FigureDocument, column: FigureColumn, rowId: string) {
+  const ids = column.assignments[rowId] ?? []
+  const specs = ids.map((id) => document.sourceDocument.tracks.find((track) => track.id === id))
+  if (ids.length < 2 || specs.some((spec) => !spec || spec.kind !== 'signal' || spec.displayGroupId !== specs[0]?.displayGroupId)) return undefined
+  return document.sourceDocument.groups.find((group) => group.id === specs[0]?.displayGroupId && group.signalStackMode === 'collapsed')
+}
+
+export function figureAssignedTrackIds(document: FigureDocument, column: FigureColumn, rowId: string): string[] {
+  const ids = column.assignments[rowId] ?? []
+  const group = figureStackGroup(document, column, rowId)
+  return group ? ids.filter((id) => document.sourceDocument.tracks.find((track) => track.id === id)?.enabled && !(group.signalStackHiddenTrackIds ?? []).includes(id)) : ids
+}
+
 /** Includes BEDPE files used only as overlays on an included matrix row. */
 export function figureRequiredSourceIds(document: FigureDocument): Set<string> {
   const required = new Set<string>()
   for (const row of document.rows) {
     if (!row.included) continue
-    for (const column of document.columns) for (const trackId of column.assignments[row.id] ?? []) {
+    for (const column of document.columns) for (const trackId of figureAssignedTrackIds(document, column, row.id)) {
       const track = document.sourceDocument.tracks.find((item) => item.id === trackId)
       for (const sourceId of track?.sourceIds ?? []) required.add(sourceId)
       if (track?.kind === 'matrix' && track.matrixOverlayInteractionTrackId) {

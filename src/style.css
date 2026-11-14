@@ -1069,4 +1069,32 @@ html[data-theme='dark'] .toast.is-error { color: white; }
 .annotation-library article { display: grid; grid-template-columns: 1fr 195px; gap: 16px; border-top: 1px solid var(--line); padding: 14px 0; }
 .annotation-library article small { display: block; margin-top: 5px; font-size: 11px; }
 .annotation-library-actions { display: flex; flex-direction: column; gap: 5px; }
+.signal-stack-menu { position: fixed; z-index: 155; inset: auto; margin: 0; box-sizing: border-box; width: min(420px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; padding: 14px; color: var(--ink); }
+.signal-stack-menu header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.signal-stack-menu header strong { font-size: 13px; }
+.signal-stack-menu header small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+.signal-stack-menu header > div { min-width: 0; flex: 1; }
+.signal-stack-menu header > button { flex: none; width: 28px; height: 28px; padding: 0; justify-content: center; font-size: 17px; }
+.signal-stack-menu h3 { margin: 0 0 10px; font-size: 12px; }
+.signal-stack-menu h3 small { float: right; color: var(--muted); font-size: 10px; font-weight: 400; }
+.signal-stack-menu section { margin-top: 13px; padding-top: 13px; border-top: 1px solid var(--line); }
+.signal-stack-menu p { margin: 6px 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.signal-stack-menu label:not(.stack-check):not(.stack-member-name) { display: grid; grid-template-columns: 1fr minmax(0, 180px); align-items: center; gap: 10px; margin: 8px 0; font-size: 11px; }
+.signal-stack-menu select { width: 100%; min-width: 0; min-height: 28px; border: 1px solid var(--field-line); border-radius: 4px; padding: 4px; background: var(--field); color: var(--ink); font-size: 11px; }
+.signal-stack-menu input[type="color"] { width: 100%; height: 28px; padding: 2px; border: 1px solid var(--field-line); background: var(--field); }
+.signal-stack-menu label.stack-slider { grid-template-columns: 1fr minmax(0, 130px) 42px !important; }
+.signal-stack-menu input[type="range"] { min-width: 0; width: 100%; accent-color: var(--accent); }
+.signal-stack-menu output { text-align: right; font-size: 10px; font-variant-numeric: tabular-nums; }
+.signal-stack-menu .stack-check { display: flex; align-items: center; gap: 7px; font-size: 11px; margin: 12px 0; }
+.signal-stack-menu button { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; background: var(--button-muted); color: var(--ink); cursor: var(--cursor-action); font-size: 10px; }
+.signal-stack-menu button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.signal-stack-menu :disabled { opacity: .45; }
+.stack-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.stack-members article { border-top: 1px solid var(--line); padding: 8px 0; }
+.stack-member-name { display: flex; align-items: center; gap: 7px; font-size: 11px; }
+.stack-member-name span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stack-member-name svg { flex: none; }
+.stack-member-options { display: flex; gap: 5px; margin: 6px 0 0 24px; }
+.stack-member-options select { flex: 1; }
+.signal-stack-menu footer { display: flex; justify-content: flex-end; gap: 6px; padding-top: 12px; border-top: 1px solid var(--line); }
 .annotation-library-status { min-height: 18px; position: sticky; bottom: -10px; padding: 10px 0; background: var(--paper); }

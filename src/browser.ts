@@ -1,3 +1,4 @@
+import { stackAppearance, stackMemberPattern, canvasStackPattern, type StackPattern } from './signal-stack-style.ts'
 import { clampRegion, formatBases, formatLocus } from './genome.ts'
 import { MatrixTileRenderer, matrixTileCacheKey } from './matrix-tiles.ts'
 import { trackDropPosition } from './track-drop.ts'
@@ -1918,8 +1919,8 @@ export class GenomeBrowser {
     const visibleMembers = members.filter((track) => track.enabled && !(group.signalStackHiddenTrackIds ?? []).includes(track.id))
     const first = visibleMembers[0]
     if (!first) return 0
-    const differentiation = group.signalStackDifferentiation ?? 'patterns'
-    const legendEntries = signalStackLegendEntries(members, visibleMembers, differentiation, group.signalStackHiddenTrackIds ?? [], group.signalStackStyleTrackIds)
+    const appearance = stackAppearance(group, members)
+    const legendEntries = signalStackDisplayEntries(group, members, visibleMembers)
     const styles = new Map(legendEntries.map((entry) => [entry.id, entry]))
     const firstStyle = styles.get(first.id)!
     const firstSpec: TrackSpec = {
@@ -1932,19 +1933,22 @@ export class GenomeBrowser {
     const domain = first.scaleBindingId ? domains.get(first.scaleBindingId) : undefined
     const segments = first.scaleBindingId && segmentDomains ? segmentDomains.map((segment) => ({ start: segment.start, end: segment.end, domain: segment.domains.get(first.scaleBindingId!) })) : undefined
     let count = this.drawTrack(firstSpec, this.runtimes.get(signalFeatureKey(first.id, first.signalStrand))!, index, top, height, width, palette, domain, segments)
-    this.drawSignalStackMember(first, firstStyle.color, firstStyle.dash, top, height, width, domain, segments)
-    for (let memberIndex = 1; memberIndex < visibleMembers.length; memberIndex += 1) {
-      const member = visibleMembers[memberIndex]!
-      const memberDomain = member.scaleBindingId ? domains.get(member.scaleBindingId) : domain
-      const memberSegments = member.scaleBindingId && segmentDomains ? segmentDomains.map((segment) => ({ start: segment.start, end: segment.end, domain: segment.domains.get(member.scaleBindingId!) })) : segments
-      const style = styles.get(member.id)!
-      count += this.drawSignalStackMember(member, style.color, style.dash, top, height, width, memberDomain, memberSegments)
+    // Paint every area before every outline, so a later fill cannot obscure an earlier curve.
+    for (const phase of ['fill', 'line'] as const) {
+      if (phase === 'fill' && appearance.renderStyle === 'line' || phase === 'line' && appearance.renderStyle === 'fill') continue
+      for (const [memberIndex, member] of visibleMembers.entries()) {
+        const memberDomain = member.scaleBindingId ? domains.get(member.scaleBindingId) : domain
+        const memberSegments = member.scaleBindingId && segmentDomains ? segmentDomains.map((segment) => ({ start: segment.start, end: segment.end, domain: segment.domains.get(member.scaleBindingId!) })) : segments
+        const style = styles.get(member.id)!
+        const painted = this.drawSignalStackMember(member, style.color, style.dash, top, height, width, memberDomain, memberSegments, { ...appearance, pattern: style.pattern, phase })
+        if (memberIndex > 0 && phase === (appearance.renderStyle === 'line' ? 'line' : 'fill')) count += painted
+      }
     }
-    this.drawSignalStackLegend(legendEntries, top, height, palette)
+    this.drawSignalStackLegend(legendEntries, top, height, palette, appearance)
     return count
   }
 
-  private drawSignalStackLegend(entries: ReturnType<typeof signalStackLegendEntries>, top: number, height: number, palette: CanvasPalette): void {
+  private drawSignalStackLegend(entries: ReturnType<typeof signalStackDisplayEntries>, top: number, height: number, palette: CanvasPalette, appearance: ReturnType<typeof stackAppearance>): void {
     const ctx = this.context
     const lineHeight = Math.max(7, Math.min(14, (height - 10) / Math.max(1, entries.length)))
     let fontSize = Math.max(5, Math.min(10, lineHeight - 3))
@@ -1966,11 +1970,18 @@ export class GenomeBrowser {
       const dash = entry.hidden ? [2, 3] : entry.dash
       const y = startY + index * lineHeight
       ctx.globalAlpha = entry.hidden ? 0.42 : 1
+      if (appearance.renderStyle !== 'line') {
+        ctx.globalAlpha *= appearance.opacity / 100
+        ctx.fillStyle = color; ctx.fillRect(sampleLeft, y - 4, sampleRight - sampleLeft, 8)
+        const pattern = canvasStackPattern(ctx, entry.pattern, color, appearance.patternSpacing)
+        if (pattern) { ctx.globalAlpha = (entry.hidden ? 0.42 : 1) * appearance.patternOpacity / 100; ctx.fillStyle = pattern; ctx.fillRect(sampleLeft, y - 4, sampleRight - sampleLeft, 8) }
+        ctx.globalAlpha = entry.hidden ? 0.42 : 1
+      }
       ctx.strokeStyle = color
-      ctx.lineWidth = 1.7
+      ctx.lineWidth = appearance.lineWidth
       ctx.lineCap = 'round'
       ctx.setLineDash(dash)
-      ctx.beginPath(); ctx.moveTo(sampleLeft, y); ctx.lineTo(sampleRight, y); ctx.stroke()
+      if (appearance.renderStyle !== 'fill') { ctx.beginPath(); ctx.moveTo(sampleLeft, y); ctx.lineTo(sampleRight, y); ctx.stroke() }
       ctx.setLineDash([])
       ctx.fillStyle = entry.hidden ? palette.muted : palette.ink
       ctx.fillText(ellipsize(ctx, entry.label, labelWidth), labelLeft, y)
@@ -1993,6 +2004,7 @@ export class GenomeBrowser {
     width: number,
     domain: ScaleDomain | undefined,
     segments: readonly TrackScaleSegment[] | undefined,
+    appearance: StackPaintStyle,
   ): number {
     const visible = this.visibleSignalFeatures(spec)
     if (!visible.length) return 0
@@ -2005,7 +2017,7 @@ export class GenomeBrowser {
       : segments.map((segment) => ({ domain: segment.domain ?? fallbackDomain, x1: this.plotX(canvas, segment.start), x2: this.plotX(canvas, segment.end) }))
     const allNonnegative = activeDomains.every((item) => item.domain.min >= 0)
     const chart = signalChartBounds(top, top + height, allNonnegative)
-    for (const item of activeDomains) paintSmoothSignalDomain(this.context, bins, item.domain, binding?.transform ?? 'linear', chart.top, chart.bottom, item.x1, item.x2, color, dash)
+    for (const item of activeDomains) paintSmoothSignalDomain(this.context, bins, item.domain, binding?.transform ?? 'linear', chart.top, chart.bottom, item.x1, item.x2, color, dash, appearance)
     return visible.length
   }
 
@@ -4567,6 +4579,11 @@ function paintSignalDomain(
   ctx.restore()
 }
 
+interface StackPaintStyle {
+  opacity: number; patternOpacity: number; patternSpacing: number; lineWidth: number
+  pattern: StackPattern; phase: 'fill' | 'line'
+}
+
 function paintSmoothSignalDomain(
   ctx: CanvasRenderingContext2D,
   bins: readonly (Bin | undefined)[],
@@ -4578,6 +4595,7 @@ function paintSmoothSignalDomain(
   clipEnd: number,
   color: string,
   dash: readonly number[],
+  appearance: StackPaintStyle,
 ): void {
   if (clipEnd <= clipStart) return
   const transformedMin = signalTransform(domain.min, transform)
@@ -4588,7 +4606,7 @@ function paintSmoothSignalDomain(
   ctx.beginPath(); ctx.rect(clipStart, chartTop, clipEnd - clipStart, chartBottom - chartTop); ctx.clip()
   ctx.strokeStyle = color
   ctx.globalAlpha = 1
-  ctx.lineWidth = 1.75
+  ctx.lineWidth = appearance.lineWidth
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   ctx.setLineDash([...dash])
@@ -4602,15 +4620,25 @@ function paintSmoothSignalDomain(
       const value = bin.min >= 0 ? bin.max : bin.max <= 0 ? bin.min : Math.abs(bin.max) >= Math.abs(bin.min) ? bin.max : bin.min
       return { x: PLOT_LEFT + start + offset + 0.5, y: valueToY(value) }
     })
-    ctx.beginPath(); ctx.moveTo(points[0]!.x, points[0]!.y)
-    if (points.length === 2) ctx.lineTo(points[1]!.x, points[1]!.y)
+    const curve = new Path2D()
+    curve.moveTo(points[0]!.x, points[0]!.y)
+    if (points.length === 1) curve.lineTo(points[0]!.x + 0.5, points[0]!.y)
+    else if (points.length === 2) curve.lineTo(points[1]!.x, points[1]!.y)
     else for (let index = 1; index < points.length; index += 1) {
-      const point = points[index]!
-      const next = points[index + 1]
-      if (next) ctx.quadraticCurveTo(point.x, point.y, (point.x + next.x) / 2, (point.y + next.y) / 2)
-      else ctx.lineTo(point.x, point.y)
+      const point = points[index]!, next = points[index + 1]
+      if (next) curve.quadraticCurveTo(point.x, point.y, (point.x + next.x) / 2, (point.y + next.y) / 2)
+      else curve.lineTo(point.x, point.y)
     }
-    ctx.stroke()
+    if (appearance.phase === 'line') ctx.stroke(curve)
+    else {
+      const area = new Path2D(curve)
+      const zero = Math.max(chartTop, Math.min(chartBottom, valueToY(0)))
+      area.lineTo(points.at(-1)!.x + (points.length === 1 ? 0.5 : 0), zero); area.lineTo(points[0]!.x, zero); area.closePath()
+      ctx.fillStyle = color; ctx.globalAlpha = appearance.opacity / 100; ctx.fill(area)
+      const pattern = canvasStackPattern(ctx, appearance.pattern, color, appearance.patternSpacing)
+      if (pattern) { ctx.fillStyle = pattern; ctx.globalAlpha = appearance.patternOpacity / 100; ctx.fill(area) }
+      ctx.globalAlpha = 1
+    }
     start = end + 1
   }
   ctx.restore()
@@ -4639,6 +4667,18 @@ export function signalStackLegendEntries(
       color: signalStackColor(member.color, styleIndex, styleIds.length, differentiation),
       dash: signalStackDash(styleIndex, differentiation),
       hidden,
+    }
+  })
+}
+
+export function signalStackDisplayEntries(group: DisplayGroup, members: readonly TrackSpec[], visibleMembers: readonly TrackSpec[] = members.filter((track) => track.enabled && !(group.signalStackHiddenTrackIds ?? []).includes(track.id))) {
+  const a = stackAppearance(group, members)
+  const styleIds = [...new Set([...(group.signalStackStyleTrackIds ?? []), ...members.map((member) => member.id)])]
+  return signalStackLegendEntries(members, visibleMembers, a.colorMode === 'distinct' ? 'shades' : 'colors', group.signalStackHiddenTrackIds ?? [], styleIds).map((entry) => {
+    const index = styleIds.indexOf(entry.id)
+    return { ...entry, color: a.colorMode === 'same' ? a.color : entry.color,
+      dash: signalStackDash(index, a.outlinePatterns ? 'patterns' : 'colors'),
+      pattern: a.memberPatterns[entry.id] ?? stackMemberPattern(index, a.fillPatterns),
     }
   })
 }
