@@ -16,6 +16,7 @@ const select = (label: string, group: string, value: string, options: string[]):
 const flag = (label: string, group: string, value: boolean): AppearanceField & { value: boolean } => ({ label, group, value })
 
 export const pageFields = {
+  queryDpi: select('Data detail for preview and export', 'Rendering', '600', ['300', '600']),
   titleSizePt: num('Figure title (pt; 0 = automatic)', 'Typography', 0, 0, 60),
   titleHeightMm: num('Title area (mm)', 'Typography', 12),
   headingSizePt: num('Column heading (pt; 0 = automatic)', 'Typography', 0, 0, 60),
@@ -54,7 +55,11 @@ export const rowFields = {
   showRegions: flag('Show saved region shading / boundaries', 'Plot and axes', true),
   showDividers: flag('Show divider lines', 'Plot and axes', true),
   showOutlines: flag('Show matrix outlines', 'Plot and axes', true),
-  segmentedScales: flag('Scale each divider section separately', 'Plot and axes', false),
+  segmentedScales: flag('Scale each divider section separately', 'Plot and axes', true),
+  memberLabels: flag('Show stack member names', 'Labels and bracket', true),
+  colorMarkers: flag('Show track color markers', 'Labels and bracket', true),
+  markerWidthMm: num('Color marker width (mm)', 'Labels and bracket', 0.7, 0.15, 4),
+  memberLabelGapMm: num('Member name spacing (mm)', 'Labels and bracket', 0.5, 0, 10),
   scaleFontPt: num('Scale values (pt)', 'Plot and axes', 5.4, 1, 40),
   scaleColor: color('Scale value color', 'Plot and axes', '#222222'),
   scaleLabelBackground: flag('Background behind scale values', 'Plot and axes', false),
@@ -97,16 +102,31 @@ export const cellFields = {
   matrixMaxDistanceBp: { ...num('Triangle depth (bp; 0 = source)', 'Contact matrix', 0, 0, 1e9, 1), tracks: ['matrix'] },
   matrixColors: { label: 'Custom palette (comma separated hex colors)', group: 'Contact matrix', value: '', kind: 'text', tracks: ['matrix'] },
   matrixReverse: { ...select('Palette direction', 'Contact matrix', 'source', ['source', 'forward', 'reverse']), tracks: ['matrix'] },
-  matrixLegend: { ...select('Color legend', 'Contact matrix', 'inline', ['inline', 'right', 'last-column', 'none']), tracks: ['matrix'] },
+  matrixLegend: { ...select('Color legend', 'Contact matrix', 'inside-left', ['inside-left', 'inline', 'right', 'last-column', 'none']), tracks: ['matrix'] },
+  legendShowMinimum: { ...flag('Show legend minimum', 'Contact matrix', false), tracks: ['matrix'] },
+  legendHeightMm: { ...num('Legend height (mm; 0 = fit)', 'Contact matrix', 0, 0, 100), tracks: ['matrix'] },
+  legendTopMm: { ...num('Legend top inset (mm)', 'Contact matrix', 1.5, 0.5, 50), tracks: ['matrix'] },
   legendWidthMm: { ...num('Legend bar width (mm)', 'Contact matrix', 1.2, 0.2, 10), tracks: ['matrix'] },
   legendGapMm: { ...num('Legend gap (mm)', 'Contact matrix', 1, 0, 20), tracks: ['matrix'] },
   legendFontPt: { ...num('Legend labels (pt)', 'Contact matrix', 5.4, 1, 40), tracks: ['matrix'] },
+} satisfies Record<string, AppearanceField>
+
+export const groupFields = {
+  groupFontPt: num('Maximum label font (pt; 0 = page font)', 'Group label', 0, 0, 40),
+  groupColor: color('Label and bracket color', 'Group label', '#111111'),
+  groupLabelXmm: num('Label X from margin (mm)', 'Group label', 5, -100, 100),
+  groupLabelYmm: num('Label Y offset (mm)', 'Group label', 0, -100, 100),
+  groupBracketXmm: num('Bracket X from margin (mm)', 'Group label', 7, -100, 100),
+  groupLinePt: num('Bracket width (pt; 0 = hide)', 'Group label', 0.55, 0, 8),
+  fitLabel: flag('Fit label to group height', 'Group label', true),
+  labelEndPaddingMm: num('Label end padding (mm)', 'Group label', 1, 0, 20),
 } satisfies Record<string, AppearanceField>
 
 type Values<T> = { [K in keyof T]: T[K] extends { value: number } ? number : T[K] extends { value: boolean } ? boolean : string }
 export type PageAppearance = Values<typeof pageFields>
 export type RowAppearance = Values<typeof rowFields>
 export type CellAppearance = Values<typeof cellFields>
+export type GroupAppearance = Values<typeof groupFields>
 
 export function resolveAppearance<T extends Record<string, AppearanceField>>(fields: T, value?: Partial<Values<T>>): Values<T> {
   return Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, (value as Record<string, unknown> | undefined)?.[key] ?? field.value])) as Values<T>

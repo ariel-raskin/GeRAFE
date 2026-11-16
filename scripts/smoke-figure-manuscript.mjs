@@ -23,7 +23,7 @@ try {
   })
   const ready = () => page.waitForFunction(() => document.querySelector('.figure-editor [data-role="status"]')?.textContent.includes('mm'))
   await ready()
-  assert.equal(await page.locator('.fe-page [data-fe-legend="matrix"]').count(), 1)
+  assert.equal(await page.locator('.fe-page [data-fe-legend="matrix"]').count(), 3)
   // Export the preset example for visual inspection at print resolution.
   await page.locator('[data-action="export-png"]').click()
   const [example] = await Promise.all([page.waitForEvent('download'), page.locator('.fe-confirm button[value="300"]').click()])
@@ -63,7 +63,7 @@ try {
   assert.equal(await page.locator('.fe-page text').filter({ hasText: /^20 kb$/ }).count(), 3)
   const [saved] = await Promise.all([page.waitForEvent('download'), page.locator('[data-action="save"]').click()])
   const project = JSON.parse(await readFile(await saved.path(), 'utf8'))
-  assert.equal(project.schemaVersion, 2)
+  assert.equal(project.schemaVersion, 3)
   assert.equal(project.columns.length, 3)
   assert.equal(project.columns[0].styles[ids.gene].appearance.cdsHeightMm, 0.875)
   const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.locator('[data-action="open"]').click()])

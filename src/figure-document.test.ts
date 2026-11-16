@@ -14,7 +14,7 @@ describe('figure document', () => {
     const source = browserDocument()
     const old = { ...createFigureDocument(source), schemaVersion: 1 }
     const store = new FigureDocumentStore(normalizeFigureDocument(old))
-    expect(store.current.schemaVersion).toBe(2)
+    expect(store.current.schemaVersion).toBe(3)
     const normalizedSource = structuredClone(store.current.sourceDocument)
     store.edit((draft) => { addFigureColumn(draft); addFigureColumn(draft); applyManuscriptPreset(draft); draft.columns[1].widthWeight = 2 })
     const reopened = normalizeFigureDocument(JSON.parse(JSON.stringify(store.current)))

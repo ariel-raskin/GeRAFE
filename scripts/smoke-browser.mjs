@@ -105,7 +105,7 @@ const figurePng = await readFile(await figurePngDownload.path())
 await page.screenshot({ path: 'dist/figure-editor-smoke.png' })
 await page.locator('.figure-editor [data-action="back"]').click()
 const figureResumeVisible = await page.locator('#create-figure').textContent()
-if (figureInitialRows < 1 || figureColumns !== 2 || !figureEditedLabel?.includes('Figure genes') || figureUndoLabel?.includes('Figure genes') || !figureRedoLabel?.includes('Figure genes') || !figureResumeVisible?.includes('Continue figure') || figureProject.schemaVersion !== 2 || figureProject.columns.length !== 2 || !figureSvg.includes('<svg') || !figureSvg.includes('Figure genes') || figurePng.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('Figure Editor handoff, project round trip, edit, and export smoke failed')
+if (figureInitialRows < 1 || figureColumns !== 2 || !figureEditedLabel?.includes('Figure genes') || figureUndoLabel?.includes('Figure genes') || !figureRedoLabel?.includes('Figure genes') || !figureResumeVisible?.includes('Continue figure') || figureProject.schemaVersion !== 3 || figureProject.columns.length !== 2 || !figureSvg.includes('<svg') || !figureSvg.includes('Figure genes') || figurePng.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('Figure Editor handoff, project round trip, edit, and export smoke failed')
 await page.evaluate(async () => {
   localStorage.setItem('gerafe:last-track-folder', 'C:\\Smoke')
   localStorage.setItem('gerafe-workspace-directory', 'D:\\Workspaces')
@@ -1056,7 +1056,7 @@ if (!signalStackBox) throw new Error('Signal stack smoke canvas was not visible.
 const signalStackBeforeStyle = await signalStackCanvas.evaluate((element) => element.toDataURL())
 await page.mouse.click(signalStackBox.x + 60, signalStackBox.y + 50, { button: 'right' })
 const signalStackMenuText = await page.locator('#track-context-menu').textContent()
-await page.locator('[data-context-submenu="signal-stack"]').hover()
+await page.locator('[data-context-submenu="group-appearance"]').hover()
 const signalStackFlyoutText = await page.locator('#track-context-flyout').textContent()
 await page.locator('[data-context-action="signal-stack-appearance"]').click()
 await page.locator('.signal-stack-menu [data-stack="colorMode"]').selectOption('distinct')
@@ -1072,7 +1072,7 @@ const signalStackBeforeMove = await page.evaluate(async () => {
     styles: signalStackDisplayEntries(group, members) }
 })
 await page.mouse.click(signalStackBox.x + 60, signalStackBox.y + 50, { button: 'right' })
-await page.locator('[data-context-submenu="signal-stack"]').hover()
+await page.locator('[data-context-submenu="group-appearance"]').hover()
 await page.locator('[data-context-action="signal-stack-appearance"]').click()
 await page.locator('.signal-stack-menu [data-move="stack-b"][data-delta="-1"]').click()
 await page.locator('.signal-stack-menu [data-action="close"]').last().click()
@@ -1326,7 +1326,7 @@ if (!helpMenuVisible || !helpMenuText?.includes('Track interactions') || !helpMe
   || !aboutDialogVisible || !aboutVersionText?.startsWith('Version ') || !browserUpdateDisabled) process.exitCode = 1
 if (!trackContextVisible) process.exitCode = 1
 if (!singleItemFlyoutFlattened || !flyoutClosesOnPlainAction || !redundantGroupingHidden || !crossGroupSelectionText?.includes('2 tracks selected') || crossGroupSelectionText.includes('3 tracks selected') || !heightInputUsesPixels) process.exitCode = 1
-if (!signalStackMenuText?.includes('Signal stack') || !signalStackFlyoutText?.includes('Stack appearance') || !signalStackLegendChanged || !signalStackStylesFollowTracks) process.exitCode = 1
+if (!signalStackMenuText?.includes('Signal stack') || !signalStackFlyoutText?.includes('Signal stack appearance') || !signalStackLegendChanged || !signalStackStylesFollowTracks) process.exitCode = 1
 if (trackContextFocusedAction || groupContextFocusedAction) process.exitCode = 1
 if (initialTrackContextText?.toLocaleLowerCase().includes('current') || initialTrackContextText?.includes('Set visual group')) process.exitCode = 1
 if ((!firstTrackSpec || ['interval', 'interaction', 'alignment'].includes(firstTrackSpec.kind)) && currentIndicatorCount < 1) process.exitCode = 1

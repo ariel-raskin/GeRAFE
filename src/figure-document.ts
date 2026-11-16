@@ -1,8 +1,8 @@
-import { pageFields, rowFields, cellFields, normalizeAppearance, type PageAppearance, type RowAppearance, type CellAppearance } from './figure-appearance.ts'
+import { pageFields, rowFields, cellFields, groupFields, normalizeAppearance, type PageAppearance, type RowAppearance, type CellAppearance, type GroupAppearance } from './figure-appearance.ts'
 import { cloneDocument, normalizeTrackDocument, type TrackDocument, type TrackSpec } from './track-document.ts'
 import type { Region } from './types.ts'
 
-export const FIGURE_DOCUMENT_VERSION = 2 as const
+export const FIGURE_DOCUMENT_VERSION = 3 as const
 
 export interface FigurePage {
   appearance?: Partial<PageAppearance>
@@ -62,6 +62,13 @@ export interface FigureCellStyle {
   matrixPalette?: 'source' | 'warm' | 'blue-black' | 'single'
 }
 
+export interface FigureGroup {
+  id: string
+  label: string
+  rowIds: string[]
+  appearance?: Partial<GroupAppearance>
+}
+
 export interface FigureDocument {
   schemaVersion: typeof FIGURE_DOCUMENT_VERSION
   id: string
@@ -69,6 +76,7 @@ export interface FigureDocument {
   referenceId: string
   sourceDocument: TrackDocument
   page: FigurePage
+  groups?: FigureGroup[]
   rows: FigureRow[]
   columns: FigureColumn[]
   linkedRegions: boolean
@@ -89,7 +97,7 @@ export function createFigureDocument(source: TrackDocument): FigureDocument {
       representedStacks.add(group.id)
       const members = snapshot.tracks.filter((candidate) => candidate.displayGroupId === group.id)
       if (!members.length) continue
-      rows.push(makeRow(track, members.map((member) => member.id), group.label))
+      rows.push({ ...makeRow(track, members.map((member) => member.id), '', group.label), included: members.some((member) => member.enabled), heightMm: Math.max(13, members.filter((member) => member.enabled).length * 3.5) })
     } else rows.push(makeRow(track, [track.id], track.label, track.displayGroupId ? snapshot.groups.find((candidate) => candidate.id === track.displayGroupId)?.label : undefined))
   }
   return {
@@ -103,7 +111,7 @@ export function createFigureDocument(source: TrackDocument): FigureDocument {
       rowGapMm: 1.5, rulerHeightMm: 9, title: '', fontFamily: 'Arial, sans-serif',
       fontSizePt: 9, background: '#ffffff',
     },
-    rows,
+    rows, groups: normalizeFigureGroups(undefined, rows, snapshot),
     columns: [{ id: crypto.randomUUID(), title: '', region: { ...snapshot.region }, assignments: Object.fromEntries(rows.map((row) => [row.id, [...row.trackIds]])), styles: {} }],
     linkedRegions: false,
     annotationStyles: {},
@@ -112,7 +120,7 @@ export function createFigureDocument(source: TrackDocument): FigureDocument {
 
 function makeRow(track: TrackSpec, trackIds: string[], label = track.label, groupLabel?: string): FigureRow {
   return {
-    id: crypto.randomUUID(), label, groupLabel, trackIds, included: true,
+    id: crypto.randomUUID(), label, groupLabel, trackIds, included: track.enabled,
     heightMm: track.kind === 'matrix' ? 22 : track.kind === 'genes' ? 9 : 13,
     gapAfterMm: 0,
   }
@@ -125,7 +133,7 @@ export function cloneFigureDocument(document: FigureDocument): FigureDocument {
 export function normalizeFigureDocument(value: unknown): FigureDocument {
   if (!value || typeof value !== 'object') throw new Error('This is not a GeRAFE figure project.')
   const input = value as Partial<Omit<FigureDocument, 'schemaVersion'>> & { schemaVersion?: number }
-  if (input.schemaVersion !== 1 && input.schemaVersion !== FIGURE_DOCUMENT_VERSION) throw new Error(`Unsupported figure project version: ${String(input.schemaVersion)}.`)
+  if (![1, 2, FIGURE_DOCUMENT_VERSION].includes(input.schemaVersion ?? 0)) throw new Error(`Unsupported figure project version: ${String(input.schemaVersion)}.`)
   const sourceDocument = normalizeTrackDocument(input.sourceDocument)
   if (input.referenceId !== sourceDocument.referenceId || !Array.isArray(input.rows) || !Array.isArray(input.columns) || !input.page) throw new Error('The figure project is incomplete or inconsistent.')
   if (input.columns.length < 1 || input.columns.length > 8) throw new Error('A figure must have between one and eight columns.')
@@ -143,6 +151,12 @@ export function normalizeFigureDocument(value: unknown): FigureDocument {
       frameWidthPt: row.frameWidthPt === undefined ? undefined : boundedNumber(row.frameWidthPt, 0, 8, 0.5),
     }
   })
+  if ((input.schemaVersion ?? 0) < 3) for (const row of rows) {
+    const spec = sourceDocument.tracks.find((track) => track.id === row.trackIds[0])
+    const group = sourceDocument.groups.find((group) => group.id === spec?.displayGroupId && group.signalStackMode === 'collapsed')
+    if (group && row.trackIds.length > 1) { row.groupLabel ||= group.label; if (row.label === group.label) row.label = '' }
+  }
+  const groups = normalizeFigureGroups(input.groups, rows, sourceDocument)
   const columnIds = new Set<string>()
   const columns = input.columns.map((column) => {
     if (!column || typeof column.id !== 'string' || columnIds.has(column.id) || !validRegion(column.region)) throw new Error('A figure column has an invalid genomic region.')
@@ -182,6 +196,14 @@ export function normalizeFigureDocument(value: unknown): FigureDocument {
     }
     return { widthWeight: boundedNumber(column.widthWeight, 0.1, 10, 1), id: column.id, title: String(column.title ?? ''), region: { ...column.region }, assignments, styles }
   })
+  if ((input.schemaVersion ?? 0) < 3) for (const column of columns) for (const row of rows) {
+    const spec = sourceDocument.tracks.find((track) => track.id === column.assignments[row.id]?.[0])
+    if (spec?.kind === 'matrix' && !spec.matrixSecondaryRegion) {
+      const style = (column.styles ??= {})[row.id] ??= {}
+      const appearance = style.appearance ??= {}
+      if (!appearance.matrixLegend || ['inline', 'last-column'].includes(appearance.matrixLegend)) appearance.matrixLegend = 'inside-left'
+    }
+  }
   const page = input.page
   const annotationIds = new Set([
     ...sourceDocument.savedRegions.map((item) => `region:${item.id}`),
@@ -195,7 +217,7 @@ export function normalizeFigureDocument(value: unknown): FigureDocument {
   }
   return {
     schemaVersion: FIGURE_DOCUMENT_VERSION, id: String(input.id ?? crypto.randomUUID()), name: String(input.name ?? 'Untitled figure'),
-    referenceId: sourceDocument.referenceId, sourceDocument, rows, columns, linkedRegions: input.linkedRegions === true, annotationStyles,
+    referenceId: sourceDocument.referenceId, sourceDocument, groups, rows, columns, linkedRegions: input.linkedRegions === true, annotationStyles,
     page: {
       appearance: normalizeAppearance(pageFields, page.appearance),
       widthMm: boundedNumber(page.widthMm, 50, 600, 180), heightMm: page.heightMm === 0 ? 0 : boundedNumber(page.heightMm, 1, 600, 0), marginMm: boundedNumber(page.marginMm, 0, 100, 7),
@@ -289,7 +311,7 @@ export function figureStackGroup(document: FigureDocument, column: FigureColumn,
 export function figureAssignedTrackIds(document: FigureDocument, column: FigureColumn, rowId: string): string[] {
   const ids = column.assignments[rowId] ?? []
   const group = figureStackGroup(document, column, rowId)
-  return group ? ids.filter((id) => document.sourceDocument.tracks.find((track) => track.id === id)?.enabled && !(group.signalStackHiddenTrackIds ?? []).includes(id)) : ids
+  return group ? document.sourceDocument.tracks.filter((track) => ids.includes(track.id) && track.enabled && !(group.signalStackHiddenTrackIds ?? []).includes(track.id)).map((track) => track.id) : ids
 }
 
 /** Includes BEDPE files used only as overlays on an included matrix row. */
@@ -313,9 +335,10 @@ export function figureRequiredSourceIds(document: FigureDocument): Set<string> {
 export function applyManuscriptPreset(draft: FigureDocument): void {
   Object.assign(draft.page, { widthMm: 145, heightMm: 0, marginMm: 2, labelWidthMm: 15, columnGapMm: 3, rowGapMm: 0.5, rulerHeightMm: 5, fontSizePt: 6.5 })
   draft.page.appearance = { ...draft.page.appearance, headingSizePt: 8.5, headingHeightMm: 4.5, rulerStyle: 'endpoints', rulerFontPt: 5.5, chromosomeFontPt: 6, scaleBarFontPt: 5, shadeRuler: true, rulerGapMm: 0.5 }
+  for (const group of draft.groups ?? []) group.appearance = { ...group.appearance, groupFontPt: 7, groupLabelXmm: 2, groupBracketXmm: 4 }
   for (const row of draft.rows) {
     const kind = draft.sourceDocument.tracks.find((track) => track.id === row.trackIds[0])?.kind
-    row.heightMm = kind === 'matrix' ? 20 : kind === 'genes' ? 5.5 : kind === 'interaction' ? 6 : 5.5
+    row.heightMm = kind === 'signal' && row.trackIds.length > 1 ? Math.max(5.5, row.trackIds.length * 2.7) : kind === 'matrix' ? 20 : kind === 'genes' ? 5.5 : kind === 'interaction' ? 6 : 5.5
     row.gapAfterMm = 0
     row.frameWidthPt = kind === 'genes' ? 0 : 0.35
     row.labelFontSizePt = 6.5
@@ -325,7 +348,76 @@ export function applyManuscriptPreset(draft: FigureDocument): void {
       style.appearance = { ...style.appearance }
       if (kind === 'signal' || kind === 'stranded' || kind === 'matrix') style.scaleMode = 'shared'
       if (kind === 'genes') Object.assign(style.appearance, { exonHeightMm: 0.5, cdsHeightMm: 0.8, geneFontPt: 5.5, geneLaneMm: 1.4, geneTopMm: 0.7, geneLabelGapMm: 0.6, arrowSizeMm: 0.4 })
-      if (kind === 'matrix') Object.assign(style.appearance, { matrixTransform: 'linear', matrixColors: '#ffffff,#fff7bc,#fdae61,#d7191c', matrixLegend: 'last-column', legendWidthMm: 0.8, legendGapMm: 0.6, legendFontPt: 5 })
+      if (kind === 'matrix') Object.assign(style.appearance, { matrixTransform: 'linear', matrixColors: '#ffffff,#fff7bc,#fdae61,#d7191c', matrixLegend: 'inside-left', legendWidthMm: 0.8, legendGapMm: 0.6, legendFontPt: 5 })
     }
   }
+}
+
+/** Preserve group identity separately from plot-source assignments. */
+function normalizeFigureGroups(input: FigureGroup[] | undefined, rows: FigureRow[], source: TrackDocument): FigureGroup[] {
+  const rowIds = new Set(rows.map((row) => row.id)), claimed = new Set<string>(), ids = new Set<string>()
+  const groups: FigureGroup[] = []
+  for (const group of input ?? []) {
+    if (!group || typeof group.id !== 'string' || ids.has(group.id) || !Array.isArray(group.rowIds)) throw new Error('Invalid figure group.')
+    const members = [...new Set(group.rowIds.filter((id) => rowIds.has(id)))]
+    if (members.some((id) => claimed.has(id))) throw new Error('A figure row belongs to more than one group.')
+    ids.add(group.id); members.forEach((id) => claimed.add(id))
+    if (members.length) groups.push({ id: group.id, label: String(group.label ?? ''), rowIds: members, appearance: normalizeAppearance(groupFields, group.appearance) })
+  }
+  for (let index = 0; index < rows.length;) {
+    const row = rows[index]
+    if (claimed.has(row.id)) { index++; continue }
+    const spec = source.tracks.find((track) => track.id === row.trackIds[0])
+    const sourceGroup = input === undefined ? source.groups.find((group) => group.id === spec?.displayGroupId) : undefined
+    const label = row.groupLabel || sourceGroup?.label
+    if (!label) { index++; continue }
+    const members = [row.id]
+    let end = index + 1
+    while (end < rows.length && !claimed.has(rows[end].id) && (sourceGroup ? source.tracks.find((track) => track.id === rows[end].trackIds[0])?.displayGroupId === sourceGroup.id : rows[end].groupLabel === label)) { members.push(rows[end].id); end++ }
+    const id = sourceGroup && !ids.has(sourceGroup.id) ? sourceGroup.id : crypto.randomUUID()
+    ids.add(id); members.forEach((id) => claimed.add(id))
+    groups.push({ id, label, rowIds: members, appearance: normalizeAppearance(groupFields, row.appearance) })
+    index = end
+  }
+  for (const row of rows) row.groupLabel = groups.find((group) => group.rowIds.includes(row.id))?.label
+  return groups
+}
+
+export function setFigureRowGroup(draft: FigureDocument, rowId: string, groupId: string | undefined): void {
+  for (const group of draft.groups ?? []) group.rowIds = group.rowIds.filter((id) => id !== rowId)
+  const group = draft.groups?.find((group) => group.id === groupId)
+  group?.rowIds.push(rowId)
+  const row = draft.rows.find((row) => row.id === rowId)
+  if (row) row.groupLabel = group?.label
+  draft.groups = (draft.groups ?? []).filter((group) => group.rowIds.length)
+}
+
+export function renameFigureGroup(draft: FigureDocument, id: string, label: string): void {
+  const group = draft.groups?.find((group) => group.id === id)
+  if (!group) return
+  group.label = label
+  const sourceGroup = draft.sourceDocument.groups.find((group) => group.id === id)
+  if (sourceGroup) sourceGroup.label = label
+  for (const row of draft.rows) if (group.rowIds.includes(row.id)) row.groupLabel = label
+}
+
+export function removeFigureGroup(draft: FigureDocument, id: string): void {
+  const group = draft.groups?.find((group) => group.id === id)
+  for (const row of draft.rows) if (group?.rowIds.includes(row.id)) row.groupLabel = undefined
+  draft.groups = draft.groups?.filter((group) => group.id !== id)
+}
+
+export function moveFigureGroup(draft: FigureDocument, id: string, direction: -1 | 1): void {
+  const group = draft.groups?.find((group) => group.id === id)
+  if (!group) return
+  const members = draft.rows.filter((row) => group.rowIds.includes(row.id))
+  const first = draft.rows.findIndex((row) => row.id === members[0]?.id)
+  const last = draft.rows.findIndex((row) => row.id === members.at(-1)?.id)
+  const neighbor = draft.rows[direction < 0 ? first - 1 : last + 1]
+  if (!neighbor) return
+  const peer = draft.groups?.find((candidate) => candidate.rowIds.includes(neighbor.id))
+  const remaining = draft.rows.filter((row) => !group.rowIds.includes(row.id))
+  let insertion = direction < 0 ? remaining.findIndex((row) => row.id === (peer ? remaining.find((row) => peer.rowIds.includes(row.id))!.id : neighbor.id)) : remaining.map((row) => peer ? peer.rowIds.includes(row.id) : row.id === neighbor.id).lastIndexOf(true) + 1
+  if (insertion < 0) insertion = remaining.length
+  remaining.splice(insertion, 0, ...members); draft.rows = remaining
 }
