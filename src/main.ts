@@ -1,3 +1,4 @@
+import { annotationTrackLabel } from './annotation-label.ts'
 import { openSignalStackMenu } from './signal-stack-menu.ts'
 import './style.css'
 import { ungzip } from 'pako-esm2'
@@ -1243,7 +1244,7 @@ function showGeneAnnotationLibrary(): void {
     anchor: document.querySelector<HTMLElement>('#file-menu-button')!,
     reference: activeReference,
     add(source, entry, size, downloadedAt) {
-      const sourceSpec: TrackSourceSpec = { id: crypto.randomUUID(), name: `${entry.label} · ${entry.assembly}`, format: entry.format, annotationUrl: entry.url, annotationDownloadedAt: downloadedAt, annotationReferenceId: activeReference.id, files: [{ name: entry.fileName, size, lastModified: Date.parse(downloadedAt), role: 'signal' }] }
+      const sourceSpec: TrackSourceSpec = { id: crypto.randomUUID(), name: annotationTrackLabel(entry.label, entry.assembly), format: entry.format, annotationUrl: entry.url, annotationDownloadedAt: downloadedAt, annotationReferenceId: activeReference.id, files: [{ name: entry.fileName, size, lastModified: Date.parse(downloadedAt), role: 'signal' }] }
       runtimeSources.set(sourceSpec.id, source)
       addOpenedTrack(sourceSpec, 'genes', crypto.randomUUID())
       void browser.attachSource(sourceSpec.id, source)

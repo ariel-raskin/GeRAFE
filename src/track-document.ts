@@ -1,3 +1,4 @@
+import { repairAnnotationLabel } from './annotation-label.ts'
 import { normalizeStackAppearance, type SignalStackAppearance } from './signal-stack-style.ts'
 import type { Region, SignalFeature } from './types.ts'
 
@@ -1126,6 +1127,15 @@ export function normalizeTrackDocument(value: unknown): TrackDocument {
   if (value.schemaVersion === 30) for (const group of document.groups) {
     if (group.signalStackMode !== 'collapsed') continue
     if (group.signalStackDifferentiation === 'shades-patterns') group.signalStackDifferentiation = 'patterns'
+  }
+  // Some development builds saved a misdecoded separator in downloaded annotation names.
+  // Repair generated track labels alongside provenance, retaining user-renamed/local labels.
+  for (const source of document.sources) if (source.annotationUrl) {
+    const previousName = source.name
+    source.name = repairAnnotationLabel(previousName)
+    if (source.name !== previousName) for (const track of document.tracks) {
+      if (track.kind === 'genes' && track.sourceIds.includes(source.id) && track.label === previousName) track.label = source.name
+    }
   }
   // Adopt the revised default once for existing stacks; later explicit outline/single-color choices persist.
   if (value.schemaVersion < 35) for (const group of document.groups) if (group.signalStackMode === 'collapsed') {

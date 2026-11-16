@@ -142,9 +142,12 @@ export function normalizeFigureDocument(value: unknown): FigureDocument {
   const rows = input.rows.map((row) => {
     if (!row || typeof row.id !== 'string' || rowIds.has(row.id) || !Array.isArray(row.trackIds) || row.trackIds.some((id) => !trackIds.has(id))) throw new Error('A figure row refers to an unavailable track.')
     rowIds.add(row.id)
+    const spec = sourceDocument.tracks.find((track) => track.id === row.trackIds[0])
+    const originalLabel = input.sourceDocument?.tracks?.find((track) => track.id === spec?.id)?.label
+    const label = spec?.kind === 'genes' && row.label === originalLabel ? spec.label : String(row.label ?? '')
     return {
       appearance: normalizeAppearance(rowFields, row.appearance),
-      id: row.id, label: String(row.label ?? ''), groupLabel: row.groupLabel === undefined ? undefined : String(row.groupLabel), trackIds: [...row.trackIds], included: row.included !== false,
+      id: row.id, label, groupLabel: row.groupLabel === undefined ? undefined : String(row.groupLabel), trackIds: [...row.trackIds], included: row.included !== false,
       heightMm: boundedNumber(row.heightMm, 1, 150, 13), gapAfterMm: boundedNumber(row.gapAfterMm, 0, 100, 0),
       labelFontSizePt: row.labelFontSizePt === undefined ? undefined : boundedNumber(row.labelFontSizePt, 4, 40, 9),
       labelColor: colorOrUndefined(row.labelColor), frameColor: colorOrUndefined(row.frameColor),
