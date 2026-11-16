@@ -3,6 +3,8 @@ import type { DisplayGroup, TrackSpec } from './track-document.ts'
 export const STACK_PATTERNS = ['none', 'diagonal', 'reverse', 'crosshatch', 'dots', 'horizontal', 'vertical'] as const
 export type StackPattern = typeof STACK_PATTERNS[number]
 export interface SignalStackAppearance {
+  blendMode: 'source-over' | 'multiply'
+  memberOpacity: Record<string, number>
   colorMode: 'same' | 'distinct' | 'original'
   color?: string
   fillPatterns: 'none' | 'hatches' | 'mixed'
@@ -18,6 +20,8 @@ export function normalizeStackAppearance(value: unknown): Partial<SignalStackApp
   const input = value as Partial<SignalStackAppearance>
   const bounded = (value: unknown, min: number, max: number, fallback: number) => typeof value === 'number' && Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback
   return {
+    blendMode: input.blendMode === 'multiply' ? 'multiply' : 'source-over',
+    memberOpacity: Object.fromEntries(Object.entries(input.memberOpacity ?? {}).filter(([, value]) => typeof value === 'number' && Number.isFinite(value)).map(([id, value]) => [id, bounded(value, 0, 100, 100)])),
     colorMode: ['same', 'distinct', 'original'].includes(input.colorMode ?? '') ? input.colorMode : undefined,
     color: typeof input.color === 'string' && /^#[0-9a-f]{6}$/i.test(input.color) ? input.color : undefined,
     fillPatterns: ['none', 'hatches', 'mixed'].includes(input.fillPatterns ?? '') ? input.fillPatterns : undefined,
@@ -34,12 +38,13 @@ export function stackAppearance(group: DisplayGroup, members: readonly Pick<Trac
   const differentiation = group.signalStackDifferentiation ?? 'patterns'
   const first = members.find((member) => member.id === group.signalStackStyleTrackIds?.[0]) ?? members[0]
   return {
+    blendMode: saved.blendMode ?? 'source-over', memberOpacity: saved.memberOpacity ?? {},
     colorMode: saved.colorMode ?? (differentiation === 'shades' || differentiation === 'shades-patterns' ? 'distinct' : 'original'),
     color: saved.color ?? group.color ?? first?.color ?? '#6d55e0',
     fillPatterns: saved.fillPatterns ?? 'none', memberPatterns: saved.memberPatterns ?? {},
     outlinePatterns: saved.outlinePatterns ?? (differentiation === 'patterns' || differentiation === 'shades-patterns'),
     patternOpacity: saved.patternOpacity ?? 65, patternSpacing: saved.patternSpacing ?? 8, lineWidth: saved.lineWidth ?? 1.75,
-    renderStyle: group.signalStackRenderStyle ?? 'line', opacity: group.signalStackOpacity ?? 30,
+    renderStyle: group.signalStackRenderStyle ?? 'fill-line', opacity: group.signalStackOpacity ?? 30,
   }
 }
 

@@ -13,9 +13,9 @@ function fixture() {
 }
 
 describe('signal stack appearance', () => {
-  it('starts new stacks with same-color transparent patterned fills and preserves styles across collapse', () => {
+  it('starts new stacks with individually colored transparent patterned fills and preserves styles across collapse', () => {
     const { doc, group, members } = fixture()
-    expect(stackAppearance(group, members)).toMatchObject({ colorMode: 'same', renderStyle: 'fill-line', opacity: 30, fillPatterns: 'mixed' })
+    expect(stackAppearance(group, members)).toMatchObject({ colorMode: 'original', renderStyle: 'fill-line', opacity: 30, fillPatterns: 'mixed' })
     group.signalStackOpacity = 42
     group.signalStackAppearance = { ...group.signalStackAppearance, color: '#123456', memberPatterns: { b: 'crosshatch' } }
     expandSignalStack(doc, group.id); collapseSignalStack(doc, group.id)
@@ -24,17 +24,22 @@ describe('signal stack appearance', () => {
     expect(members.map((member) => member.color)).toEqual(['#663399', '#117744', '#bb4400'])
   })
 
-  it('retains version-33 outline appearances instead of applying new-stack defaults', () => {
+  it('upgrades legacy outlines to filled overlays while preserving later explicit outline choices', () => {
     const { doc, group, members } = fixture()
     delete group.signalStackAppearance; delete group.signalStackOpacity
     group.signalStackRenderStyle = 'line'; group.signalStackDifferentiation = 'shades-patterns'
     const reopened = normalizeTrackDocument({ ...doc, schemaVersion: 33 })
-    expect(reopened.schemaVersion).toBe(34)
-    expect(stackAppearance(reopened.groups[0], members)).toMatchObject({ renderStyle: 'line', colorMode: 'distinct', outlinePatterns: true, fillPatterns: 'none' })
+    expect(reopened.schemaVersion).toBe(35)
+    expect(stackAppearance(reopened.groups[0], members)).toMatchObject({ renderStyle: 'fill-line', colorMode: 'original', outlinePatterns: true, fillPatterns: 'mixed' })
+    reopened.groups[0].signalStackRenderStyle = 'line'
+    reopened.groups[0].signalStackAppearance!.colorMode = 'same'
+    const current = normalizeTrackDocument(JSON.parse(JSON.stringify(reopened)))
+    expect(stackAppearance(current.groups[0], current.tracks)).toMatchObject({ renderStyle: 'line', colorMode: 'same' })
   })
 
   it('keeps shared color, automatic fill patterns and overrides attached to stable member IDs', () => {
     const { group, members } = fixture()
+    group.signalStackAppearance!.colorMode = 'same'
     group.signalStackAppearance!.memberPatterns = { b: 'vertical' }
     const original = signalStackDisplayEntries(group, members)
     const reordered = [members[2], members[0], members[1]]

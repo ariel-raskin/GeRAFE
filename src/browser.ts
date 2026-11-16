@@ -1940,7 +1940,7 @@ export class GenomeBrowser {
         const memberDomain = member.scaleBindingId ? domains.get(member.scaleBindingId) : domain
         const memberSegments = member.scaleBindingId && segmentDomains ? segmentDomains.map((segment) => ({ start: segment.start, end: segment.end, domain: segment.domains.get(member.scaleBindingId!) })) : segments
         const style = styles.get(member.id)!
-        const painted = this.drawSignalStackMember(member, style.color, style.dash, top, height, width, memberDomain, memberSegments, { ...appearance, pattern: style.pattern, phase })
+        const painted = this.drawSignalStackMember(member, style.color, style.dash, top, height, width, memberDomain, memberSegments, { ...appearance, opacity: appearance.opacity * style.opacity / 100, patternOpacity: appearance.patternOpacity * style.opacity / 100, memberOpacity: style.opacity, pattern: style.pattern, phase })
         if (memberIndex > 0 && phase === (appearance.renderStyle === 'line' ? 'line' : 'fill')) count += painted
       }
     }
@@ -1971,10 +1971,10 @@ export class GenomeBrowser {
       const y = startY + index * lineHeight
       ctx.globalAlpha = entry.hidden ? 0.42 : 1
       if (appearance.renderStyle !== 'line') {
-        ctx.globalAlpha *= appearance.opacity / 100
+        ctx.globalAlpha *= appearance.opacity / 100 * entry.opacity / 100
         ctx.fillStyle = color; ctx.fillRect(sampleLeft, y - 4, sampleRight - sampleLeft, 8)
         const pattern = canvasStackPattern(ctx, entry.pattern, color, appearance.patternSpacing)
-        if (pattern) { ctx.globalAlpha = (entry.hidden ? 0.42 : 1) * appearance.patternOpacity / 100; ctx.fillStyle = pattern; ctx.fillRect(sampleLeft, y - 4, sampleRight - sampleLeft, 8) }
+        if (pattern) { ctx.globalAlpha = (entry.hidden ? 0.42 : 1) * appearance.patternOpacity / 100 * entry.opacity / 100; ctx.fillStyle = pattern; ctx.fillRect(sampleLeft, y - 4, sampleRight - sampleLeft, 8) }
         ctx.globalAlpha = entry.hidden ? 0.42 : 1
       }
       ctx.strokeStyle = color
@@ -4581,7 +4581,7 @@ function paintSignalDomain(
 
 interface StackPaintStyle {
   opacity: number; patternOpacity: number; patternSpacing: number; lineWidth: number
-  pattern: StackPattern; phase: 'fill' | 'line'
+  pattern: StackPattern; phase: 'fill' | 'line'; blendMode: GlobalCompositeOperation; memberOpacity: number
 }
 
 function paintSmoothSignalDomain(
@@ -4629,8 +4629,9 @@ function paintSmoothSignalDomain(
       if (next) curve.quadraticCurveTo(point.x, point.y, (point.x + next.x) / 2, (point.y + next.y) / 2)
       else curve.lineTo(point.x, point.y)
     }
-    if (appearance.phase === 'line') ctx.stroke(curve)
+    if (appearance.phase === 'line') { ctx.globalAlpha = appearance.memberOpacity / 100; ctx.stroke(curve) }
     else {
+      ctx.globalCompositeOperation = appearance.blendMode
       const area = new Path2D(curve)
       const zero = Math.max(chartTop, Math.min(chartBottom, valueToY(0)))
       area.lineTo(points.at(-1)!.x + (points.length === 1 ? 0.5 : 0), zero); area.lineTo(points[0]!.x, zero); area.closePath()
@@ -4676,7 +4677,7 @@ export function signalStackDisplayEntries(group: DisplayGroup, members: readonly
   const styleIds = [...new Set([...(group.signalStackStyleTrackIds ?? []), ...members.map((member) => member.id)])]
   return signalStackLegendEntries(members, visibleMembers, a.colorMode === 'distinct' ? 'shades' : 'colors', group.signalStackHiddenTrackIds ?? [], styleIds).map((entry) => {
     const index = styleIds.indexOf(entry.id)
-    return { ...entry, color: a.colorMode === 'same' ? a.color : entry.color,
+    return { ...entry, opacity: a.memberOpacity[entry.id] ?? members.find((member) => member.id === entry.id)?.signalOpacity ?? 100, color: a.colorMode === 'same' ? a.color : entry.color,
       dash: signalStackDash(index, a.outlinePatterns ? 'patterns' : 'colors'),
       pattern: a.memberPatterns[entry.id] ?? stackMemberPattern(index, a.fillPatterns),
     }

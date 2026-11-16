@@ -562,7 +562,7 @@ describe('track document', () => {
     expect(normalizeTrackDocument(legacy).groups[0].signalStackMode).toBeUndefined()
   })
 
-  it('migrates untouched version 30 stack defaults to equal-weight patterned lines', () => {
+  it('migrates version 30 stacks to filled individual-color overlays without discarding opacity', () => {
     const legacy = documentWithTwoTracks() as any
     assignDisplayGroup(legacy, ['t1', 't2'], 'Replicates')
     const group = legacy.groups[0]
@@ -572,9 +572,9 @@ describe('track document', () => {
     })
     legacy.schemaVersion = 30
     expect(normalizeTrackDocument(legacy).groups[0]).toMatchObject({
-      signalStackMode: 'collapsed', signalStackDifferentiation: 'patterns', signalStackRenderStyle: 'line',
+      signalStackMode: 'collapsed', signalStackDifferentiation: 'patterns', signalStackRenderStyle: 'fill-line',
     })
-    expect(normalizeTrackDocument(legacy).groups[0].signalStackOpacity).toBeUndefined()
+    expect(normalizeTrackDocument(legacy).groups[0].signalStackOpacity).toBe(38)
   })
 
   it('detaches a single group member when it moves to another pane', () => {

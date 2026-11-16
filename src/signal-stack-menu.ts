@@ -46,19 +46,20 @@ export function openSignalStackMenu(options: {
     const members = doc.tracks.filter((track) => track.displayGroupId === group.id)
     const a = stackAppearance(group, members), entries = signalStackDisplayEntries(group, members)
     const active = panel.contains(document.activeElement) ? document.activeElement as HTMLElement : undefined
-    const focusKey = ['stack', 'pattern', 'visible', 'action', 'preset'].find((key) => active?.dataset[key])
+    const focusKey = ['stack', 'pattern', 'visible', 'action', 'preset', 'memberColor', 'memberOpacity'].find((key) => active?.dataset[key])
     const focusValue = focusKey ? active?.dataset[focusKey] : undefined
     const scroll = panel.scrollTop
     panel.innerHTML = `<header><div><strong>Signal stack appearance</strong><small>${esc(group.label)}</small></div><button class="menu-item" data-action="close" aria-label="Close stack appearance">×</button></header>
-      <div class="stack-presets"><button data-preset="patterned">Same color + patterns</button><button data-preset="colored">Colored fills</button><button data-preset="outlines">Outlines</button></div>
-      <section><h3>Rendering</h3>${select('Draw', 'renderStyle', a.renderStyle, [['fill-line', 'Filled + outline'], ['fill', 'Filled only'], ['line', 'Outline only']])}${slider('Fill opacity', 'opacity', a.opacity, 0, 100, '%', a.renderStyle === 'line')}</section>
-      <section><h3>Colors</h3>${select('Color mode', 'colorMode', a.colorMode, [['same', 'Same stack color'], ['distinct', 'Distinct colors'], ['original', 'Original track colors']])}<label><span>Stack color</span><input data-stack="color" type="color" value="${esc(a.color)}" ${a.colorMode !== 'same' ? 'disabled' : ''}/></label><p>Original track colors are preserved when you change the stack color.</p></section>
+      <div class="stack-presets"><button data-preset="patterned">Blended fills + patterns</button><button data-preset="colored">Colored fills</button><button data-preset="outlines">Outlines</button></div>
+      <section><h3>Rendering</h3>${select('Draw', 'renderStyle', a.renderStyle, [['fill-line', 'Filled + outline'], ['fill', 'Filled only'], ['line', 'Outline only']])}${slider('Fill opacity', 'opacity', a.opacity, 0, 100, '%', a.renderStyle === 'line')}${select('Overlap blending', 'blendMode', a.blendMode, [['source-over', 'Normal transparency'], ['multiply', 'Multiply colors']], a.renderStyle === 'line')}</section>
+      <section><h3>Colors</h3>${select('Color mode', 'colorMode', a.colorMode, [['original', 'Individual track colors (blend overlaps)'], ['distinct', 'Distinct generated colors'], ['same', 'One stack color']])}<label><span>Stack color</span><input data-stack="color" type="color" value="${esc(a.color)}" ${a.colorMode !== 'same' ? 'disabled' : ''}/></label><p>Original track colors are preserved when you change the stack color.</p></section>
       <section><h3>Patterns and outlines</h3>${select('Automatic fill patterns', 'fillPatterns', a.fillPatterns, [['mixed', 'Mixed hatches and dots'], ['hatches', 'Different hatches'], ['none', 'Solid fills']], a.renderStyle === 'line')}${slider('Pattern opacity', 'patternOpacity', a.patternOpacity, 0, 100, '%', a.renderStyle === 'line')}${slider('Pattern spacing', 'patternSpacing', a.patternSpacing, 4, 24, ' px', a.renderStyle === 'line')}<label class="stack-check"><input data-stack="outlinePatterns" type="checkbox" ${a.outlinePatterns ? 'checked' : ''} ${a.renderStyle === 'fill' ? 'disabled' : ''}/> Different outline dash patterns</label>${slider('Outline width', 'lineWidth', a.lineWidth, 0.5, 4, ' px', a.renderStyle === 'fill', 0.25)}</section>
       <section class="stack-members"><h3>Members <small>Lower rows paint on top</small></h3><p>Patterns stay with their tracks when reordered or hidden. Choose an individual pattern below to override the automatic scheme.</p>${entries.map((entry, index) => {
         const id = `stack-swatch-${index}`
-        return `<article data-member="${esc(entry.id)}"><label class="stack-member-name"><input type="checkbox" data-visible="${esc(entry.id)}" ${entry.hidden ? '' : 'checked'} ${!members[index].enabled ? 'disabled title="Enable this source track first"' : !entry.hidden && entries.filter((entry) => !entry.hidden).length === 1 ? 'disabled title="Keep at least one signal visible"' : ''}/><svg width="30" height="18" aria-hidden="true">${svgStackPattern(id, entry.pattern, entry.color, 7, 1)}${a.renderStyle !== 'line' ? `<rect width="30" height="18" fill="${esc(entry.color)}" opacity="${a.opacity / 100}"/><rect width="30" height="18" fill="url(#${id})" opacity="${a.patternOpacity / 100}"/>` : ''}${a.renderStyle !== 'fill' ? `<path d="M0 13 L8 5 L15 9 L24 3 L30 7" fill="none" stroke="${esc(entry.color)}" stroke-width="${a.lineWidth}" stroke-dasharray="${entry.dash.join(' ')}"/>` : ''}</svg><span title="${esc(entry.label)}">${esc(entry.label)}</span></label><div class="stack-member-options"><select aria-label="${esc(entry.label)} fill pattern" data-pattern="${esc(entry.id)}" ${a.renderStyle === 'line' ? 'disabled' : ''}><option value="auto" ${a.memberPatterns[entry.id] === undefined ? 'selected' : ''}>Automatic</option>${STACK_PATTERNS.map((pattern) => `<option value="${pattern}" ${a.memberPatterns[entry.id] === pattern ? 'selected' : ''}>${patternNames[pattern]}</option>`).join('')}</select><button data-move="${esc(entry.id)}" data-delta="-1" ${index === 0 ? 'disabled' : ''} aria-label="Move ${esc(entry.label)} earlier">↑</button><button data-move="${esc(entry.id)}" data-delta="1" ${index === members.length - 1 ? 'disabled' : ''} aria-label="Move ${esc(entry.label)} later">↓</button></div></article>`
+        return `<article data-member="${esc(entry.id)}"><label class="stack-member-name"><input type="checkbox" data-visible="${esc(entry.id)}" ${entry.hidden ? '' : 'checked'} ${!members[index].enabled ? 'disabled title="Enable this source track first"' : !entry.hidden && entries.filter((entry) => !entry.hidden).length === 1 ? 'disabled title="Keep at least one signal visible"' : ''}/><svg width="30" height="18" aria-hidden="true">${svgStackPattern(id, entry.pattern, entry.color, 7, 1)}${a.renderStyle !== 'line' ? `<rect width="30" height="18" fill="${esc(entry.color)}" opacity="${a.opacity / 100 * entry.opacity / 100}"/><rect width="30" height="18" fill="url(#${id})" opacity="${a.patternOpacity / 100 * entry.opacity / 100}"/>` : ''}${a.renderStyle !== 'fill' ? `<path d="M0 13 L8 5 L15 9 L24 3 L30 7" fill="none" stroke="${esc(entry.color)}" opacity="${entry.opacity / 100}" stroke-width="${a.lineWidth}" stroke-dasharray="${entry.dash.join(' ')}"/>` : ''}</svg><span title="${esc(entry.label)}">${esc(entry.label)}</span></label><div class="stack-member-options"><input type="color" data-member-color="${esc(entry.id)}" value="${esc(members[index].color)}" aria-label="${esc(entry.label)} color"/><select aria-label="${esc(entry.label)} fill pattern" data-pattern="${esc(entry.id)}" ${a.renderStyle === 'line' ? 'disabled' : ''}><option value="auto" ${a.memberPatterns[entry.id] === undefined ? 'selected' : ''}>Automatic</option>${STACK_PATTERNS.map((pattern) => `<option value="${pattern}" ${a.memberPatterns[entry.id] === pattern ? 'selected' : ''}>${patternNames[pattern]}</option>`).join('')}</select><button data-move="${esc(entry.id)}" data-delta="-1" ${index === 0 ? 'disabled' : ''} aria-label="Move ${esc(entry.label)} earlier">↑</button><button data-move="${esc(entry.id)}" data-delta="1" ${index === members.length - 1 ? 'disabled' : ''} aria-label="Move ${esc(entry.label)} later">↓</button></div><label class="stack-slider"><span>Member opacity</span><input type="range" min="0" max="100" value="${entry.opacity}" data-member-opacity="${esc(entry.id)}"/><output>${entry.opacity}%</output></label></article>`
       }).join('')}</section><footer><button data-action="undo" ${options.canUndo() ? '' : 'disabled'}>Undo</button><button data-action="redo" ${options.canRedo() ? '' : 'disabled'}>Redo</button><button data-action="close">Done</button></footer>`
-    const focusTarget = focusKey && focusValue ? panel.querySelector<HTMLElement>(`[data-${focusKey}="${CSS.escape(focusValue)}"]`) : undefined
+    const focusAttribute = focusKey?.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)
+    const focusTarget = focusAttribute && focusValue ? panel.querySelector<HTMLElement>(`[data-${focusAttribute}="${CSS.escape(focusValue)}"]`) : undefined
     if (focusTarget && !focusTarget.matches(':disabled')) focusTarget.focus({ preventScroll: true })
     else panel.querySelector<HTMLSelectElement>('select')?.focus({ preventScroll: true })
     panel.scrollTop = scroll; position()
@@ -66,11 +67,14 @@ export function openSignalStackMenu(options: {
   const apply = (draft: TrackDocument, input: HTMLInputElement | HTMLSelectElement) => {
     const group = draft.groups.find((group) => group.id === options.groupId)
     if (!group) return
+    if (input.dataset.memberColor) { const member = draft.tracks.find((track) => track.id === input.dataset.memberColor); if (member) member.color = input.value; (group.signalStackAppearance ??= {}).colorMode = 'original'; return }
+    if (input.dataset.memberOpacity) { ((group.signalStackAppearance ??= {}).memberOpacity ??= {})[input.dataset.memberOpacity] = Number(input.value); return }
     if (input.dataset.visible) { setSignalStackTrackVisible(draft, group.id, input.dataset.visible, (input as HTMLInputElement).checked); return }
     const style = group.signalStackAppearance ??= {}
     if (input.dataset.pattern) { const patterns = style.memberPatterns ??= {}; if (input.value === 'auto') delete patterns[input.dataset.pattern]; else patterns[input.dataset.pattern] = input.value as typeof STACK_PATTERNS[number]; return }
     const key = input.dataset.stack
-    if (key === 'renderStyle') group.signalStackRenderStyle = input.value as typeof group.signalStackRenderStyle
+    if (key === 'blendMode') style.blendMode = input.value as SignalStackAppearance['blendMode']
+    else if (key === 'renderStyle') group.signalStackRenderStyle = input.value as typeof group.signalStackRenderStyle
     else if (key === 'opacity') group.signalStackOpacity = Number(input.value)
     else if (key === 'outlinePatterns') style.outlinePatterns = (input as HTMLInputElement).checked
     else if (key === 'color') style.color = input.value
@@ -82,7 +86,7 @@ export function openSignalStackMenu(options: {
     const input = event.target as HTMLInputElement
     if (closed || !['range', 'color'].includes(input.type)) return
     const output = input.parentElement?.querySelector('output')
-    if (output) output.textContent = input.value + (input.dataset.stack === 'opacity' || input.dataset.stack === 'patternOpacity' ? '%' : ' px')
+    if (output) output.textContent = input.value + (input.dataset.memberOpacity || input.dataset.stack === 'opacity' || input.dataset.stack === 'patternOpacity' ? '%' : ' px')
     const draft = cloneDocument(options.current()); apply(draft, input); options.preview(draft)
   })
   panel.addEventListener('change', (event) => { if (!closed) { options.edit((draft) => apply(draft, event.target as HTMLInputElement)); render() } })
@@ -99,7 +103,7 @@ export function openSignalStackMenu(options: {
       if (button.dataset.preset) {
         const preset = button.dataset.preset
         group.signalStackRenderStyle = preset === 'outlines' ? 'line' : 'fill-line'; group.signalStackOpacity = 30
-        Object.assign(group.signalStackAppearance ??= {}, { colorMode: preset === 'colored' ? 'distinct' : 'same', fillPatterns: preset === 'patterned' ? 'mixed' : 'none', outlinePatterns: preset === 'outlines', memberPatterns: {} })
+        Object.assign(group.signalStackAppearance ??= {}, { colorMode: preset === 'colored' ? 'distinct' : 'original', fillPatterns: preset === 'patterned' ? 'mixed' : 'none', outlinePatterns: preset === 'outlines', memberPatterns: {} })
       }
     })
     options.preview(options.current()); render()
