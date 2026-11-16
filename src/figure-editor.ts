@@ -1,8 +1,10 @@
+import { signalStackDisplayEntries } from './browser.ts'
+import { FigureLabelControls, type LabelSelection } from './figure-label-controls.ts'
 import { stackAppearance } from './signal-stack-style.ts'
 import { pageFields, rowFields, cellFields, resolveAppearance, type AppearanceField } from './figure-appearance.ts'
 import { invoke } from '@tauri-apps/api/core'
 import { pickNativeFilePaths } from './desktop-track-picker.ts'
-import { addFigureColumn, applyManuscriptPreset, figureStackGroup, figureRequiredSourceIds, FigureDocumentStore, normalizeFigureDocument, setFigureColumnRegion, type FigureCellStyle, type FigureDocument } from './figure-document.ts'
+import { addFigureColumn, applyManuscriptPreset, figureAssignedTrackIds, figureStackGroup, figureRequiredSourceIds, FigureDocumentStore, normalizeFigureDocument, setFigureColumnRegion, setFigureRowGroup, renameFigureGroup, moveFigureGroup, type FigureCellStyle, type FigureDocument } from './figure-document.ts'
 import { FigureRenderSession, figureScaleSections, figureSvgToPng } from './figure-render.ts'
 import { formatLocus, parseLocus } from './genome.ts'
 import { isDesktopApp, listNativeDirectory, readNativeTextFile, writeNativeTextFile } from './native-file.ts'
@@ -13,7 +15,7 @@ import type { TrackSourceSpec } from './track-document.ts'
 import type { Region, TrackSource } from './types.ts'
 
 const FIGURE_FOLDER_KEY = 'gerafe:last-figure-folder'
-type Selection = { kind: 'page' } | { kind: 'row'; rowId: string } | { kind: 'column'; columnId: string } | { kind: 'cell'; rowId: string; columnId: string }
+type Selection = LabelSelection | { kind: 'page' } | { kind: 'row'; rowId: string } | { kind: 'column'; columnId: string } | { kind: 'cell'; rowId: string; columnId: string }
 
 export interface FigureEditorOptions {
   document: FigureDocument
@@ -35,6 +37,7 @@ export class FigureEditor {
   private projectPath?: string
   private savedSnapshot: string
   private zoom = 1
+  private labels: FigureLabelControls
 
   constructor(private readonly options: FigureEditorOptions) {
     this.store = new FigureDocumentStore(options.document)
@@ -59,19 +62,21 @@ export class FigureEditor {
       </header>
       <div class="fe-workspace">
         <aside class="fe-sidebar" aria-label="Figure layers"><div data-role="layers"></div></aside>
-        <main class="fe-stage"><div class="fe-stage-tools"><span data-role="status">Preparing figure…</span><span class="fe-spacer"></span><button type="button" data-action="zoom-out">−</button><span data-role="zoom">100%</span><button type="button" data-action="zoom-in">+</button><button type="button" data-action="zoom-fit">Fit</button></div><div class="fe-scroll"><div class="fe-page" data-role="page-preview"></div></div></main>
+        <main class="fe-stage"><div class="fe-stage-tools"><span data-role="status">Preparing figure…</span><span class="fe-spacer"></span><button type="button" data-action="zoom-out">−</button><span data-role="zoom">100%</span><button type="button" data-action="zoom-in">+</button><button type="button" data-action="zoom-fit">Fit</button><button type="button" data-action="zoom-actual">100%</button><button type="button" data-action="zoom-detail">200%</button></div><div class="fe-scroll"><div class="fe-page" data-role="page-preview"></div></div></main>
         <aside class="fe-inspector" aria-label="Figure properties"><div data-role="inspector"></div></aside>
       </div>
       <div class="fe-toast" data-role="toast" role="status" hidden></div>`
     document.body.append(this.root)
     this.root.addEventListener('click', (event) => void this.onClick(event))
     this.root.addEventListener('change', (event) => void this.onChange(event))
+    this.labels = new FigureLabelControls({ root: this.root, current: () => this.store.current, edit: (change) => this.edit(change), select: (selection) => { this.selection = selection; this.renderLayers(); this.renderInspector(); this.labels.highlight() }, previewSource: (source) => { const draft = structuredClone(this.store.current); draft.sourceDocument = source; void this.renderPreview(draft) }, undo: () => { this.store.undo(); this.refresh() }, redo: () => { this.store.redo(); this.refresh() }, canUndo: () => this.store.canUndo, canRedo: () => this.store.canRedo })
+    document.addEventListener('keydown', this.onKeyboard, true)
   }
 
   get currentDocument(): FigureDocument { return this.store.current }
   show(): void { this.root.hidden = false; this.refresh() }
-  hide(): void { this.root.hidden = true; this.options.onClose() }
-  dispose(): void { this.root.remove() }
+  hide(): void { this.labels.close(); document.querySelector('.signal-stack-menu')?.dispatchEvent(new Event('cancel', { cancelable: true })); this.root.hidden = true; this.options.onClose() }
+  dispose(): void { this.labels.close(); document.removeEventListener('keydown', this.onKeyboard, true); this.root.remove() }
 
   private edit(change: (document: FigureDocument) => void): void {
     try { this.store.edit(change); this.refresh() }
@@ -95,11 +100,29 @@ export class FigureEditor {
   }
 
   private renderLayers(): void {
-    const document = this.store.current
+    const doc = this.store.current
     const layers = this.root.querySelector<HTMLElement>('[data-role="layers"]')!
-    layers.innerHTML = `<div class="fe-sidebar-section"><h2>Figure</h2><button type="button" class="${this.selection.kind === 'page' ? 'is-selected' : ''}" data-select="page">Page · ${document.page.widthMm} mm</button><button type="button" data-action="manuscript-preset">Compact manuscript layout</button><button type="button" data-action="three-columns">Set up 3 comparison columns</button></div>
-      <div class="fe-sidebar-section"><h2>Columns</h2>${document.columns.map((column, index) => `<div class="fe-layer-line"><button type="button" class="${this.selection.kind === 'column' && this.selection.columnId === column.id ? 'is-selected' : ''}" data-select="column" data-column="${esc(column.id)}">${index + 1}. ${esc(column.title || formatLocus(column.region))}</button><button type="button" data-action="adjust-region" data-column="${esc(column.id)}" title="Adjust genomic region">↔</button></div>`).join('')}<button type="button" data-action="add-column" ${document.columns.length >= 8 ? 'disabled' : ''}>+ Add column</button></div>
-      <div class="fe-sidebar-section"><h2>Track rows</h2>${document.rows.map((row, index) => `<div class="fe-layer-line ${row.included ? '' : 'is-excluded'}"><button type="button" class="${this.selection.kind === 'row' && this.selection.rowId === row.id ? 'is-selected' : ''}" data-select="row" data-row="${esc(row.id)}">${esc(row.label || docTrackLabel(document, row.trackIds[0]))}</button><button type="button" data-action="row-up" data-row="${esc(row.id)}" ${!document.rows.slice(0, index).some((candidate) => candidate.included === row.included) ? 'disabled' : ''} title="Move row up">↑</button><button type="button" data-action="row-down" data-row="${esc(row.id)}" ${!document.rows.slice(index + 1).some((candidate) => candidate.included === row.included) ? 'disabled' : ''} title="Move row down">↓</button><button type="button" data-action="row-toggle" data-row="${esc(row.id)}" title="${row.included ? 'Remove from figure' : 'Restore to figure'}">${row.included ? '×' : '+'}</button></div>`).join('')}</div>`
+    const rowMarkup = (row: FigureDocument['rows'][number]) => {
+      const index = doc.rows.indexOf(row)
+      const stack = figureStackGroup(doc, doc.columns[0], row.id)
+      const visible = figureAssignedTrackIds(doc, doc.columns[0], row.id)
+      const entries = stack ? signalStackDisplayEntries(stack, doc.sourceDocument.tracks.filter((track) => track.displayGroupId === stack.id)).filter((entry) => visible.includes(entry.id)) : []
+      const memberList = entries.length ? `<div class="fe-stack-members">${entries.map((entry) => `<button data-label-member="${esc(entry.id)}" data-label-row-id="${esc(row.id)}" title="${esc(entry.label)}"><svg width="5" height="12" aria-hidden="true"><rect width="5" height="12" fill="${esc(doc.columns[0].styles?.[row.id]?.color ?? entry.color)}"/></svg><span>${esc(entry.label)}</span></button>`).join('')}</div>` : ''
+      return `<div class="fe-layer-line ${row.included ? '' : 'is-excluded'}"><button type="button" class="${('rowId' in this.selection && this.selection.rowId === row.id) ? 'is-selected' : ''}" data-select="row" data-row="${esc(row.id)}">${esc(row.label || (stack ? `${visible.length} stacked tracks` : '') || docTrackLabel(doc, row.trackIds[0]))}</button><button type="button" data-action="row-up" data-row="${esc(row.id)}" ${!doc.rows.slice(0, index).some((candidate) => candidate.included === row.included) ? 'disabled' : ''}>↑</button><button type="button" data-action="row-down" data-row="${esc(row.id)}" ${!doc.rows.slice(index + 1).some((candidate) => candidate.included === row.included) ? 'disabled' : ''}>↓</button><button type="button" data-action="row-toggle" data-row="${esc(row.id)}" title="${row.included ? 'Remove from figure' : 'Restore to figure'}">${row.included ? '×' : '+'}</button></div>${row.included ? memberList : ''}`
+    }
+    let previousGroup = ''
+    const rows = doc.rows.filter((row) => row.included).map((row) => {
+      const group = doc.groups?.find((group) => group.rowIds.includes(row.id))
+      const heading = group && previousGroup !== group.id ? `<div class="fe-layer-group"><button data-select="group" data-group="${esc(group.id)}">${esc(group.label)}</button><button data-action="group-up" data-group="${esc(group.id)}" title="Move group up">↑</button><button data-action="group-down" data-group="${esc(group.id)}" title="Move group down">↓</button></div>` : ''
+      previousGroup = group?.id ?? ''
+      return heading + rowMarkup(row)
+    }).join('')
+    const unused = doc.rows.filter((row) => !row.included)
+    const unusedOpen = layers.querySelector<HTMLDetailsElement>('.fe-unused')?.open ?? false
+    layers.innerHTML = `<div class="fe-sidebar-section"><h2>Figure</h2><button type="button" class="${this.selection.kind === 'page' ? 'is-selected' : ''}" data-select="page">Page · ${doc.page.widthMm} mm</button><button type="button" data-action="manuscript-preset">Compact manuscript layout</button><button type="button" data-action="three-columns">Set up 3 comparison columns</button></div>
+      <div class="fe-sidebar-section"><h2>Columns</h2>${doc.columns.map((column, index) => `<div class="fe-layer-line"><button type="button" data-select="column" data-column="${esc(column.id)}">${index + 1}. ${esc(column.title || formatLocus(column.region))}</button><button type="button" data-action="adjust-region" data-column="${esc(column.id)}" title="Adjust genomic region">↔</button></div>`).join('')}<button type="button" data-action="add-column" ${doc.columns.length >= 8 ? 'disabled' : ''}>+ Add column</button></div>
+      <div class="fe-sidebar-section"><h2>Track rows</h2><p class="fe-help">Ctrl/Shift-click labels to select rows. Right-click labels to rename or group.</p>${rows}${unused.length ? `<details class="fe-unused" ${unusedOpen ? 'open' : ''}><summary>Unused source rows (${unused.length})</summary>${unused.map(rowMarkup).join('')}</details>` : ''}</div>`
+    this.labels?.highlight()
   }
 
   private renderInspector(): void {
@@ -107,6 +130,7 @@ export class FigureEditor {
     const selection = this.selection
     const inspector = this.root.querySelector<HTMLElement>('[data-role="inspector"]')!
     const field = (label: string, name: string, value: string | number, type = 'text', attributes = '') => `<label class="fe-field"><span>${esc(label)}</span><input data-edit="${name}" type="${type}" value="${esc(String(value))}" ${attributes}/></label>`
+    if (selection.kind === 'group' || selection.kind === 'member') { inspector.innerHTML = this.labels.renderInspector(selection); return }
     if (selection.kind === 'page') {
       const required = figureRequiredSourceIds(doc)
       const missing = doc.sourceDocument.sources.filter((source) => required.has(source.id) && !this.sources.has(source.id))
@@ -127,7 +151,8 @@ export class FigureEditor {
     }
     const row = doc.rows.find((item) => item.id === selection.rowId)
     if (!row) { this.selection = { kind: 'page' }; this.renderInspector(); return }
-    const rowControls = `<h2>Track row</h2>${field('Figure label', 'row-label', row.label)}${field('Assay/group label', 'row-group-label', row.groupLabel ?? '')}${field('Height (mm)', 'row-height', row.heightMm, 'number', 'min="1" max="150" step="any"')}${field('Gap after (mm)', 'row-gap', row.gapAfterMm, 'number', 'min="0" max="100" step="0.5"')}${field('Label size (pt)', 'row-font-size', row.labelFontSizePt ?? doc.page.fontSizePt, 'number', 'min="4" max="40" step="0.5"')}${field('Label color', 'row-label-color', row.labelColor ?? '#111111', 'color')}${field('Frame color', 'row-frame-color', row.frameColor ?? '#444444', 'color')}${field('Frame width (pt)', 'row-frame-width', row.frameWidthPt ?? 0.5, 'number', 'min="0" max="8" step="0.1"')}${appearanceControls('row', rowFields, row.appearance)}`
+    this.labels.selectRow(row.id)
+    const rowControls = `<h2>Track row</h2>${field('Figure label', 'row-label', row.label)}${field('Group name (shared)', 'row-group-label', row.groupLabel ?? '')}${field('Height (mm)', 'row-height', row.heightMm, 'number', 'min="1" max="150" step="any"')}${field('Gap after (mm)', 'row-gap', row.gapAfterMm, 'number', 'min="0" max="100" step="0.5"')}${field('Label size (pt)', 'row-font-size', row.labelFontSizePt ?? doc.page.fontSizePt, 'number', 'min="4" max="40" step="0.5"')}${field('Label color', 'row-label-color', row.labelColor ?? '#111111', 'color')}${field('Frame color', 'row-frame-color', row.frameColor ?? '#444444', 'color')}${field('Frame width (pt)', 'row-frame-width', row.frameWidthPt ?? 0.5, 'number', 'min="0" max="8" step="0.1"')}${appearanceControls('row', Object.fromEntries(Object.entries(rowFields).filter(([key]) => !key.startsWith('group'))), row.appearance)}`
     const assignments = doc.columns.map((column, index) => {
       const assigned = column.assignments[row.id] ?? []
       const options = doc.sourceDocument.tracks.map((track) => `<option value="${esc(track.id)}" ${assigned.length === 1 && assigned[0] === track.id ? 'selected' : ''}>${esc(track.label)}</option>`).join('')
@@ -156,23 +181,25 @@ export class FigureEditor {
         }).join('') : ''
       return `<details class="fe-cell-style" data-detail="cell-${esc(column.id)}" ${selection.kind === 'row' || selection.columnId === column.id ? 'open' : ''}><summary>${esc(column.title || `Column ${index + 1}`)} appearance</summary>${color}${negativeColor}${opacity}${scale}${sectionFields}${graph}${palette}${appearanceControls('cell', cellFields, inheritedStack ? { lineWidthPt: inheritedStack.lineWidth * 72 / 96, ...style.appearance } : style.appearance, `data-column="${esc(column.id)}"`, spec?.kind)}<div class="fe-inline-actions"><button type="button" data-action="copy-cell-style" data-column="${esc(column.id)}" data-row="${esc(row.id)}">Apply appearance to all columns</button><button type="button" data-action="reset-cell-style" data-column="${esc(column.id)}" data-row="${esc(row.id)}">Reset appearance</button></div></details>`
     }).join('')
-    inspector.innerHTML = rowControls + `<h3>Column assignments</h3>${assignments}<button type="button" data-action="consolidate-row" data-row="${esc(row.id)}">Hide separate rows for these assigned tracks</button><p class="fe-help">Click a rendered cell to select it. Figure styling does not alter the GeR workspace.</p>${styleControls}`
+    inspector.innerHTML = rowControls + `<label class="fe-field"><span>Group membership</span><select data-edit="row-group"><option value="">Ungrouped</option>${(doc.groups ?? []).map((group) => `<option value="${esc(group.id)}" ${group.rowIds.includes(row.id) ? 'selected' : ''}>${esc(group.label)}</option>`).join('')}</select></label><button data-label-action="group-selected">Group selected rows…</button><h3>Column assignments</h3>${assignments}<button type="button" data-action="consolidate-row" data-row="${esc(row.id)}">Hide separate rows for these assigned tracks</button><p class="fe-help">Click a rendered cell to select it. Figure styling does not alter the GeR workspace.</p>${styleControls}`
   }
 
-  private async renderPreview(): Promise<void> {
+  private async renderPreview(override?: FigureDocument): Promise<void> {
     if (this.root.hidden) return
     const version = ++this.renderVersion
     const status = this.root.querySelector<HTMLElement>('[data-role="status"]')!
     status.textContent = 'Rendering figure from source data…'
     try {
-      const result = await this.session.render(this.store.current, this.sources, this.options.genes())
+      const figure = override ?? this.store.current
+      const result = await this.session.render(figure, this.sources, this.options.genes(), Number(resolveAppearance(pageFields, figure.page.appearance).queryDpi))
       if (version !== this.renderVersion || this.root.hidden) return
       const preview = this.root.querySelector<HTMLElement>('[data-role="page-preview"]')!
       preview.innerHTML = result.svg
+      this.labels.highlight()
       const svg = preview.querySelector('svg')!
       svg.style.width = `${Math.round(result.widthMm * 96 / 25.4 * this.zoom)}px`
       svg.style.height = 'auto'
-      status.textContent = result.issues.length ? `${result.issues.length} source issue${result.issues.length === 1 ? '' : 's'} · review before export` : `${this.store.current.rows.filter((row) => row.included).length} rows · ${this.store.current.columns.length} column${this.store.current.columns.length === 1 ? '' : 's'} · ${result.widthMm.toFixed(0)} × ${result.heightMm.toFixed(0)} mm`
+      status.textContent = result.issues.length ? `${result.issues.length} source issue${result.issues.length === 1 ? '' : 's'} · review before export` : `${this.store.current.rows.filter((row) => row.included).length} rows · vector preview · ${this.store.current.columns.length} column${this.store.current.columns.length === 1 ? '' : 's'} · ${result.widthMm.toFixed(0)} × ${result.heightMm.toFixed(0)} mm`
       status.title = result.issues.join('\n')
     } catch (error) {
       if (version !== this.renderVersion) return
@@ -185,19 +212,23 @@ export class FigureEditor {
     const target = event.target as Element
     const select = target.closest<HTMLElement>('[data-select]')
     if (select) {
-      this.selection = select.dataset.select === 'column' ? { kind: 'column', columnId: select.dataset.column! } : select.dataset.select === 'row' ? { kind: 'row', rowId: select.dataset.row! } : { kind: 'page' }
+      if (select.dataset.select === 'page' || select.dataset.select === 'column') this.labels.clearSelection()
+      this.selection = select.dataset.select === 'group' ? { kind: 'group', groupId: select.dataset.group! } : select.dataset.select === 'column' ? { kind: 'column', columnId: select.dataset.column! } : select.dataset.select === 'row' ? { kind: 'row', rowId: select.dataset.row! } : { kind: 'page' }
       this.renderLayers(); this.renderInspector(); return
     }
     const cell = target.closest<HTMLElement>('[data-fe-row][data-fe-column]')
     if (cell) { this.selection = { kind: 'cell', rowId: cell.dataset.feRow!, columnId: cell.dataset.feColumn! }; this.renderLayers(); this.renderInspector(); return }
     const action = target.closest<HTMLButtonElement>('[data-action]')
-    if (!action) return
+    if (!action) { if (target.closest('.fe-scroll')) { this.labels.clearSelection(); this.selection = { kind: 'page' }; this.renderLayers(); this.renderInspector() } return }
     const rowId = action.dataset.row
     const columnId = action.dataset.column
     switch (action.dataset.action) {
       case 'back': this.hide(); break
       case 'undo': this.store.undo(); this.refresh(); break
       case 'redo': this.store.redo(); this.refresh(); break
+      case 'zoom-actual': this.zoom = 1; this.refresh(); break
+      case 'zoom-detail': this.zoom = 2; this.refresh(); break
+      case 'group-up': case 'group-down': this.edit((draft) => moveFigureGroup(draft, action.dataset.group!, action.dataset.action === 'group-up' ? -1 : 1)); break
       case 'zoom-in': this.zoom = Math.min(3, this.zoom * 1.2); this.refresh(); break
       case 'zoom-out': this.zoom = Math.max(0.25, this.zoom / 1.2); this.refresh(); break
       case 'zoom-fit': this.zoom = Math.max(0.25, Math.min(1.5, (this.root.querySelector('.fe-scroll')!.clientWidth - 48) / (this.store.current.page.widthMm * 96 / 25.4))); this.refresh(); break
@@ -296,7 +327,13 @@ export class FigureEditor {
       else if (selection.kind === 'row' || selection.kind === 'cell') {
         const row = draft.rows.find((candidate) => candidate.id === selection.rowId)!
         if (key === 'row-label') row.label = input.value
-        else if (key === 'row-group-label') row.groupLabel = input.value.trim() || undefined
+        else if (key === 'row-group') setFigureRowGroup(draft, row.id, input.value || undefined)
+        else if (key === 'row-group-label') {
+          const current = draft.groups?.find((group) => group.rowIds.includes(row.id)), name = input.value.trim()
+          if (!name) setFigureRowGroup(draft, row.id, undefined)
+          else if (current) renameFigureGroup(draft, current.id, name)
+          else { const existing = draft.groups?.find((group) => group.label === name); if (existing) setFigureRowGroup(draft, row.id, existing.id); else { (draft.groups ??= []).push({ id: crypto.randomUUID(), label: name, rowIds: [row.id], appearance: {} }); row.groupLabel = name } }
+        }
         else if (key === 'row-height') row.heightMm = number
         else if (key === 'row-gap') row.gapAfterMm = number
         else if (key === 'row-font-size') row.labelFontSizePt = number
@@ -328,6 +365,21 @@ export class FigureEditor {
         }
       }
     })
+  }
+
+  private onKeyboard = (event: KeyboardEvent): void => {
+    if (this.root.hidden) return
+    const key = event.key.toLowerCase(), control = event.ctrlKey || event.metaKey
+    if (document.querySelector('.signal-stack-menu') && (key === 'escape' || control && ['z', 'y'].includes(key))) return
+    if (key === 'escape') { this.labels.close(); event.stopImmediatePropagation(); return }
+    if (!control || !['z', 'y', 's', 'o', 'a'].includes(key)) return
+    event.stopImmediatePropagation()
+    const target = event.target as HTMLElement
+    if (['z', 'y', 'a'].includes(key) && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable)) return
+    event.preventDefault()
+    if (key === 'z' || key === 'y') { if (key === 'y' || event.shiftKey) this.store.redo(); else this.store.undo(); this.refresh() }
+    if (key === 's') void this.saveProject(event.shiftKey)
+    if (key === 'o') void this.openProject()
   }
 
   private async adjustRegion(columnId: string): Promise<void> {
@@ -365,7 +417,7 @@ export class FigureEditor {
       temporary.columns = [{ ...structuredClone(column), region: context }]
       temporary.page.widthMm = 180
       try {
-        const result = await this.session.render(temporary, this.sources, this.options.genes())
+        const result = await this.session.render(temporary, this.sources, this.options.genes(), Number(resolveAppearance(pageFields, temporary.page.appearance).queryDpi))
         if (version !== generation || !dialog.isConnected) return
         const preview = dialog.querySelector<HTMLElement>('.fe-crop-preview')!
         preview.innerHTML = result.svg
@@ -491,7 +543,7 @@ export class FigureEditor {
       const dpi = format === 'png' ? Number((await this.askDpi()) ?? 0) : 600
       if (!dpi) return
       status.textContent = `Rendering ${format.toUpperCase()} from source data…`
-      const result = await this.session.render(this.store.current, this.sources, this.options.genes(), dpi)
+      const result = await this.session.render(this.store.current, this.sources, this.options.genes(), Number(resolveAppearance(pageFields, this.store.current.page.appearance).queryDpi))
       if (result.issues.length && !await this.confirmIssues(result.issues)) { this.refresh(); return }
       const name = safeFileStem(this.store.current.name) + `.${format}`
       const path = isDesktopApp() ? await this.pickSavePath(name, format) : undefined

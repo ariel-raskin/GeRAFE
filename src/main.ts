@@ -2501,7 +2501,6 @@ function openGroupContextMenu(groupId: string, x: number, y: number): void {
   const stackItems = group.signalStackMode === 'collapsed' ? [
     action('signal-stack-expand', 'Expand into separate tracks'),
     '<span class="context-separator"></span>',
-    action('signal-stack-appearance', 'Stack appearance…', 'Fills, colors, patterns, members'),
   ].join('') : action('signal-stack-collapse', 'Collapse into signal stack')
   trackContextMenu.innerHTML = `
     <div class="context-heading"><strong>${escapeHtml(group.label)}</strong><span>${members.length} track${members.length === 1 ? '' : 's'} · group options</span></div>

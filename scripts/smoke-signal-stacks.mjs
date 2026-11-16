@@ -51,14 +51,14 @@ try {
     const group = (await state()).groups[0], ids = (await state()).tracks.filter((track) => track.kind === 'signal').map((track) => track.id)
     const open = async () => {
       await page.mouse.click(box.x + 60, box.y + 35, { button: 'right' })
-      await page.locator('[data-context-submenu="signal-stack"]').hover()
+      await page.locator('[data-context-submenu="group-appearance"]').hover()
       await page.locator('[data-context-action="signal-stack-appearance"]').click()
       await page.locator('.signal-stack-menu').waitFor()
     }
     await open()
     assert.equal(await page.locator('.signal-stack-menu').evaluate((element) => element.matches(':modal')), false)
     assert.equal(await page.locator('[data-stack="renderStyle"]').inputValue(), 'fill-line')
-    assert.equal(await page.locator('[data-stack="colorMode"]').inputValue(), 'same')
+    assert.equal(await page.locator('[data-stack="colorMode"]').inputValue(), 'original')
     await page.locator('[data-preset="outlines"]').click()
     assert(await page.locator('[data-stack="opacity"]').isDisabled())
     await page.locator('[data-preset="patterned"]').click()
@@ -67,6 +67,46 @@ try {
       await page.locator(`[data-stack="${key}"]`).dispatchEvent('input')
       await page.locator(`[data-stack="${key}"]`).dispatchEvent('change'); await settle()
     }
+    // Analytic color checks: each member's color and opacity must contribute to an overlap.
+    await page.locator('[data-stack="fillPatterns"]').selectOption('none')
+    await page.locator('[data-stack="renderStyle"]').selectOption('line')
+    for (const [id, color] of [[ids[0], '#ff0000'], [ids[1], '#0000ff']]) {
+      await page.locator(`[data-member-color="${id}"]`).fill(color)
+      await page.locator(`[data-member-color="${id}"]`).dispatchEvent('change')
+    }
+    await page.locator(`[data-visible="${ids[2]}"]`).uncheck()
+    await page.waitForTimeout(200)
+    const sample = () => canvas.evaluate(async (node) => {
+      const { signalChartBounds, trackPixelHeight } = await import('/src/browser.ts')
+      const state = JSON.parse(localStorage.getItem('gerafe-track-document'))
+      const track = state.tracks.find((track) => track.kind === 'signal')
+      const height = track.fittedHeight ?? track.manualPixelHeight ?? trackPixelHeight(track.kind, track.height)
+      const chart = signalChartBounds(0, height, false)
+      const values = [0, 1].flatMap((member) => Array.from({ length: 100 }, (_, bin) => Number((Math.sin(bin / 12 + member) * (10 + member * 3)).toFixed(3))))
+      const min = Math.min(0, ...values), max = Math.max(0, ...values)
+      const ratio = node.width / node.getBoundingClientRect().width
+      const x = (176 + (node.getBoundingClientRect().width - 176) * 0.205) * ratio
+      const y = (chart.bottom - (4 - min) / (max - min) * (chart.bottom - chart.top)) * ratio
+      return [...node.getContext('2d').getImageData(Math.floor(x), Math.floor(y), 1, 1).data].slice(0, 3)
+    })
+    await settle(); const background = await sample()
+    await page.locator('[data-stack="renderStyle"]').selectOption('fill')
+    await commitRange('opacity', 50)
+    const mixed = await sample()
+    const expected = background.map((channel, index) => channel * 0.25 + [255, 0, 0][index] * 0.25 + [0, 0, 255][index] * 0.5)
+    mixed.forEach((channel, index) => assert(Math.abs(channel - expected[index]) < 4, `Member colors must blend at DPR ${dpr}: ${mixed} versus ${expected}`))
+    await page.locator(`[data-member-opacity="${ids[1]}"]`).evaluate((input) => { input.value = '50' })
+    await page.locator(`[data-member-opacity="${ids[1]}"]`).dispatchEvent('change'); await settle()
+    const reduced = await sample(), reducedExpected = background.map((channel, index) => channel * 0.375 + [255, 0, 0][index] * 0.375 + [0, 0, 255][index] * 0.25)
+    reduced.forEach((channel, index) => assert(Math.abs(channel - reducedExpected[index]) < 4))
+    await page.locator(`[data-member-opacity="${ids[1]}"]`).evaluate((input) => { input.value = '100' })
+    await page.locator(`[data-member-opacity="${ids[1]}"]`).dispatchEvent('change')
+    await page.locator('[data-stack="blendMode"]').selectOption('multiply'); await settle()
+    assert((await sample())[2] < mixed[2] - 20, 'Multiply must use individual member colors.')
+    await page.locator('[data-stack="blendMode"]').selectOption('source-over')
+    await page.locator(`[data-visible="${ids[2]}"]`).check()
+    await commitRange('opacity', 30)
+    await page.locator('[data-stack="colorMode"]').selectOption('same')
     await page.locator('[data-stack="color"]').fill('#2855cc'); await page.locator('[data-stack="color"]').dispatchEvent('change')
     await page.locator('[data-stack="fillPatterns"]').selectOption('none')
     const pixels = () => canvas.evaluate((node) => {

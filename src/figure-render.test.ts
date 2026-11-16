@@ -14,7 +14,7 @@ describe('figure rendering', () => {
     assignDisplayGroup(source, ['a', 'b', 'c'], 'Stack'); collapseSignalStack(source, source.groups[0].id)
     const group = source.groups[0]
     group.signalStackHiddenTrackIds = ['c']
-    group.signalStackAppearance!.color = '#123abc'
+    group.signalStackAppearance!.colorMode = 'same'; group.signalStackAppearance!.color = '#123abc'
     group.signalStackAppearance!.memberPatterns = { b: 'crosshatch' }
     source.comparisonDividers.push({ id: 'split', chr: 'chr1', position: 500, color: '#777777', lineStyle: 'solid' })
     const figure = createFigureDocument(source)
@@ -36,7 +36,7 @@ describe('figure rendering', () => {
     expect(single.issues).toEqual([])
     expect(single.svg).toContain('data-stack-pattern="diagonal"')
   })
-  it('renders a compact three-condition panel with one reserved color bar and an attached editable recipe', async () => {
+  it('renders a compact three-condition panel with non-overlapping inside color bars and an attached editable recipe', async () => {
     const fixture = createManuscriptFixture()
     fixture.document.sourceDocument.sources[0].files = [{ name: 'example.cool', path: 'C:/private/example.cool', role: 'signal', size: 100, lastModified: 0 }]
     const layout = layoutFigure(fixture.document)
@@ -44,7 +44,7 @@ describe('figure rendering', () => {
     expect(result.issues).toEqual([])
     expect(result.widthMm).toBe(145)
     expect(result.heightMm).toBeLessThan(66)
-    expect((result.svg.match(/data-fe-legend="matrix"/g) ?? []).length).toBe(1)
+    expect((result.svg.match(/data-fe-legend-position="inside-left"/g) ?? []).length).toBe(3)
     expect(result.svg).toContain('GENE_A')
     expect(result.svg).toContain('GENE_B')
     expect(result.svg).toContain('50 kb')
@@ -329,7 +329,7 @@ describe('figure rendering', () => {
     figure.columns.push({ id: 'second', title: '', region: { ...figure.columns[0].region }, assignments: { [row.id]: ['b-track'] }, styles: { [row.id]: { color: '#123abc', matrixPalette: 'single' } } })
     const source = (score: number): TrackSource => ({ name: 'matrix', chromosomes: new Map([['chr1', 1000]]), async getFeatures() { return [{ featureType: 'matrix', start: 0, end: 1000, resolution: 100, cells: [{ bin1: 100, bin2: 500, value: score }], missingCells: [], maskedBins: [] }] } })
     const result = await new FigureRenderSession().render(figure, new Map([['a', source(5)], ['b', source(10)]]))
-    expect((result.svg.match(/0–10<\/text>/g) ?? []).length).toBe(2)
+    expect((result.svg.match(/>10<\/text>/g) ?? []).length).toBe(2)
     expect(result.svg).toContain('fill="#123abc"')
   })
 })

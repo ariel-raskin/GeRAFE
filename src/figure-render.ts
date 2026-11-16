@@ -1,3 +1,4 @@
+import { drawFigureLabels } from './figure-labels.ts'
 import { stackAppearance, svgStackPattern } from './signal-stack-style.ts'
 import { figureAssignedTrackIds, figureStackGroup } from './figure-document.ts'
 import { pageFields, rowFields, cellFields, resolveAppearance, type RowAppearance } from './figure-appearance.ts'
@@ -24,7 +25,7 @@ export function layoutFigure(document: FigureDocument): FigureLayout {
     const style = column.styles?.[row.id]
     const cell = resolveAppearance(cellFields, style?.appearance)
     const matrix = (figureAssignedTrackIds(document, column, row.id)).some((id) => document.sourceDocument.tracks.find((track) => track.id === id)?.kind === 'matrix')
-    return matrix && style?.showScale !== false && (cell.matrixLegend === 'right' || cell.matrixLegend === 'last-column' && index === document.columns.length - 1) ? cell.legendGapMm + cell.legendWidthMm + 1.5 : 0
+    return matrix && style?.showScale !== false && (cell.matrixLegend === 'inside-left' && (figureAssignedTrackIds(document, column, row.id)).some((id) => document.sourceDocument.tracks.find((track) => track.id === id)?.matrixSecondaryRegion) || cell.matrixLegend === 'right' || cell.matrixLegend === 'last-column' && index === document.columns.length - 1) ? cell.legendGapMm + cell.legendWidthMm + 1.5 : 0
   })))
   const available = page.widthMm - page.marginMm * 2 - page.labelWidthMm - page.columnGapMm * (document.columns.length - 1) - gutters.reduce((a, b) => a + b, 0)
   const totalWeight = document.columns.reduce((sum, column) => sum + (column.widthWeight ?? 1), 0)
@@ -193,28 +194,11 @@ function buildSvg(document: FigureDocument, layout: FigureLayout, cells: Map<str
     sharedMatrixMaxima.set(key, Math.max(sharedMatrixMaxima.get(key) ?? 0, matrixSourceMaximum(matrix, spec)))
     sharedMatrixObservedMaxima.set(key, Math.max(sharedMatrixObservedMaxima.get(key) ?? 0, matrixSourceMaximum(matrix, spec, false)))
   }
-  for (let index = 0; index < visibleRows.length;) {
-    const label = visibleRows[index].groupLabel
-    if (!label) { index++; continue }
-    let end = index + 1
-    while (end < visibleRows.length && visibleRows[end].groupLabel === label) end++
-    const first = layout.rows.get(visibleRows[index].id)!
-    const last = layout.rows.get(visibleRows[end - 1].id)!
-    const middle = (first.y + last.y + last.height) / 2
-    const group = resolveAppearance(rowFields, visibleRows[index].appearance)
-    parts.push(line(page.marginMm + group.groupBracketXmm, first.y, page.marginMm + group.groupBracketXmm, last.y + last.height, group.groupColor, group.groupLinePt * 25.4 / 72))
-    parts.push(`<text x="${n(page.marginMm + group.groupLabelXmm)}" y="${n(middle)}" transform="rotate(-90 ${n(page.marginMm + group.groupLabelXmm)} ${n(middle)})" text-anchor="middle" font-size="${n((group.groupFontPt || page.fontSizePt * 1.15) * 25.4 / 72)}" font-weight="700" fill="${group.groupColor}">${escapeXml(label)}</text>`)
-    index = end
-  }
+  parts.push(drawFigureLabels(document, layout))
   for (const row of document.rows) {
     const rowLayout = layout.rows.get(row.id)
     if (!rowLayout) continue
-    const firstColumn = layout.columns.get(document.columns[0].id)!
     const rowAppearance = resolveAppearance(rowFields, row.appearance)
-    const labelX = firstColumn.x - rowAppearance.labelGapMm + rowAppearance.labelOffsetXmm
-    const labelY = rowLayout.y + rowLayout.height / 2 + rowAppearance.labelOffsetYmm
-    const vertical = rowAppearance.labelOrientation === 'vertical'
-    parts.push(text(labelX, labelY, row.label, (row.labelFontSizePt ?? page.fontSizePt) * 25.4 / 72, row.labelColor ?? '#111111', `text-anchor="${vertical ? 'middle' : 'end'}" dominant-baseline="middle" font-weight="${rowAppearance.labelWeight}" ${vertical ? `transform="rotate(-90 ${n(labelX)} ${n(labelY)})"` : ''}`))
     for (const column of document.columns) {
       const frame = figureCellBounds(layout, row.id, column.id)!
       const padding = Math.min(rowAppearance.paddingMm, (frame.height - 0.5) / 2)
@@ -238,7 +222,9 @@ function buildSvg(document: FigureDocument, layout: FigureLayout, cells: Map<str
         else if (spec.kind === 'interval') parts.push(drawIntervals(features as IntervalFeature[], renderSpec, column.region, bounds, fontMm))
         else if (spec.kind === 'interaction') parts.push(drawInteractions(features as InteractionFeature[], renderSpec, column.region, bounds, genes, style))
         else if (spec.kind === 'matrix') {
-          parts.push(`<g opacity="${n((style?.opacity ?? 100) / 100)}">`)
+          const triangleClip = renderSpec.matrixSecondaryRegion ? undefined : `${clipId}-${safeId(spec.id)}-triangle`
+          if (triangleClip) parts.push(`<defs><clipPath id="${triangleClip}"><polygon points="${matrixTrianglePoints(renderSpec, column.region, bounds)}"/></clipPath></defs>`)
+          parts.push(`<g opacity="${n((style?.opacity ?? 100) / 100)}" ${triangleClip ? `clip-path="url(#${triangleClip})"` : ''}>`)
           parts.push(drawMatrix(features as MatrixFeature[], renderSpec, column.region, bounds, document.page.background, style,
             (style?.scaleMode === 'shared' ? sharedMatrixObservedMaxima : sharedMatrixMaxima).get(`${row.id}\u0000${spec.matrixValueMode}\u0000${spec.matrixComparisonMode}`), issues, `${column.title || 'Column'} / ${row.label}`))
           parts.push(drawMatrixBedpeOverlay(document, renderSpec, cell, column.region, bounds, genes))
@@ -257,7 +243,7 @@ function buildSvg(document: FigureDocument, layout: FigureLayout, cells: Map<str
       parts.push('</g>')
       for (const spec of specs.filter((item) => item.kind === 'matrix')) {
         const matrix = (cell.get(spec.id) ?? []).find((item): item is MatrixFeature => 'featureType' in item && item.featureType === 'matrix')
-        if (matrix) parts.push(drawMatrixLegend(matrix, figureTrackSpec(spec, style), bounds, style, (style?.scaleMode === 'shared' ? sharedMatrixObservedMaxima : sharedMatrixMaxima).get(`${row.id}\u0000${spec.matrixValueMode}\u0000${spec.matrixComparisonMode}`), column.id === document.columns.at(-1)!.id))
+        if (matrix) parts.push(drawMatrixLegend(matrix, figureTrackSpec(spec, style), bounds, style, (style?.scaleMode === 'shared' ? sharedMatrixObservedMaxima : sharedMatrixMaxima).get(`${row.id}\u0000${spec.matrixValueMode}\u0000${spec.matrixComparisonMode}`), column.id === document.columns.at(-1)!.id, `${column.id}-${row.id}-${spec.id}`, issues))
       }
       parts.push(`<rect x="${n(frame.x)}" y="${n(frame.y)}" width="${n(frame.width)}" height="${n(frame.height)}" fill="none" stroke="${escapeXml(row.frameColor ?? '#444444')}" stroke-width="${n((row.frameWidthPt ?? 0.5) * 25.4 / 72)}"/>`)
       parts.push('</g>')
@@ -418,14 +404,16 @@ function drawSignalStack(specs: TrackSpec[], cell: QueryCell, region: Region, bo
         const curve = `M${n(x1)} ${n(y(run[0].score))}${steps}`
         const area = `${curve} L${n(x2)} ${n(zero)} L${n(x1)} ${n(zero)} Z`
         if (renderStyle !== 'line') {
-          fills.push(`<path data-stack-fill="${escapeXml(spec.id)}" d="${area}" fill="${escapeXml(color)}" opacity="${n((style?.opacity ?? a.opacity) / 100)}"/>`)
-          if (entry.pattern !== 'none') fills.push(`<path data-stack-pattern="${entry.pattern}" d="${area}" fill="url(#${id})" opacity="${n(a.patternOpacity / 100)}"/>`)
+          fills.push(`<path data-stack-fill="${escapeXml(spec.id)}" style="mix-blend-mode:${a.blendMode === 'multiply' ? 'multiply' : 'normal'}" d="${area}" fill="${escapeXml(color)}" opacity="${n((style?.opacity ?? a.opacity) / 100 * entry.opacity / 100)}"/>`)
+          if (entry.pattern !== 'none') fills.push(`<path data-stack-pattern="${entry.pattern}" style="mix-blend-mode:${a.blendMode === 'multiply' ? 'multiply' : 'normal'}" d="${area}" fill="url(#${id})" opacity="${n(a.patternOpacity / 100 * entry.opacity / 100)}"/>`)
         }
-        if (renderStyle !== 'fill') outlines.push(`<path data-stack-outline="${escapeXml(spec.id)}" d="${curve}" fill="none" stroke="${escapeXml(color)}" stroke-width="${n(style?.appearance?.lineWidthPt ? style.appearance.lineWidthPt * 25.4 / 72 : a.lineWidth * 25.4 / 96)}" stroke-dasharray="${entry.dash.map((value) => n(value * 25.4 / 96)).join(' ')}"/>`)
+        if (renderStyle !== 'fill') outlines.push(`<path data-stack-outline="${escapeXml(spec.id)}" opacity="${n(entry.opacity / 100)}" d="${curve}" fill="none" stroke="${escapeXml(color)}" stroke-width="${n(style?.appearance?.lineWidthPt ? style.appearance.lineWidthPt * 25.4 / 72 : a.lineWidth * 25.4 / 96)}" stroke-dasharray="${entry.dash.map((value) => n(value * 25.4 / 96)).join(' ')}"/>`)
       }
     }
+    labels.push(`<g data-scale-start="${section.start}" data-scale-min="${n(domain.min)}" data-scale-max="${n(domain.max)}">`)
     labels.push(line(left, zero, right, zero, presentation.baselineColor, presentation.baselineWidthPt * 25.4 / 72))
     if (style?.showScale !== false) labels.push(drawScaleLabels({ ...bounds, x: left, width: right - left }, domain, presentation))
+    labels.push('</g>')
   }
   return fills.join('') + outlines.join('') + labels.join('')
 }
@@ -557,20 +545,52 @@ function matrixFill(value: number, minimum: number, maximum: number, signed: boo
   return { color: spec.color, alpha: 0.08 + Math.pow(intensity, 0.72) * 0.92 }
 }
 
-function drawMatrixLegend(matrix: MatrixFeature, spec: TrackSpec, bounds: FigureCellBounds, style: FigureCellStyle | undefined, sharedMaximum: number | undefined, lastColumn: boolean): string {
+/** A conservative rectangle wholly inside the empty triangular corner, including both labels. */
+export function matrixLegendLayout(bounds: FigureCellBounds, options: { width: number; gap: number; top: number; font: number; height: number; showMinimum: boolean; maximumLabel: string; minimumLabel: string; down: boolean; inside: boolean }) {
+  const halfLabel = Math.max(options.maximumLabel.length, options.showMinimum ? options.minimumLabel.length : 0) * options.font * 0.3
+  const half = Math.max(halfLabel, options.width / 2)
+  const occupiedWidth = options.gap + half * 2
+  const topBand = Math.max(options.top, options.font + 0.8)
+  const bottomBand = options.showMinimum ? options.font + 0.8 : 0.4
+  const clearance = options.inside ? occupiedWidth + 0.7 : 0
+  const top = bounds.y + topBand + (options.inside && options.down ? clearance : 0)
+  const available = bounds.height - topBand - bottomBand - clearance
+  const height = Math.min(options.height || available, available)
+  if (height < 0.5 || options.inside && occupiedWidth + 0.3 >= bounds.width) return undefined
+  const x = options.inside ? bounds.x + options.gap + half - options.width / 2 : bounds.x + bounds.width + options.gap + half - options.width / 2
+  return { x, y: top, width: options.width, height, footprint: { x: x + options.width / 2 - half, y: top - topBand, width: half * 2, height: topBand + height + bottomBand } }
+}
+
+function drawMatrixLegend(matrix: MatrixFeature, spec: TrackSpec, bounds: FigureCellBounds, style: FigureCellStyle | undefined, sharedMaximum: number | undefined, lastColumn: boolean, id: string, issues: string[]): string {
   const a = resolveAppearance(cellFields, style?.appearance)
-  if (style?.showScale === false || a.matrixLegend !== 'right' && !(a.matrixLegend === 'last-column' && lastColumn)) return ''
+  const inside = a.matrixLegend === 'inside-left' && !matrix.axis2
+  if (style?.showScale === false || a.matrixLegend === 'none') return ''
   const { signed, minimum, maximum } = matrixDomain(matrix, spec, style, sharedMaximum)
-  const x = bounds.x + bounds.width + a.legendGapMm
-  const height = Math.max(1, bounds.height - 3), y = bounds.y + 1.5
+  if (a.matrixLegend === 'inline') {
+    const fill = matrixFill(maximum, minimum, maximum, signed, spec, style)
+    return `<g opacity="${n((style?.opacity ?? 100) / 100)}">${rect(bounds.x + 0.7, bounds.y + 0.7, 1.4, 1.4, fill.color)}${text(bounds.x + 2.6, bounds.y + 2.1, signed ? `±${Number(maximum.toPrecision(3))}` : `${Number(minimum.toPrecision(3))}–${Number(maximum.toPrecision(3))}`, a.legendFontPt * 25.4 / 72, '#222222')}</g>`
+  }
+  if (!inside && a.matrixLegend !== 'right' && a.matrixLegend !== 'inside-left' && !(a.matrixLegend === 'last-column' && lastColumn)) return ''
   const min = signed ? -maximum : minimum
-  const strips = Array.from({ length: 96 }, (_, index) => {
-    const value = maximum - index / 95 * (maximum - min)
-    const fill = matrixFill(value, minimum, maximum, signed, spec, style)
-    return rect(x, y + index / 96 * height, a.legendWidthMm, height / 96 + 0.01, fill.color, `opacity="${n(fill.alpha)}"`)
-  }).join('')
+  const maximumLabel = `${signed && !a.legendShowMinimum ? '±' : ''}${Number(maximum.toPrecision(3))}`
+  const minimumLabel = Number(min.toPrecision(3)).toString()
   const font = a.legendFontPt * 25.4 / 72
-  return `<g data-fe-legend="matrix">${strips}${text(x + a.legendWidthMm / 2, y - 0.5, Number(maximum.toPrecision(3)).toString(), font, '#222222', 'text-anchor="middle"')}${text(x + a.legendWidthMm / 2, y + height + font, Number(min.toPrecision(3)).toString(), font, '#222222', 'text-anchor="middle"')}</g>`
+  const place = matrixLegendLayout(bounds, { width: a.legendWidthMm, gap: a.legendGapMm, top: a.legendTopMm, font, height: a.legendHeightMm, showMinimum: a.legendShowMinimum, maximumLabel, minimumLabel, down: spec.matrixDirection === 'down', inside })
+  if (!place) { issues.push('The matrix color bar does not fit its empty corner. Reduce legend size or choose an outside legend.'); return '' }
+  const stops = Array.from({ length: 96 }, (_, index) => {
+    const fill = matrixFill(maximum - index / 95 * (maximum - min), minimum, maximum, signed, spec, style)
+    return `<stop offset="${n(index / 95 * 100)}%" stop-color="${fill.color}" stop-opacity="${n(fill.alpha)}"/>`
+  }).join('')
+  const gradient = `legend-${safeId(id)}`
+  return `<g data-fe-legend="matrix" data-fe-legend-position="${inside ? 'inside-left' : 'right'}" data-legend-footprint="${[place.footprint.x, place.footprint.y, place.footprint.width, place.footprint.height].map(n).join(' ')}"><defs><linearGradient id="${gradient}" x1="0" y1="0" x2="0" y2="1">${stops}</linearGradient></defs>${rect(place.x, place.y, place.width, place.height, `url(#${gradient})`, `opacity="${n((style?.opacity ?? 100) / 100)}" stroke="#777777" stroke-width="0.08"`)}${text(place.x + place.width / 2, place.y - 0.5, maximumLabel, font, '#222222', 'text-anchor="middle"')}${a.legendShowMinimum ? text(place.x + place.width / 2, place.y + place.height + font + 0.4, minimumLabel, font, '#222222', 'text-anchor="middle"') : ''}</g>`
+}
+
+/** Clip edge bins, masks and interaction marks to the actual visible triangle. */
+function matrixTrianglePoints(spec: TrackSpec, region: Region, bounds: FigureCellBounds): string {
+  const direction = spec.matrixDirection === 'down' ? 1 : -1
+  const baseline = direction < 0 ? bounds.y + bounds.height : bounds.y
+  const depth = Math.min(bounds.height, bounds.width / 2, matrixQueryMaximumDistance(region.end - region.start, spec.matrixDepthMode ?? 'full', spec.matrixMaxDistance) / (region.end - region.start) * bounds.width / 2)
+  return `${n(bounds.x)},${n(baseline)} ${n(bounds.x + bounds.width)},${n(baseline)} ${n(bounds.x + bounds.width - depth)},${n(baseline + direction * depth)} ${n(bounds.x + depth)},${n(baseline + direction * depth)}`
 }
 
 function drawMatrix(features: MatrixFeature[], spec: TrackSpec, region: Region, bounds: FigureCellBounds, pageBackground: string, cellStyle: FigureCellStyle | undefined, sharedMaximum: number | undefined, issues: string[], label: string): string {
@@ -582,8 +602,6 @@ function drawMatrix(features: MatrixFeature[], spec: TrackSpec, region: Region, 
   }
   const { signed, minimum, maximum } = matrixDomain(matrix, spec, cellStyle, sharedMaximum)
   const style = (value: number) => matrixFill(value, minimum, maximum, signed, spec, cellStyle)
-  const legend = cellStyle?.showScale === false || resolveAppearance(cellFields, cellStyle?.appearance).matrixLegend !== 'inline' ? '' : rect(bounds.x + 0.7, bounds.y + 0.7, 1.4, 1.4, style(maximum).color)
-    + text(bounds.x + 2.6, bounds.y + 2.1, signed ? `±${Number(maximum.toPrecision(3))}` : `${Number(minimum.toPrecision(3))}–${Number(maximum.toPrecision(3))}`, resolveAppearance(cellFields, cellStyle?.appearance).legendFontPt * 25.4 / 72, '#222222')
   const resolution = matrix.resolution
   if (matrix.axis2) {
     const axis = matrix.axis2
@@ -605,14 +623,14 @@ function drawMatrix(features: MatrixFeature[], spec: TrackSpec, region: Region, 
       resolution / (region.end - region.start) * bounds.width, bounds.height, maskColor, `opacity="${n(maskOpacity)}"`)).join('')
     const maskY = (matrix.maskedBins2 ?? []).map((bin) => rect(bounds.x, bounds.y + (bin - axis.start) / (axis.end - axis.start) * bounds.height,
       bounds.width, resolution / (axis.end - axis.start) * bounds.height, maskColor, `opacity="${n(maskOpacity)}"`)).join('')
-    return background + contacts + missing + maskX + maskY + legend
+    return background + contacts + missing + maskX + maskY
   }
   const direction = spec.matrixDirection === 'down' ? 1 : -1
   const baseline = direction < 0 ? bounds.y + bounds.height : bounds.y
   const binWidth = resolution / (region.end - region.start) * bounds.width
   const depth = Math.min(bounds.height, bounds.width / 2, matrixQueryMaximumDistance(region.end - region.start, spec.matrixDepthMode ?? 'full', spec.matrixMaxDistance) / (region.end - region.start) * bounds.width / 2)
   const background = spec.matrixZeroStyle === 'background' || signed && spec.matrixZeroStyle !== 'custom' ? ''
-    : `<polygon points="${n(bounds.x)},${n(baseline)} ${n(bounds.x + bounds.width)},${n(baseline)} ${n(bounds.x + bounds.width - depth)},${n(baseline + direction * depth)} ${n(bounds.x + depth)},${n(baseline + direction * depth)}" fill="${escapeXml(spec.matrixZeroStyle === 'custom' ? spec.matrixZeroColor ?? '#d7d9df' : style(0).color)}"/>`
+    : `<polygon points="${matrixTrianglePoints(spec, region, bounds)}" fill="${escapeXml(spec.matrixZeroStyle === 'custom' ? spec.matrixZeroColor ?? '#d7d9df' : style(0).color)}"/>`
   const contact = (bin1: number, bin2: number, fill: string, alpha: number): string => {
     const x = px(region, bounds, (bin1 + bin2 + resolution) / 2)
     const distance = Math.abs(bin2 - bin1) / (region.end - region.start) * bounds.width
@@ -635,7 +653,7 @@ function drawMatrix(features: MatrixFeature[], spec: TrackSpec, region: Region, 
     return line(baseX, baseline, baseX - maxDepth, baseline + direction * maxDepth, maskColor, width, extra)
       + line(baseX, baseline, baseX + maxDepth, baseline + direction * maxDepth, maskColor, width, extra)
   }).join('')
-  return background + contacts + missing + masked + legend
+  return background + contacts + missing + masked
 }
 
 function drawMatrixOutlines(document: FigureDocument, trackId: string, spec: TrackSpec, region: Region, bounds: FigureCellBounds): string {
